@@ -43,14 +43,65 @@
       // 如果你想知道是哪个单元格/段落触发，可用 closest：
       const fromCell = downTarget?.closest?.("td,th,[data-selectable],p,li");
 
-      // 提取ownerEl的ID
-      const ownerElId = ownerEl?.id || null;
+      // 获取选区中所有带ID的元素
+      const elementIds = [];
+      const collectIds = (node) => {
+        if (node.nodeType === Node.ELEMENT_NODE && node.id) {
+          if (!elementIds.includes(node.id)) {
+            elementIds.push(node.id);
+          }
+        }
+        // 递归检查子元素
+        if (node.childNodes) {
+          for (let child of node.childNodes) {
+            collectIds(child);
+          }
+        }
+      };
+
+      // 如果选区在单个容器内，收集该容器及其内部元素的ID
+      if (range.startContainer === range.endContainer) {
+        collectIds(ownerEl);
+      } else {
+        // 选区跨越多个元素，遍历选区内的所有节点
+        const walker = document.createTreeWalker(
+          ownerEl,
+          NodeFilter.SHOW_ELEMENT,
+          {
+            acceptNode: (node) => {
+              // 检查节点是否在选区内
+              const nodeRange = document.createRange();
+              nodeRange.selectNode(node);
+              if (
+                range.compareBoundaryPoints(Range.START_TO_END, nodeRange) >
+                  0 &&
+                range.compareBoundaryPoints(Range.END_TO_START, nodeRange) < 0
+              ) {
+                return NodeFilter.FILTER_ACCEPT;
+              }
+              return NodeFilter.FILTER_SKIP;
+            },
+          }
+        );
+
+        let node;
+        while ((node = walker.nextNode())) {
+          if (node.id) {
+            elementIds.push(node.id);
+          }
+        }
+
+        // 确保包含ownerEl的ID
+        if (ownerEl.id && !elementIds.includes(ownerEl.id)) {
+          elementIds.push(ownerEl.id);
+        }
+      }
 
       // 业务：打印或上报
       const payload = {
         text: sel.toString(),
         ownerEl,
-        ownerElId, // 添加ID字段
+        elementIds, // 使用数组保存所有ID
         anchorEl,
         focusEl,
         downTarget,
@@ -58,11 +109,14 @@
         fromCell,
       };
       console.log("text-selected:", payload);
-      console.log("选中文本所在元素ID:", ownerElId || "该元素无ID");
+      console.log(
+        "选中文本涉及的元素IDs:",
+        elementIds.length > 0 ? elementIds : "无带ID的元素"
+      );
 
-      if (ownerElId != null) {
+      if (elementIds.length > 0) {
         axios
-          .post("http://localhost:8080/docx/comment", [ownerElId], {
+          .post("http://localhost:8080/docx/comment", elementIds, {
             headers: { "Content-Type": "application/json" },
           })
           .then((res) => {
