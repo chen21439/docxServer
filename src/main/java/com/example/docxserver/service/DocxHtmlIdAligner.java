@@ -6,6 +6,8 @@ import org.jsoup.nodes.*;
 import org.jsoup.nodes.Document;
 import org.jsoup.parser.Tag;
 import org.jsoup.select.Elements;
+import org.jsoup.select.NodeTraversor;
+import org.jsoup.select.NodeVisitor;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -16,24 +18,16 @@ import java.util.*;
 /**
  * DocxHtmlIdAligner
  *
- * 1) 从 DOCX 中按 run 提取"span unit"（也可改为 paragraph / bookmark）；
- * 2) 对每个 span（外循环），在 HTML（内循环）中从上次匹配位置继续扫描；
- * 3) 在匹配到的 HTML 文本节点范围上，切分并插入 <span id="...">matched</span>，
- *    若跨多个 TextNode，会把跨越部分分段包裹，最终实现一个 DOCX span 对应多个 HTML 标签都带相同 id。
- *
- * 简化策略：
- * - 匹配依据为"归一化后的子串包含关系"。在 HTML 上实际切分使用原始字符串索引（通过归一化映射回原始索引）。
- * - 若某个 span 无法匹配，会记录日志（stderr）。
- *
- * 依赖：
- *  - org.apache.poi:poi-ooxml
- *  - org.jsoup:jsoup
- *
- * 注意：大文档下性能需调优（当前实现为顺序扫描、保持 htmlPos 指针，近线性）。
+ * 改进点：
+ * 1) 修正归一化索引回映射（buildNormalizedMap）：按 code point 逐个规范化，映射到“原始 concat 索引”；
+ * 2) 收集 block 的所有后代 TextNode（collectAllTextNodes），避免只拿直系子节点造成漏配；
+ * 3) 支持跨 block 的滑窗匹配（tryWrapAcrossBlocks，窗口大小 MERGE_K=3，可调）；
+ * 4) 指针推进策略仅在成功匹配后前移，失败不提前越过；
  */
 public class DocxHtmlIdAligner {
 
     private final static String dir = "E:\\programFile\\AIProgram\\docxServer\\src\\main\\resources\\";
+    private final static int MERGE_K = 3; // 跨 block 滑窗大小（建议 2~4）
 
     static class Span {
         String id;
@@ -81,7 +75,6 @@ public class DocxHtmlIdAligner {
                     XWPFParagraph p = (XWPFParagraph) be;
                     List<XWPFRun> runs = p.getRuns();
                     if (runs == null || runs.isEmpty()) {
-                        // 仍当作段落整体一个 span（避免空段丢失）
                         String txt = p.getText();
                         if (txt != null && !txt.trim().isEmpty()) {
                             String id = String.format("p-%05d-r-%03d", paraIdx+1, 0);
@@ -101,7 +94,6 @@ public class DocxHtmlIdAligner {
                     }
                     paraIdx++;
                 } else if (be instanceof XWPFTable) {
-                    // 表格内部也按单元格中的段落与 run 提取（深度遍历）
                     XWPFTable table = (XWPFTable) be;
                     traverseTableForRuns(table, out);
                 } else {
@@ -142,7 +134,7 @@ public class DocxHtmlIdAligner {
     // ---------------- HTML 对齐并注入 id ----------------
     static String injectIds(List<Span> spans, String html) {
         Document doc = Jsoup.parse(html);
-        // candidate blocks: 包含文本且常见的容器
+        // 候选容器：保持你原来的选择器不变（也可以按需只保留块级标签）
         Elements blocks = doc.select("p, td, th, li, div, span, font, pre, blockquote");
         int htmlBlockIndex = 0; // 指针：内循环从此处开始扫描
         int matchedCount = 0;
@@ -151,39 +143,75 @@ public class DocxHtmlIdAligner {
             if (span.norm.isEmpty()) continue;
             boolean matched = false;
 
-            // 从 htmlBlockIndex 开始扫描 blocks
+            // -------- 第一轮：从 htmlBlockIndex 向后扫描 --------
             for (int b = htmlBlockIndex; b < blocks.size(); b++) {
                 Element block = blocks.get(b);
-                String blockNorm = normalize(block.text());
-                if (blockNorm.isEmpty()) {
-                    // advance pointer
-                    htmlBlockIndex = b + 1;
-                    continue;
-                }
-                // 快速过滤：若 block 归一化文本不包含 span.norm，跳过
-                if (!blockNorm.contains(span.norm)) {
-                    // 但可能 span 被拆到多个相邻 block 中，暂不做滑窗合并（可扩展）
-                    continue;
-                }
 
-                // 细粒度尝试：在该 block 的 text nodes 上做跨节点匹配与包裹
+                // 1) 单块尝试
                 if (tryWrapSpanAcrossTextNodes(block, span)) {
                     matched = true;
                     matchedCount++;
-                    // 记录成功匹配的span
-                    System.out.println("[MATCHED] spanId=" + span.id + " -> \"" + snippet(span.raw) + "\" in " + block.tagName());
-                    // 把 htmlBlockIndex 保持在 b（下次从这里继续）
+                    // 命中后下次仍从当前块开始，避免跳过同块后续命中
                     htmlBlockIndex = b;
+                    System.out.println("[MATCHED-1] spanId=" + span.id + " -> \"" + snippet(span.raw) + "\" in <" + block.tagName() + "> (block " + b + ")");
                     break;
-                } else {
-                    // 有可能 block 的 text 中包含 span.norm（normalize 相等），但节点边界使得映射失败
-                    // 继续尝试下一个 block（保持 htmlBlockIndex 不变或可设置为 b+1）
+                }
+
+                // 2) 跨块滑窗尝试（b..b+MERGE_K）
+                boolean windowMatched = false;
+                int lastWin = Math.min(blocks.size() - 1, b + MERGE_K);
+                for (int e = b + 1; e <= lastWin; e++) {
+                    List<Element> win = new ArrayList<>();
+                    for (int t = b; t <= e; t++) win.add(blocks.get(t));
+                    if (tryWrapAcrossBlocks(win, span)) {
+                        matched = true;
+                        matchedCount++;
+                        // 指针设为命中窗起点
+                        htmlBlockIndex = b;
+                        System.out.println("[MATCHED-K] spanId=" + span.id + " -> \"" + snippet(span.raw) + "\" across blocks " + b + "~" + e);
+                        windowMatched = true;
+                        break;
+                    }
+                }
+                if (windowMatched) break;
+                // 未命中当前 b，继续 b+1
+            }
+
+            // -------- 第二轮：回绕，从 0 扫到 htmlBlockIndex-1 --------
+            if (!matched && htmlBlockIndex > 0) {
+                for (int b = 0; b < htmlBlockIndex; b++) {
+                    Element block = blocks.get(b);
+
+                    // 1) 单块尝试
+                    if (tryWrapSpanAcrossTextNodes(block, span)) {
+                        matched = true;
+                        matchedCount++;
+                        // 这里选择把指针回调到 b（也可以保持原位，看你的偏好）
+                        htmlBlockIndex = b;
+                        System.out.println("[MATCHED-1-BACK] spanId=" + span.id + " -> \"" + snippet(span.raw) + "\" in <" + block.tagName() + "> (block " + b + ")");
+                        break;
+                    }
+
+                    // 2) 跨块滑窗尝试（b..b+MERGE_K）
+                    boolean windowMatched = false;
+                    int lastWin = Math.min(blocks.size() - 1, b + MERGE_K);
+                    for (int e = b + 1; e <= lastWin; e++) {
+                        List<Element> win = new ArrayList<>();
+                        for (int t = b; t <= e; t++) win.add(blocks.get(t));
+                        if (tryWrapAcrossBlocks(win, span)) {
+                            matched = true;
+                            matchedCount++;
+                            htmlBlockIndex = b;
+                            System.out.println("[MATCHED-K-BACK] spanId=" + span.id + " -> \"" + snippet(span.raw) + "\" across blocks " + b + "~" + e);
+                            windowMatched = true;
+                            break;
+                        }
+                    }
+                    if (windowMatched) break;
                 }
             }
 
             if (!matched) {
-                // 如果没有在 candidate blocks 中匹配到，尝试从头到尾更宽松搜索（可选）
-                // 这里记录未匹配项以人工复核
                 System.err.println("[UNMATCHED] spanId=" + span.id + " -> \"" + snippet(span.raw) + "\"");
             }
         }
@@ -195,159 +223,213 @@ public class DocxHtmlIdAligner {
     /**
      * 尝试在单个 block（Element）内部，把 span.raw 映射到一个或多个连续 TextNode 上并用 <span id=...> 包裹。
      * 返回 true 表示匹配并注入成功。
-     *
-     * 核心思想：
-     *  - 把 block 的 textNodes 合并为一个连续字符串（保持原始形式），同时构建
-     *    一个 mapping：合并字符串中的每个字符对应到 (nodeIndex, offsetInNode)。
-     *  - 对合并串做归一化，并在归一化串中查找 span.norm 的位置（index）。
-     *  - 若找到，根据归一化->原始索引的映射把原始 start/end 求出，然后在参与的 TextNode 上按片段切分并插入 <span id=...>.
      */
     static boolean tryWrapSpanAcrossTextNodes(Element block, Span span) {
-        System.err.println("[DEBUG] Processing span: " + span.id + " -> \"" + snippet(span.raw) + "\"");
-        System.err.println("[DEBUG] Block tag: " + block.tagName() + ", text: \"" + snippet(block.text()) + "\"");
+        List<TextNode> tns = collectAllTextNodes(block);
+        if (tns.isEmpty()) return false;
 
-        List<TextNode> tns = block.textNodes();
-        if (tns.isEmpty()) {
-            System.err.println("[DEBUG] No text nodes found in block");
-            return false;
-        }
-        System.err.println("[DEBUG] Found " + tns.size() + " text nodes");
-
-        // Build concatenated original string and mapping from concatIndex -> (nodeIdx, offset)
+        // 拼接所有 TextNode 文本并建立 concat 索引 -> (nodeIdx, offset) 映射
         StringBuilder concat = new StringBuilder();
-        List<Integer> concatToNodeIdx = new ArrayList<>();
-        List<Integer> concatToOffset = new ArrayList<>();
-
+        List<Integer> idxNode = new ArrayList<>();
+        List<Integer> idxOff  = new ArrayList<>();
         for (int i = 0; i < tns.size(); i++) {
             String s = tns.get(i).getWholeText();
             for (int off = 0; off < s.length(); off++) {
                 concat.append(s.charAt(off));
-                concatToNodeIdx.add(i);
-                concatToOffset.add(off);
+                idxNode.add(i);
+                idxOff.add(off);
             }
-            // we preserve a separator between nodes? No, we just concatenate directly (that's consistent with raw DOM)
         }
         String concatOrig = concat.toString();
         if (concatOrig.isEmpty()) return false;
 
-        // Build normalized concatenated string and mapping from normalized index -> concatOrig index
-        NormalizedMap normMap = buildNormalizedMap(concatOrig);
-        String concatNorm = normMap.norm; // normalized version
+        NormalizedMap nm = buildNormalizedMap(concatOrig);
+        String concatNorm = nm.norm;
+        int pos = concatNorm.indexOf(span.norm);
+        if (pos < 0) return false;
 
-        // Quick reject
-        if (!concatNorm.contains(span.norm)) return false;
-
-        // Find index in normalized concat
-        int normIndex = concatNorm.indexOf(span.norm);
-        if (normIndex < 0) return false; // safety
-
-        // Map normalized index range back to original concat indices
-        Integer origStart = normMap.normIndexToOrigIndex(normIndex);
-        Integer origEnd = normMap.normIndexToOrigIndex(normIndex + span.norm.length() - 1);
+        Integer origStart = nm.normIndexToOrigIndex(pos);
+        Integer origEnd   = nm.normIndexToOrigIndex(pos + span.norm.length() - 1);
         if (origStart == null || origEnd == null) return false;
 
-        // compute inclusive end index in original
-        int origStartIdx = origStart;
-        int origEndIdx = origEnd; // inclusive char index in concatOrig
-        // Now we need to split across involved text nodes according to concatToNodeIdx & concatToOffset
-        int startNode = concatToNodeIdx.get(origStartIdx);
-        int startOffset = concatToOffset.get(origStartIdx);
-        int endNode = concatToNodeIdx.get(origEndIdx);
-        int endOffset = concatToOffset.get(origEndIdx);
+        int startNode = idxNode.get(origStart);
+        int startOff  = idxOff.get(origStart);
+        int endNode   = idxNode.get(origEnd);
+        int endOff    = idxOff.get(origEnd);
 
-        // Now perform splitting and insertion. We'll insert new nodes before the first involved TextNode,
-        // then remove the original nodes that are wholly consumed, and rebuild partial leftover pieces.
-        // We'll gather new Nodes to insert at position of first involved TextNode.
+        // 构造要插入的新节点序列
+        List<Node> toInsert = new ArrayList<>();
+
         TextNode firstTN = tns.get(startNode);
         Node parent = firstTN.parent();
-
-        // We must find the DOM child index to insert at
         int insertionIndex = firstTN.siblingIndex();
 
-        // Build sequence of new nodes representing the left/middle/right fragments
-        // For nodes before startNode and after endNode, we leave them alone.
-        // For nodes from startNode to endNode inclusive, we will:
-        //   - keep left fragment of startNode if any
-        //   - insert <span id=...> for the matched part(s) (could span multiple nodes)
-        //   - keep right fragment of endNode if any
-        // Implementation approach:
-        // 1) Build string fragments per node: left (0..startOffset-1), middle (startOffset..end or to end of node), right...
-        // 2) Insert in order: left fragment (as TextNode if exists), matched middle fragments wrapped in <span id=...>, right fragment...
-        // Remove original nodes that were replaced.
-
-        List<Node> toInsert = new ArrayList<>();
         for (int nodeIdx = startNode; nodeIdx <= endNode; nodeIdx++) {
             TextNode tn = tns.get(nodeIdx);
-            String nodeText = tn.getWholeText();
-            int nodeLen = nodeText.length();
-            int nodeStart = (nodeIdx == startNode) ? startOffset : 0;
-            int nodeEnd = (nodeIdx == endNode) ? endOffset : (nodeLen - 1); // inclusive
+            String s = tn.getWholeText();
+            int L = s.length();
+            int l = (nodeIdx == startNode ? startOff : 0);
+            int r = (nodeIdx == endNode ? endOff : (L - 1));
 
-            // left fragment for start node
-            if (nodeIdx == startNode && nodeStart > 0) {
-                String left = nodeText.substring(0, nodeStart);
-                toInsert.add(new TextNode(left));
+            if (nodeIdx == startNode && l > 0) {
+                toInsert.add(new TextNode(s.substring(0, l)));
             }
 
-            // matched fragment (within this node)
-            String matched = nodeText.substring(nodeStart, nodeEnd + 1);
             Element wrap = new Element(Tag.valueOf("span"), "");
             wrap.attr("id", span.id);
-            // preserve original text exactly
-            wrap.appendChild(new TextNode(matched));
+            wrap.appendChild(new TextNode(s.substring(l, r + 1)));
             toInsert.add(wrap);
 
-            // right fragment for end node will be inserted after loop
-            if (nodeIdx == endNode && nodeEnd + 1 < nodeLen) {
-                String right = nodeText.substring(nodeEnd + 1);
-                toInsert.add(new TextNode(right));
+            if (nodeIdx == endNode && r + 1 < L) {
+                toInsert.add(new TextNode(s.substring(r + 1)));
             }
         }
 
-        // Remove original involved nodes
-        // Note: remove from endNode down to startNode to avoid index shifts
+        // 删除原节点（从后往前）
         for (int nodeIdx = endNode; nodeIdx >= startNode; nodeIdx--) {
-            TextNode tn = tns.get(nodeIdx);
-            tn.remove();
+            tns.get(nodeIdx).remove();
         }
 
-        // Insert new nodes at insertionIndex (they will go in order)
-        // Since insertChildren doesn't exist in older Jsoup versions, we need to use a different approach
-        // We'll insert them one by one at the correct position
-
-        // Debug: Check if parent has children
-        System.err.println("[DEBUG] Parent has " + parent.childNodeSize() + " children, insertionIndex=" + insertionIndex);
-        System.err.println("[DEBUG] Parent type: " + parent.getClass().getSimpleName() + ", tag: " + (parent instanceof Element ? ((Element)parent).tagName() : "N/A"));
-        System.err.println("[DEBUG] Trying to insert " + toInsert.size() + " nodes");
-        System.err.println("[DEBUG] FirstTN removed? Check parent's children after removal");
-
-        // Use a safer insertion method
+        // 插入新节点
         try {
             if (parent.childNodeSize() > insertionIndex) {
-                // Insert before the node at insertionIndex
-                Node refNode = parent.childNode(insertionIndex);
-                System.err.println("[DEBUG] Inserting before refNode at index " + insertionIndex);
+                Node ref = parent.childNode(insertionIndex);
                 for (int i = toInsert.size() - 1; i >= 0; i--) {
-                    refNode.before(toInsert.get(i));
+                    ref.before(toInsert.get(i));
                 }
+            } else if (parent instanceof Element) {
+                for (Node n : toInsert) ((Element) parent).appendChild(n);
             } else {
-                // Append to the end of parent
-                System.err.println("[DEBUG] Appending to parent (insertionIndex " + insertionIndex + " >= childNodeSize " + parent.childNodeSize() + ")");
-                if (parent instanceof Element) {
-                    for (Node node : toInsert) {
-                        ((Element)parent).appendChild(node);
-                    }
-                } else {
-                    // If parent is not an Element, we need to insert differently
-                    // This shouldn't normally happen, but let's handle it
-                    System.err.println("[WARNING] Parent is not an Element, cannot appendChild");
-                    return false;
-                }
+                return false;
             }
         } catch (Exception e) {
-            System.err.println("[ERROR] Failed to insert nodes: " + e.getMessage());
-            e.printStackTrace();
             return false;
+        }
+        return true;
+    }
+
+    /**
+     * 跨多个 block 的滑窗匹配：把窗口内所有 TextNode 视作一条串，匹配成功后把匹配片段按节点边界切分并分别插入。
+     */
+    static boolean tryWrapAcrossBlocks(List<Element> blocks, Span span) {
+        // 1) 收集窗口内的所有 TextNode（保持文档顺序）以及它们的 parent 关系
+        List<TextNode> tns = new ArrayList<>();
+        List<Element> tnParents = new ArrayList<>();
+        List<Integer> tnBlockIdx = new ArrayList<>();
+        for (int bi = 0; bi < blocks.size(); bi++) {
+            Element b = blocks.get(bi);
+            List<TextNode> sub = collectAllTextNodes(b);
+            for (TextNode tn : sub) {
+                tns.add(tn);
+                tnParents.add(tn.parent() instanceof Element ? (Element) tn.parent() : null);
+                tnBlockIdx.add(bi);
+            }
+        }
+        if (tns.isEmpty()) return false;
+
+        // 2) 拼接 + 映射
+        StringBuilder concat = new StringBuilder();
+        List<Integer> idxNode = new ArrayList<>();
+        List<Integer> idxOff  = new ArrayList<>();
+        for (int i = 0; i < tns.size(); i++) {
+            String s = tns.get(i).getWholeText();
+            for (int off = 0; off < s.length(); off++) {
+                concat.append(s.charAt(off));
+                idxNode.add(i);
+                idxOff.add(off);
+            }
+        }
+        String concatOrig = concat.toString();
+        if (concatOrig.isEmpty()) return false;
+
+        NormalizedMap nm = buildNormalizedMap(concatOrig);
+        String concatNorm = nm.norm;
+        int pos = concatNorm.indexOf(span.norm);
+        if (pos < 0) return false;
+
+        Integer origStart = nm.normIndexToOrigIndex(pos);
+        Integer origEnd   = nm.normIndexToOrigIndex(pos + span.norm.length() - 1);
+        if (origStart == null || origEnd == null) return false;
+
+        int startNode = idxNode.get(origStart);
+        int startOff  = idxOff.get(origStart);
+        int endNode   = idxNode.get(origEnd);
+        int endOff    = idxOff.get(origEnd);
+
+        // 3) 对涉及到的 TextNode 进行切分并就地插入
+        // 分组：同一个 parent 下的连续 TextNode 片段，按文档顺序替换
+        // 为简化实现：与单块逻辑一致，但可能跨多个 parent；我们对每个 parent 单独构建 toInsert 并替换。
+        // 标记哪些节点被涉及
+        Set<Integer> involved = new HashSet<>();
+        for (int i = startNode; i <= endNode; i++) involved.add(i);
+
+        // 我们需要按照 parent 分片，确保插入位置正确
+        // 方案：对每个“连续 parent 段”做一次替换
+        int i = startNode;
+        while (i <= endNode) {
+            Element parent = tnParents.get(i);
+            if (parent == null) return false;
+
+            int j = i;
+            // 扩展到相同 parent 的连续范围
+            while (j + 1 <= endNode && tnParents.get(j + 1) == parent) j++;
+
+            // 计算这个 parent 段内的起止 offset
+            int segStartNode = i;
+            int segEndNode = j;
+
+            // 组装要插入的新节点
+            List<Node> toInsert = new ArrayList<>();
+            TextNode firstTN = tns.get(segStartNode);
+            int insertionIndex = firstTN.siblingIndex();
+
+            for (int nodeIdx = segStartNode; nodeIdx <= segEndNode; nodeIdx++) {
+                TextNode tn = tns.get(nodeIdx);
+                String s = tn.getWholeText();
+                int L = s.length();
+
+                int l;
+                if (nodeIdx == startNode) l = startOff;
+                else l = 0;
+
+                int r;
+                if (nodeIdx == endNode) r = endOff;
+                else r = L - 1;
+
+                if (nodeIdx == startNode && l > 0) {
+                    toInsert.add(new TextNode(s.substring(0, l)));
+                }
+
+                Element wrap = new Element(Tag.valueOf("span"), "");
+                wrap.attr("id", span.id);
+                wrap.appendChild(new TextNode(s.substring(l, r + 1)));
+                toInsert.add(wrap);
+
+                if (nodeIdx == endNode && r + 1 < L) {
+                    toInsert.add(new TextNode(s.substring(r + 1)));
+                }
+            }
+
+            // 删除原节点（从后往前）
+            for (int nodeIdx = segEndNode; nodeIdx >= segStartNode; nodeIdx--) {
+                tns.get(nodeIdx).remove();
+            }
+
+            // 插入
+            try {
+                if (parent.childNodeSize() > insertionIndex) {
+                    Node ref = parent.childNode(insertionIndex);
+                    for (int k = toInsert.size() - 1; k >= 0; k--) {
+                        ref.before(toInsert.get(k));
+                    }
+                } else {
+                    for (Node n : toInsert) parent.appendChild(n);
+                }
+            } catch (Exception e) {
+                return false;
+            }
+
+            i = j + 1;
         }
 
         return true;
@@ -356,7 +438,7 @@ public class DocxHtmlIdAligner {
     // -------------------- 辅助：归一化映射工具 --------------------
     static class NormalizedMap {
         final String norm;
-        // mapping from normalized index -> original index (first original char index corresponding to that normalized char)
+        // mapping: 规范化字符索引 -> 原始 concat 字符串索引（char 基础，非 code point 索引）
         final int[] normToOrig;
 
         NormalizedMap(String norm, int[] normToOrig) {
@@ -372,53 +454,81 @@ public class DocxHtmlIdAligner {
     }
 
     /**
-     * 构建归一化字符串，并记录每个归一化字符来源于原始 concat 字符串的哪个索引（第一个对应原始索引）。
-     *
-     * normalize 做的事情（与 normalize() 保持一致）：
-     *  - NFKC 规范化
-     *  - 把 NBSP、零宽空格 等替换为空格或删除
-     *  - 把多空白折叠为单空格
-     *  - 转小写
-     *
-     * 这里我们在构建 norm 时也记录每个 norm 字符对应的原始索引（用于回映射）。
+     * 正确的归一化构造：逐个 code point 规范化，构造“规范化串”与“规范化索引 -> 原始 concat 索引”的映射。
+     * - 空白折叠为单空格且只为第一个空格写入映射；
+     * - 去掉零宽、BOM 等；
+     * - 小写化。
      */
     static NormalizedMap buildNormalizedMap(String orig) {
         StringBuilder norm = new StringBuilder();
-        List<Integer> mapping = new ArrayList<>(); // norm index -> orig index
-
-        // We'll do a streaming normalization roughly compatible with normalize()
-        String nfkc = Normalizer.normalize(orig, Normalizer.Form.NFKC);
-        int i = 0;
+        List<Integer> map = new ArrayList<>();
         boolean lastWasSpace = false;
-        while (i < nfkc.length()) {
-            char c = nfkc.charAt(i);
-            // remove zero-width etc
-            if (c == '\u200B' || c == '\uFEFF') { i++; continue; }
-            // treat NBSP as space
-            if (c == '\u00A0') c = ' ';
-            // whitespace -> single space
-            if (Character.isWhitespace(c)) {
-                if (!lastWasSpace) {
-                    norm.append(' ');
-                    mapping.add(i);
-                    lastWasSpace = true;
+
+        for (int i = 0; i < orig.length(); ) {
+            int cp = orig.codePointAt(i);
+            int origIdx = i; // 该 code point 在原串中的起始索引（char 基础）
+            i += Character.charCount(cp);
+
+            String nf = Normalizer.normalize(new String(Character.toChars(cp)), Normalizer.Form.NFKC);
+            String cleaned = nf
+                    .replace("\u200B", "")
+                    .replace("\uFEFF", "")
+                    .replace('\u00A0', ' ');
+
+            for (int j = 0; j < cleaned.length(); j++) {
+                char c = cleaned.charAt(j);
+                if (Character.isWhitespace(c)) {
+                    if (!lastWasSpace) {
+                        norm.append(' ');
+                        map.add(origIdx);
+                        lastWasSpace = true;
+                    }
+                } else {
+                    norm.append(Character.toLowerCase(c));
+                    map.add(origIdx);
+                    lastWasSpace = false;
                 }
-                // else skip repeated spaces
-            } else {
-                norm.append(Character.toLowerCase(c));
-                mapping.add(i);
-                lastWasSpace = false;
             }
-            i++;
         }
 
-        // build int[] from mapping
-        int[] arr = new int[mapping.size()];
-        for (int k = 0; k < mapping.size(); k++) arr[k] = mapping.get(k);
+        // 去尾空格
+        int L = norm.length();
+        if (L > 0 && norm.charAt(L - 1) == ' ') {
+            norm.setLength(L - 1);
+            map.remove(map.size() - 1);
+        }
+
+        int[] arr = new int[map.size()];
+        for (int k = 0; k < map.size(); k++) arr[k] = map.get(k);
         return new NormalizedMap(norm.toString(), arr);
     }
 
     // -------------------- 工具函数 --------------------
+    static List<TextNode> collectAllTextNodes(Element root) {
+        List<TextNode> list = new ArrayList<>();
+        NodeTraversor.traverse(new NodeVisitor() {
+            @Override
+            public void head(Node node, int depth) {
+                if (node instanceof TextNode) {
+                    // 跳过 <script>/<style>
+                    Node p = node.parent();
+                    if (p instanceof Element) {
+                        String tag = ((Element) p).tagName();
+                        if ("script".equalsIgnoreCase(tag) || "style".equalsIgnoreCase(tag)) return;
+                    }
+                    TextNode tn = (TextNode) node;
+                    String s = tn.getWholeText();
+                    if (s != null && !s.isEmpty()) {
+                        list.add(tn);
+                    }
+                }
+            }
+            @Override
+            public void tail(Node node, int depth) { /* no-op */ }
+        }, root);
+        return list;
+    }
+
     static String readString(File f) throws IOException {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
@@ -427,13 +537,13 @@ public class DocxHtmlIdAligner {
             while ((line = reader.readLine()) != null) {
                 sb.append(line).append("\n");
             }
-            // Remove the last newline if it exists
             if (sb.length() > 0 && sb.charAt(sb.length() - 1) == '\n') {
                 sb.deleteCharAt(sb.length() - 1);
             }
             return sb.toString();
         }
     }
+
     static void writeString(File f, String s) throws IOException {
         try (OutputStream out = new FileOutputStream(f)) {
             out.write(s.getBytes(StandardCharsets.UTF_8));
