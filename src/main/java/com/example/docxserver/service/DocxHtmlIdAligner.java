@@ -1,5 +1,6 @@
 package com.example.docxserver.service;
 
+import com.example.docxserver.util.CommentUtils;
 import org.apache.poi.xwpf.usermodel.*;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.*;
@@ -55,6 +56,8 @@ public class DocxHtmlIdAligner {
         String timestamp = sdf.format(new Date());
         File htmlOut = new File(dir + "香港中文大学（深圳）家具采购项目_withId_" + timestamp + ".html");
 
+//        debugSpanId(docx,"p-00811-r-004");
+
         List<Span> spans = extractRunsAsSpans(docx);
         System.out.println("Extracted spans: " + spans.size());
 
@@ -63,6 +66,125 @@ public class DocxHtmlIdAligner {
 
         writeString(htmlOut, outHtml);
         System.out.println("Done. output written to: " + htmlOut.getAbsolutePath());
+    }
+
+    /**
+     * 调试方法：遍历DOCX文件，当遇到特定spanId时打印日志并保存修改后的文件
+     * @param docx DOCX文件
+     * @param targetSpanId 目标spanId，例如 "p-00804-r-001"
+     */
+    public static void debugSpanId(File docx, String targetSpanId) throws IOException {
+        System.out.println("[DEBUG] Starting to search for spanId: " + targetSpanId);
+
+        // 生成时间戳
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
+        String timestamp = sdf.format(new Date());
+
+        // 生成输出文件名
+        String dir = docx.getParent() + File.separator;
+        String outputFileName = dir + "modified_" + timestamp + ".docx";
+        boolean foundAndModified = false;
+
+        try (FileInputStream fis = new FileInputStream(docx); XWPFDocument doc = new XWPFDocument(fis)) {
+            int paraIdx = 0;
+            for (IBodyElement be : doc.getBodyElements()) {
+                if (be instanceof XWPFParagraph) {
+                    XWPFParagraph p = (XWPFParagraph) be;
+                    List<XWPFRun> runs = p.getRuns();
+
+                    if (runs == null || runs.isEmpty()) {
+                        String txt = p.getText();
+                        if (txt != null && !txt.trim().isEmpty()) {
+                            String id = String.format("p-%05d-r-%03d", paraIdx+1, 0);
+                            if (id.equals(targetSpanId)) {
+                                System.out.println("=====================================");
+                                System.out.println("[FOUND] Target spanId: " + targetSpanId);
+                                System.out.println("  Type: Paragraph (no runs)");
+                                System.out.println("  Para Index: " + paraIdx);
+                                System.out.println("  Text: \"" + txt + "\"");
+                                System.out.println("  Text length: " + txt.length());
+                                System.out.println("  Normalized: \"" + normalize(txt) + "\"");
+                                System.out.println("=====================================");
+                            }
+                        }
+                        paraIdx++;
+                        continue;
+                    }
+
+                    int runIdx = 0;
+                    for (XWPFRun r : runs) {
+                        String txt = r.toString();
+                        if (txt != null && !txt.isEmpty()) {
+                            String id = String.format("p-%05d-r-%03d", paraIdx+1, runIdx+1);
+                            if (id.equals(targetSpanId)) {
+                                CommentUtils.createCommentForRun(doc,r);
+                                foundAndModified = true;
+                                System.out.println("=====================================");
+                                System.out.println("[FOUND] Target spanId: " + targetSpanId);
+                                System.out.println("  Type: Paragraph Run");
+                                System.out.println("  Para Index: " + paraIdx);
+                                System.out.println("  Run Index: " + runIdx);
+                                System.out.println("  Text: \"" + txt + "\"");
+                                System.out.println("  Text length: " + txt.length());
+                                System.out.println("  Normalized: \"" + normalize(txt) + "\"");
+                                System.out.println("=====================================");
+                            }
+                        }
+                        runIdx++;
+                    }
+                    paraIdx++;
+
+                } else if (be instanceof XWPFTable) {
+                    XWPFTable table = (XWPFTable) be;
+                    debugTableForSpanId(table, targetSpanId);
+                }
+            }
+
+            // 如果找到并修改了文档，保存到文件
+            if (foundAndModified) {
+                try (FileOutputStream fos = new FileOutputStream(outputFileName)) {
+                    doc.write(fos);
+                    System.out.println("[SUCCESS] Modified document saved to: " + outputFileName);
+                } catch (IOException e) {
+                    System.err.println("[ERROR] Failed to save modified document: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            } else {
+                System.out.println("[INFO] No modifications made, document not saved.");
+            }
+        }
+
+        System.out.println("[DEBUG] Finished searching for spanId: " + targetSpanId);
+    }
+
+    /**
+     * 在表格中调试查找特定spanId
+     */
+    static void debugTableForSpanId(XWPFTable table, String targetSpanId) {
+        for (XWPFTableRow row : table.getRows()) {
+            for (XWPFTableCell cell : row.getTableCells()) {
+                for (IBodyElement be : cell.getBodyElements()) {
+                    if (be instanceof XWPFParagraph) {
+                        XWPFParagraph p = (XWPFParagraph) be;
+                        List<XWPFRun> runs = p.getRuns();
+                        if (runs == null || runs.isEmpty()) continue;
+
+                        int runIdx = 0;
+                        for (XWPFRun r : runs) {
+                            String txt = r.toString();
+                            if (txt != null && !txt.isEmpty()) {
+                                String id = String.format("tbl-p-%s-r-%d", UUID.randomUUID().toString().substring(0,6), runIdx+1);
+                                // 注意：表格中的ID是随机生成的，无法精确匹配
+                                // 但可以通过文本内容来辅助判断
+                            }
+                            runIdx++;
+                        }
+                    } else if (be instanceof XWPFTable) {
+                        debugTableForSpanId((XWPFTable) be, targetSpanId);
+                    }
+                }
+            }
+        }
     }
 
     // ---------------- POI: 把 run 当作 span 单元提取 ----------------
