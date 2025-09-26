@@ -10,18 +10,19 @@ import org.jsoup.select.Elements;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
+import java.text.SimpleDateFormat;
 import java.util.*;
 
 /**
  * DocxHtmlIdAligner
  *
- * 1) 从 DOCX 中按 run 提取“span unit”（也可改为 paragraph / bookmark）；
+ * 1) 从 DOCX 中按 run 提取"span unit"（也可改为 paragraph / bookmark）；
  * 2) 对每个 span（外循环），在 HTML（内循环）中从上次匹配位置继续扫描；
  * 3) 在匹配到的 HTML 文本节点范围上，切分并插入 <span id="...">matched</span>，
  *    若跨多个 TextNode，会把跨越部分分段包裹，最终实现一个 DOCX span 对应多个 HTML 标签都带相同 id。
  *
  * 简化策略：
- * - 匹配依据为“归一化后的子串包含关系”。在 HTML 上实际切分使用原始字符串索引（通过归一化映射回原始索引）。
+ * - 匹配依据为"归一化后的子串包含关系"。在 HTML 上实际切分使用原始字符串索引（通过归一化映射回原始索引）。
  * - 若某个 span 无法匹配，会记录日志（stderr）。
  *
  * 依赖：
@@ -54,7 +55,11 @@ public class DocxHtmlIdAligner {
 
         File docx = new File(dir + "香港中文大学（深圳）家具采购项目.docx");
         File htmlIn = new File(dir + "香港中文大学（深圳）家具采购项目.html");
-        File htmlOut = new File(dir + "香港中文大学（深圳）家具采购项目_withId.html");
+
+        // 生成带时间戳的输出文件名
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
+        String timestamp = sdf.format(new Date());
+        File htmlOut = new File(dir + "香港中文大学（深圳）家具采购项目_withId_" + timestamp + ".html");
 
         List<Span> spans = extractRunsAsSpans(docx);
         System.out.println("Extracted spans: " + spans.size());
@@ -165,6 +170,8 @@ public class DocxHtmlIdAligner {
                 if (tryWrapSpanAcrossTextNodes(block, span)) {
                     matched = true;
                     matchedCount++;
+                    // 记录成功匹配的span
+                    System.out.println("[MATCHED] spanId=" + span.id + " -> \"" + snippet(span.raw) + "\" in " + block.tagName());
                     // 把 htmlBlockIndex 保持在 b（下次从这里继续）
                     htmlBlockIndex = b;
                     break;
