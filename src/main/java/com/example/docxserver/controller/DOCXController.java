@@ -10,7 +10,8 @@ import java.util.List;
 
 @RestController()
 @RequestMapping("/docx")
-public class DOCXController {
+@CrossOrigin(origins = "*", allowedHeaders = "*")
+public class DocxController {
 
     private final static String dir = "E:\\programFile\\AIProgram\\docxServer\\src\\main\\resources\\";
 

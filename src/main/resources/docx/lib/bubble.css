@@ -1,0 +1,35 @@
+
+  /* 气泡样式，可按需美化 */
+  .selection-bubble {
+    position: absolute;
+    z-index: 9999;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: #111;
+    color: #fff;
+    font-size: 12px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.2);
+    transform: translate(-50%, -100%); /* 默认在选区上方居中 */
+    pointer-events: auto;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .selection-bubble::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -6px;
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-top-color: #111; /* 小三角 */
+  }
+  /* 下面这个类会把小三角翻到上面，用于上方空间不足时放到下方 */
+  .selection-bubble.bottom {
+    transform: translate(-50%, 10px); /* 放到选区下方 */
+  }
+  .selection-bubble.bottom::after {
+    top: -6px;
+    bottom: auto;
+    border: 6px solid transparent;
+    border-bottom-color: #111;
+  }

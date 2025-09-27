@@ -49,12 +49,12 @@ public class DocxHtmlIdAligner {
     public static void main(String[] args) throws Exception {
 
         File docx = new File(dir + "香港中文大学（深圳）家具采购项目.docx");
-        File htmlIn = new File(dir + "香港中文大学（深圳）家具采购项目.html");
+        File htmlIn = new File("E:\\programFile\\AIProgram\\docxServer\\src\\main\\resources\\docx\\香港中文大学\\" + "香港中文大学（深圳）家具采购项目.html");
 
         // 生成带时间戳的输出文件名
         SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
         String timestamp = sdf.format(new Date());
-        File htmlOut = new File(dir + "香港中文大学（深圳）家具采购项目_withId_" + timestamp + ".html");
+        File htmlOut = new File("E:\\programFile\\AIProgram\\docxServer\\src\\main\\resources\\docx\\香港中文大学\\" + "香港中文大学（深圳）家具采购项目_withId_" + timestamp + ".html");
 
 //        debugSpanId(docx,"p-00811-r-004");
 
@@ -87,6 +87,7 @@ public class DocxHtmlIdAligner {
 
         try (FileInputStream fis = new FileInputStream(docx); XWPFDocument doc = new XWPFDocument(fis)) {
             int paraIdx = 0;
+            int tableIdx = 0;
             for (IBodyElement be : doc.getBodyElements()) {
                 if (be instanceof XWPFParagraph) {
                     XWPFParagraph p = (XWPFParagraph) be;
@@ -136,7 +137,10 @@ public class DocxHtmlIdAligner {
 
                 } else if (be instanceof XWPFTable) {
                     XWPFTable table = (XWPFTable) be;
-                    debugTableForSpanId(table, targetSpanId);
+                    if (debugTableForSpanId(doc, table, targetSpanId, tableIdx)) {
+                        foundAndModified = true;
+                    }
+                    tableIdx++;
                 }
             }
 
@@ -159,32 +163,142 @@ public class DocxHtmlIdAligner {
 
     /**
      * 在表格中调试查找特定spanId
+     * 注意：此方法需要在debugSpanId中传入tableIdx
      */
-    static void debugTableForSpanId(XWPFTable table, String targetSpanId) {
+    static boolean debugTableForSpanId(XWPFDocument doc, XWPFTable table, String targetSpanId, int tableIdx) {
+        boolean foundAndModified = false;
+        int rowIdx = 0;
         for (XWPFTableRow row : table.getRows()) {
+            int cellIdx = 0;
             for (XWPFTableCell cell : row.getTableCells()) {
+                int cellParaIdx = 0;
                 for (IBodyElement be : cell.getBodyElements()) {
                     if (be instanceof XWPFParagraph) {
                         XWPFParagraph p = (XWPFParagraph) be;
                         List<XWPFRun> runs = p.getRuns();
-                        if (runs == null || runs.isEmpty()) continue;
+
+                        if (runs == null || runs.isEmpty()) {
+                            String txt = p.getText();
+                            if (txt != null && !txt.trim().isEmpty()) {
+                                String id = String.format("t%03d-r%03d-c%03d-p%03d-r%03d",
+                                    tableIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, 0);
+                                if (id.equals(targetSpanId)) {
+                                    System.out.println("=====================================");
+                                    System.out.println("[FOUND] Target spanId: " + targetSpanId);
+                                    System.out.println("  Type: Table Cell Paragraph (no runs)");
+                                    System.out.println("  Table: " + tableIdx + ", Row: " + rowIdx + ", Cell: " + cellIdx);
+                                    System.out.println("  Text: \"" + txt + "\"");
+                                    System.out.println("  Text length: " + txt.length());
+                                    System.out.println("  Normalized: \"" + normalize(txt) + "\"");
+                                    System.out.println("=====================================");
+                                }
+                            }
+                            cellParaIdx++;
+                            continue;
+                        }
 
                         int runIdx = 0;
                         for (XWPFRun r : runs) {
                             String txt = r.toString();
                             if (txt != null && !txt.isEmpty()) {
-                                String id = String.format("tbl-p-%s-r-%d", UUID.randomUUID().toString().substring(0,6), runIdx+1);
-                                // 注意：表格中的ID是随机生成的，无法精确匹配
-                                // 但可以通过文本内容来辅助判断
+                                String id = String.format("t%03d-r%03d-c%03d-p%03d-r%03d",
+                                    tableIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, runIdx+1);
+                                if (id.equals(targetSpanId)) {
+                                    CommentUtils.createCommentForRun(doc, r);
+                                    foundAndModified = true;
+                                    System.out.println("=====================================");
+                                    System.out.println("[FOUND] Target spanId: " + targetSpanId);
+                                    System.out.println("  Type: Table Cell Run");
+                                    System.out.println("  Table: " + tableIdx + ", Row: " + rowIdx + ", Cell: " + cellIdx);
+                                    System.out.println("  Para: " + cellParaIdx + ", Run: " + runIdx);
+                                    System.out.println("  Text: \"" + txt + "\"");
+                                    System.out.println("  Text length: " + txt.length());
+                                    System.out.println("  Normalized: \"" + normalize(txt) + "\"");
+                                    System.out.println("=====================================");
+                                }
                             }
                             runIdx++;
                         }
+                        cellParaIdx++;
                     } else if (be instanceof XWPFTable) {
-                        debugTableForSpanId((XWPFTable) be, targetSpanId);
+                        // 处理嵌套表格
+                        if (debugNestedTableForSpanId(doc, (XWPFTable) be, targetSpanId, tableIdx, rowIdx, cellIdx)) {
+                            foundAndModified = true;
+                        }
                     }
                 }
+                cellIdx++;
             }
+            rowIdx++;
         }
+        return foundAndModified;
+    }
+
+    static boolean debugNestedTableForSpanId(XWPFDocument doc, XWPFTable table, String targetSpanId,
+                                            int parentTableIdx, int parentRowIdx, int parentCellIdx) {
+        boolean foundAndModified = false;
+        int rowIdx = 0;
+        for (XWPFTableRow row : table.getRows()) {
+            int cellIdx = 0;
+            for (XWPFTableCell cell : row.getTableCells()) {
+                int cellParaIdx = 0;
+                for (IBodyElement be : cell.getBodyElements()) {
+                    if (be instanceof XWPFParagraph) {
+                        XWPFParagraph p = (XWPFParagraph) be;
+                        List<XWPFRun> runs = p.getRuns();
+
+                        if (runs == null || runs.isEmpty()) {
+                            String txt = p.getText();
+                            if (txt != null && !txt.trim().isEmpty()) {
+                                String id = String.format("t%03d-r%03d-c%03d-nested-r%03d-c%03d-p%03d-r%03d",
+                                    parentTableIdx+1, parentRowIdx+1, parentCellIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, 0);
+                                if (id.equals(targetSpanId)) {
+                                    System.out.println("=====================================");
+                                    System.out.println("[FOUND] Target spanId: " + targetSpanId);
+                                    System.out.println("  Type: Nested Table Cell Paragraph (no runs)");
+                                    System.out.println("  Parent Table: " + parentTableIdx + ", Parent Row: " + parentRowIdx + ", Parent Cell: " + parentCellIdx);
+                                    System.out.println("  Nested Row: " + rowIdx + ", Nested Cell: " + cellIdx);
+                                    System.out.println("  Text: \"" + txt + "\"");
+                                    System.out.println("  Text length: " + txt.length());
+                                    System.out.println("  Normalized: \"" + normalize(txt) + "\"");
+                                    System.out.println("=====================================");
+                                }
+                            }
+                            cellParaIdx++;
+                            continue;
+                        }
+
+                        int runIdx = 0;
+                        for (XWPFRun r : runs) {
+                            String txt = r.toString();
+                            if (txt != null && !txt.isEmpty()) {
+                                String id = String.format("t%03d-r%03d-c%03d-nested-r%03d-c%03d-p%03d-r%03d",
+                                    parentTableIdx+1, parentRowIdx+1, parentCellIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, runIdx+1);
+                                if (id.equals(targetSpanId)) {
+                                    CommentUtils.createCommentForRun(doc, r);
+                                    foundAndModified = true;
+                                    System.out.println("=====================================");
+                                    System.out.println("[FOUND] Target spanId: " + targetSpanId);
+                                    System.out.println("  Type: Nested Table Cell Run");
+                                    System.out.println("  Parent Table: " + parentTableIdx + ", Parent Row: " + parentRowIdx + ", Parent Cell: " + parentCellIdx);
+                                    System.out.println("  Nested Row: " + rowIdx + ", Nested Cell: " + cellIdx);
+                                    System.out.println("  Para: " + cellParaIdx + ", Run: " + runIdx);
+                                    System.out.println("  Text: \"" + txt + "\"");
+                                    System.out.println("  Text length: " + txt.length());
+                                    System.out.println("  Normalized: \"" + normalize(txt) + "\"");
+                                    System.out.println("=====================================");
+                                }
+                            }
+                            runIdx++;
+                        }
+                        cellParaIdx++;
+                    }
+                }
+                cellIdx++;
+            }
+            rowIdx++;
+        }
+        return foundAndModified;
     }
 
     // ---------------- POI: 把 run 当作 span 单元提取 ----------------
@@ -192,6 +306,7 @@ public class DocxHtmlIdAligner {
         List<Span> out = new ArrayList<>();
         try (FileInputStream fis = new FileInputStream(docx); XWPFDocument doc = new XWPFDocument(fis)) {
             int paraIdx = 0;
+            int tableIdx = 0;
             for (IBodyElement be : doc.getBodyElements()) {
                 if (be instanceof XWPFParagraph) {
                     XWPFParagraph p = (XWPFParagraph) be;
@@ -217,7 +332,8 @@ public class DocxHtmlIdAligner {
                     paraIdx++;
                 } else if (be instanceof XWPFTable) {
                     XWPFTable table = (XWPFTable) be;
-                    traverseTableForRuns(table, out);
+                    traverseTableForRuns(table, out, tableIdx);
+                    tableIdx++;
                 } else {
                     // 其他类型可扩展
                 }
@@ -228,28 +344,87 @@ public class DocxHtmlIdAligner {
         return out;
     }
 
-    static void traverseTableForRuns(XWPFTable table, List<Span> out) {
+    static void traverseTableForRuns(XWPFTable table, List<Span> out, int tableIdx) {
+        int rowIdx = 0;
         for (XWPFTableRow row : table.getRows()) {
+            int cellIdx = 0;
             for (XWPFTableCell cell : row.getTableCells()) {
+                int cellParaIdx = 0;
                 for (IBodyElement be : cell.getBodyElements()) {
                     if (be instanceof XWPFParagraph) {
                         XWPFParagraph p = (XWPFParagraph) be;
                         List<XWPFRun> runs = p.getRuns();
-                        if (runs == null || runs.isEmpty()) continue;
+                        if (runs == null || runs.isEmpty()) {
+                            String txt = p.getText();
+                            if (txt != null && !txt.trim().isEmpty()) {
+                                String id = String.format("t%03d-r%03d-c%03d-p%03d-r%03d",
+                                    tableIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, 0);
+                                out.add(new Span(id, txt, -1, 0));
+                            }
+                            cellParaIdx++;
+                            continue;
+                        }
                         int runIdx = 0;
                         for (XWPFRun r : runs) {
                             String txt = r.toString();
                             if (txt != null && !txt.isEmpty()) {
-                                String id = String.format("tbl-p-%s-r-%d", UUID.randomUUID().toString().substring(0,6), runIdx+1);
+                                String id = String.format("t%03d-r%03d-c%03d-p%03d-r%03d",
+                                    tableIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, runIdx+1);
                                 out.add(new Span(id, txt, -1, runIdx));
                             }
                             runIdx++;
                         }
+                        cellParaIdx++;
                     } else if (be instanceof XWPFTable) {
-                        traverseTableForRuns((XWPFTable) be, out);
+                        // 嵌套表格：使用特殊标记
+                        traverseNestedTableForRuns((XWPFTable) be, out, tableIdx, rowIdx, cellIdx);
                     }
                 }
+                cellIdx++;
             }
+            rowIdx++;
+        }
+    }
+
+    static void traverseNestedTableForRuns(XWPFTable table, List<Span> out, int parentTableIdx, int parentRowIdx, int parentCellIdx) {
+        int rowIdx = 0;
+        for (XWPFTableRow row : table.getRows()) {
+            int cellIdx = 0;
+            for (XWPFTableCell cell : row.getTableCells()) {
+                int cellParaIdx = 0;
+                for (IBodyElement be : cell.getBodyElements()) {
+                    if (be instanceof XWPFParagraph) {
+                        XWPFParagraph p = (XWPFParagraph) be;
+                        List<XWPFRun> runs = p.getRuns();
+                        if (runs == null || runs.isEmpty()) {
+                            String txt = p.getText();
+                            if (txt != null && !txt.trim().isEmpty()) {
+                                String id = String.format("t%03d-r%03d-c%03d-nested-r%03d-c%03d-p%03d-r%03d",
+                                    parentTableIdx+1, parentRowIdx+1, parentCellIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, 0);
+                                out.add(new Span(id, txt, -1, 0));
+                            }
+                            cellParaIdx++;
+                            continue;
+                        }
+                        int runIdx = 0;
+                        for (XWPFRun r : runs) {
+                            String txt = r.toString();
+                            if (txt != null && !txt.isEmpty()) {
+                                String id = String.format("t%03d-r%03d-c%03d-nested-r%03d-c%03d-p%03d-r%03d",
+                                    parentTableIdx+1, parentRowIdx+1, parentCellIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, runIdx+1);
+                                out.add(new Span(id, txt, -1, runIdx));
+                            }
+                            runIdx++;
+                        }
+                        cellParaIdx++;
+                    } else if (be instanceof XWPFTable) {
+                        // 多层嵌套表格（如果需要可以继续递归）
+                        // 这里简化处理，不支持更深的嵌套
+                    }
+                }
+                cellIdx++;
+            }
+            rowIdx++;
         }
     }
 
