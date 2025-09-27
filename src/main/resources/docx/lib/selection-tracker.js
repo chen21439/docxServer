@@ -114,24 +114,6 @@
         elementIds.length > 0 ? elementIds : "无带ID的元素"
       );
 
-      // 检查comment单选按钮是否勾选
-      const commentRadio = document.getElementById("comment");
-      console.log("Comment radio element:", commentRadio);
-      console.log("Comment radio checked property:", commentRadio?.checked);
-
-      if (commentRadio && commentRadio.checked) {
-        console.log("Comment is checked, sending request...");
-        if (elementIds.length > 0) {
-          axios
-            .post("http://localhost:8080/docx/comment", elementIds, {
-              headers: { "Content-Type": "application/json" },
-            })
-            .then((res) => {
-              console.log(res.data);
-            });
-        }
-      }
-
       // 先保存选中的文本，因为高亮功能会清除选区
       const selectedTextForAI = sel.toString();
 

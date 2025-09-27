@@ -27,8 +27,11 @@ import java.util.*;
  */
 public class DocxHtmlIdAligner {
 
-    private final static String dir = "E:\\programFile\\AIProgram\\docxServer\\src\\main\\resources\\";
+    private final static String dir = "E:\\programFile\\AIProgram\\docxServer\\src\\main\\resources\\docx\\香港中文大学\\";
     private final static int MERGE_K = 3; // 跨 block 滑窗大小（建议 2~4）
+
+    // 用于跟踪每个 ID 的使用次数，避免重复
+    private static Map<String, Integer> idUsageCounter = new HashMap<>();
 
     static class Span {
         String id;
@@ -49,12 +52,12 @@ public class DocxHtmlIdAligner {
     public static void main(String[] args) throws Exception {
 
         File docx = new File(dir + "香港中文大学（深圳）家具采购项目.docx");
-        File htmlIn = new File("E:\\programFile\\AIProgram\\docxServer\\src\\main\\resources\\docx\\香港中文大学\\" + "香港中文大学（深圳）家具采购项目.html");
+        File htmlIn = new File(dir + "香港中文大学（深圳）家具采购项目.html");
 
         // 生成带时间戳的输出文件名
         SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
         String timestamp = sdf.format(new Date());
-        File htmlOut = new File("E:\\programFile\\AIProgram\\docxServer\\src\\main\\resources\\docx\\香港中文大学\\" + "香港中文大学（深圳）家具采购项目_withId_" + timestamp + ".html");
+        File htmlOut = new File(dir + "香港中文大学_withId_" + timestamp + ".html");
 
 //        debugSpanId(docx,"p-00811-r-004");
 
@@ -66,6 +69,88 @@ public class DocxHtmlIdAligner {
 
         writeString(htmlOut, outHtml);
         System.out.println("Done. output written to: " + htmlOut.getAbsolutePath());
+    }
+
+    /**
+     * 调试方法：遍历DOCX文件，当遇到特定spanId时打印日志并返回修改后的文档
+     * @param docx DOCX文件
+     * @param targetSpanId 目标spanId，例如 "p-00804-r-001"
+     * @return 修改后的XWPFDocument，如果未找到则返回null
+     */
+    public static XWPFDocument debugSpanIdAndReturnDoc(File docx, String targetSpanId) throws IOException {
+        System.out.println("[DEBUG] Starting to search for spanId: " + targetSpanId);
+
+        try (FileInputStream fis = new FileInputStream(docx)) {
+            XWPFDocument doc = new XWPFDocument(fis);
+            boolean foundAndModified = false;
+            int paraIdx = 0;
+            int tableIdx = 0;
+
+            for (IBodyElement be : doc.getBodyElements()) {
+                if (be instanceof XWPFParagraph) {
+                    XWPFParagraph p = (XWPFParagraph) be;
+                    List<XWPFRun> runs = p.getRuns();
+
+                    if (runs == null || runs.isEmpty()) {
+                        String txt = p.getText();
+                        if (txt != null && !txt.trim().isEmpty()) {
+                            String id = String.format("p-%05d-r-%03d", paraIdx+1, 0);
+                            if (id.equals(targetSpanId) || id.equals(getBaseId(targetSpanId))) {
+                                System.out.println("=====================================");
+                                System.out.println("[FOUND] Target spanId: " + targetSpanId);
+                                System.out.println("  Type: Paragraph (no runs)");
+                                System.out.println("  Para Index: " + paraIdx);
+                                System.out.println("  Text: \"" + txt + "\"");
+                                System.out.println("  Text length: " + txt.length());
+                                System.out.println("  Normalized: \"" + normalize(txt) + "\"");
+                                System.out.println("=====================================");
+                            }
+                        }
+                        paraIdx++;
+                        continue;
+                    }
+
+                    int runIdx = 0;
+                    for (XWPFRun r : runs) {
+                        String txt = r.toString();
+                        if (txt != null && !txt.isEmpty()) {
+                            String id = String.format("p-%05d-r-%03d", paraIdx+1, runIdx+1);
+                            if (id.equals(targetSpanId) || id.equals(getBaseId(targetSpanId))) {
+                                CommentUtils.createCommentForRun(doc,r);
+                                foundAndModified = true;
+                                System.out.println("=====================================");
+                                System.out.println("[FOUND] Target spanId: " + targetSpanId);
+                                System.out.println("  Type: Paragraph Run");
+                                System.out.println("  Para Index: " + paraIdx);
+                                System.out.println("  Run Index: " + runIdx);
+                                System.out.println("  Text: \"" + txt + "\"");
+                                System.out.println("  Text length: " + txt.length());
+                                System.out.println("  Normalized: \"" + normalize(txt) + "\"");
+                                System.out.println("=====================================");
+                            }
+                        }
+                        runIdx++;
+                    }
+                    paraIdx++;
+
+                } else if (be instanceof XWPFTable) {
+                    XWPFTable table = (XWPFTable) be;
+                    if (debugTableForSpanId(doc, table, targetSpanId, tableIdx)) {
+                        foundAndModified = true;
+                    }
+                    tableIdx++;
+                }
+            }
+
+            if (foundAndModified) {
+                System.out.println("[SUCCESS] Document modified with comment for spanId: " + targetSpanId);
+                return doc;
+            } else {
+                System.out.println("[INFO] No modifications made - spanId not found: " + targetSpanId);
+                doc.close();
+                return null;
+            }
+        }
     }
 
     /**
@@ -97,7 +182,7 @@ public class DocxHtmlIdAligner {
                         String txt = p.getText();
                         if (txt != null && !txt.trim().isEmpty()) {
                             String id = String.format("p-%05d-r-%03d", paraIdx+1, 0);
-                            if (id.equals(targetSpanId)) {
+                            if (id.equals(targetSpanId) || id.equals(getBaseId(targetSpanId))) {
                                 System.out.println("=====================================");
                                 System.out.println("[FOUND] Target spanId: " + targetSpanId);
                                 System.out.println("  Type: Paragraph (no runs)");
@@ -117,7 +202,7 @@ public class DocxHtmlIdAligner {
                         String txt = r.toString();
                         if (txt != null && !txt.isEmpty()) {
                             String id = String.format("p-%05d-r-%03d", paraIdx+1, runIdx+1);
-                            if (id.equals(targetSpanId)) {
+                            if (id.equals(targetSpanId) || id.equals(getBaseId(targetSpanId))) {
                                 CommentUtils.createCommentForRun(doc,r);
                                 foundAndModified = true;
                                 System.out.println("=====================================");
@@ -182,7 +267,7 @@ public class DocxHtmlIdAligner {
                             if (txt != null && !txt.trim().isEmpty()) {
                                 String id = String.format("t%03d-r%03d-c%03d-p%03d-r%03d",
                                     tableIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, 0);
-                                if (id.equals(targetSpanId)) {
+                                if (id.equals(targetSpanId) || id.equals(getBaseId(targetSpanId))) {
                                     System.out.println("=====================================");
                                     System.out.println("[FOUND] Target spanId: " + targetSpanId);
                                     System.out.println("  Type: Table Cell Paragraph (no runs)");
@@ -203,7 +288,7 @@ public class DocxHtmlIdAligner {
                             if (txt != null && !txt.isEmpty()) {
                                 String id = String.format("t%03d-r%03d-c%03d-p%03d-r%03d",
                                     tableIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, runIdx+1);
-                                if (id.equals(targetSpanId)) {
+                                if (id.equals(targetSpanId) || id.equals(getBaseId(targetSpanId))) {
                                     CommentUtils.createCommentForRun(doc, r);
                                     foundAndModified = true;
                                     System.out.println("=====================================");
@@ -252,7 +337,7 @@ public class DocxHtmlIdAligner {
                             if (txt != null && !txt.trim().isEmpty()) {
                                 String id = String.format("t%03d-r%03d-c%03d-nested-r%03d-c%03d-p%03d-r%03d",
                                     parentTableIdx+1, parentRowIdx+1, parentCellIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, 0);
-                                if (id.equals(targetSpanId)) {
+                                if (id.equals(targetSpanId) || id.equals(getBaseId(targetSpanId))) {
                                     System.out.println("=====================================");
                                     System.out.println("[FOUND] Target spanId: " + targetSpanId);
                                     System.out.println("  Type: Nested Table Cell Paragraph (no runs)");
@@ -274,7 +359,7 @@ public class DocxHtmlIdAligner {
                             if (txt != null && !txt.isEmpty()) {
                                 String id = String.format("t%03d-r%03d-c%03d-nested-r%03d-c%03d-p%03d-r%03d",
                                     parentTableIdx+1, parentRowIdx+1, parentCellIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, runIdx+1);
-                                if (id.equals(targetSpanId)) {
+                                if (id.equals(targetSpanId) || id.equals(getBaseId(targetSpanId))) {
                                     CommentUtils.createCommentForRun(doc, r);
                                     foundAndModified = true;
                                     System.out.println("=====================================");
@@ -428,8 +513,44 @@ public class DocxHtmlIdAligner {
         }
     }
 
+    /**
+     * 生成唯一的 ID，如果有重复则添加后缀 -sub001, -sub002 等
+     */
+    private static String getUniqueId(String baseId) {
+        Integer count = idUsageCounter.get(baseId);
+        if (count == null) {
+            idUsageCounter.put(baseId, 1);
+            return baseId;
+        } else {
+            idUsageCounter.put(baseId, count + 1);
+            return String.format("%s-sub%03d", baseId, count);
+        }
+    }
+
+    /**
+     * 从带后缀的 ID 中提取原始 ID（去掉 -subXXX 后缀）
+     */
+    public static String getBaseId(String idWithSuffix) {
+        if (idWithSuffix == null) return null;
+        int index = idWithSuffix.lastIndexOf("-sub");
+        if (index > 0 && index + 7 == idWithSuffix.length()) {
+            // 检查后面是否是3位数字
+            String suffix = idWithSuffix.substring(index + 4);
+            try {
+                Integer.parseInt(suffix);
+                return idWithSuffix.substring(0, index);
+            } catch (NumberFormatException e) {
+                // 不是我们的后缀格式
+            }
+        }
+        return idWithSuffix;
+    }
+
     // ---------------- HTML 对齐并注入 id ----------------
     static String injectIds(List<Span> spans, String html) {
+        // 清空 ID 计数器，开始新的注入
+        idUsageCounter.clear();
+
         Document doc = Jsoup.parse(html);
         // 候选容器：保持你原来的选择器不变（也可以按需只保留块级标签）
         Elements blocks = doc.select("p, td, th, li, div, span, font, pre, blockquote");
@@ -573,7 +694,8 @@ public class DocxHtmlIdAligner {
             }
 
             Element wrap = new Element(Tag.valueOf("span"), "");
-            wrap.attr("id", span.id);
+            String uniqueId = getUniqueId(span.id);
+            wrap.attr("id", uniqueId);
             wrap.appendChild(new TextNode(s.substring(l, r + 1)));
             toInsert.add(wrap);
 
@@ -584,7 +706,10 @@ public class DocxHtmlIdAligner {
 
         // 删除原节点（从后往前）
         for (int nodeIdx = endNode; nodeIdx >= startNode; nodeIdx--) {
-            tns.get(nodeIdx).remove();
+            TextNode tn = tns.get(nodeIdx);
+            if (tn != null && tn.parentNode() != null) {
+                tn.remove();
+            }
         }
 
         // 插入新节点
@@ -698,7 +823,8 @@ public class DocxHtmlIdAligner {
                 }
 
                 Element wrap = new Element(Tag.valueOf("span"), "");
-                wrap.attr("id", span.id);
+                String uniqueId = getUniqueId(span.id);
+                wrap.attr("id", uniqueId);
                 wrap.appendChild(new TextNode(s.substring(l, r + 1)));
                 toInsert.add(wrap);
 
@@ -709,7 +835,10 @@ public class DocxHtmlIdAligner {
 
             // 删除原节点（从后往前）
             for (int nodeIdx = segEndNode; nodeIdx >= segStartNode; nodeIdx--) {
-                tns.get(nodeIdx).remove();
+                TextNode tn = tns.get(nodeIdx);
+                if (tn != null && tn.parentNode() != null) {
+                    tn.remove();
+                }
             }
 
             // 插入

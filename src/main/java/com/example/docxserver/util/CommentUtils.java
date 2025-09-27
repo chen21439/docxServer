@@ -26,7 +26,7 @@ public class CommentUtils {
 
         XWPFParagraph paragraph = comment.createParagraph();
         XWPFRun run = paragraph.createRun();
-        run.setText("插入一段批注");
+        run.setText("aaa");
 
     }
 }

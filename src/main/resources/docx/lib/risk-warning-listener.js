@@ -14,18 +14,32 @@
         linkUrl: "javascript:void(0)",
         advice:
           '调整为"采购人需自行承担项目设备运输、安装、调试、检验检测以外的义务和成本。若验收检测不合格，中标人应在合同约定的范围内进行整改，更换或承担违约责任，但不承担检测费用"。',
+        spanId: [
+          "t011-r023-c003-p001-r001",
+          "t011-r023-c003-p001-r002",
+          "t011-r023-c003-p001-r003",
+        ], // 示例ID
         up: 0,
         down: 0,
       },
       {
         tag: "发现风险",
-        title: "技术参数设置过窄",
-        tip: "部分参数与特定品牌高度吻合，建议改为区间或等效描述。",
+        title: "不得要求中标人承担验收产生的检测费用",
+        tip: "系统中要求中标人支付检测费用，可能构成对潜在供应商的差别待遇，建议重新审查其必要性，并考虑以调整。",
         basis:
-          "依据《政府采购法实施条例》第三十二条：采购人或者采购代理机构不得将投标人的注册资本、资产总额、营业收入、从业人员、利润、纳税额等规模条件作为资格要求或者评审因素。",
+          "《深圳经济特区政府采购条例实施细则》第五十五条：采购人应当组织验收小组对采购项目进行验收……因验收产生的费用由组织者承担；政府集中采购机构参与验收的，其费用由政府集中采购机构承担。",
         linkText: "政策依据",
         linkUrl: "javascript:void(0)",
-        advice: '将"仅限A品牌型号X"调整为"支持不低于X的性能参数，允许等效"。',
+        advice:
+          '调整为"抽检流程首先由采购人封样并送到第三方检验机构进行检测，检测费用由采购人承担。若检测不合格，中标人应在合同约定的范围内进行整改、更换或承担违约责任，但不承担检测费用。" ',
+        spanId: [
+          "t011-r042-c003-p001-r001",
+          "t011-r042-c003-p001-r001",
+          "t011-r042-c003-p001-r001",
+          "t011-r042-c003-p001-r002",
+          "t011-r042-c003-p001-r003",
+          "t011-r042-c003-p001-r004",
+        ], // 示例ID
         up: 2,
         down: 0,
       },
@@ -38,6 +52,65 @@
       return div.innerHTML;
     }
 
+    // 跳转到指定元素并高亮
+    function scrollToAndHighlight(spanIds) {
+      // 移除之前的高亮
+      document.querySelectorAll(".risk-highlight").forEach((el) => {
+        el.classList.remove("risk-highlight");
+        el.style.backgroundColor = "";
+        el.style.transition = "";
+        el.style.boxShadow = "";
+      });
+
+      // 确保spanIds是数组
+      const idArray = Array.isArray(spanIds) ? spanIds : [spanIds];
+
+      // 查找所有目标元素
+      const targetElements = [];
+      idArray.forEach((id) => {
+        const element = document.getElementById(id);
+        if (element) {
+          targetElements.push(element);
+        }
+      });
+
+      if (targetElements.length > 0) {
+        // 滚动到第一个目标位置
+        targetElements[0].scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+
+        // 为所有找到的元素添加高亮效果
+        targetElements.forEach((element) => {
+          element.classList.add("risk-highlight");
+          element.style.backgroundColor = "#ffeb3b";
+          element.style.transition = "background-color 0.3s ease";
+          element.style.boxShadow = "0 0 10px rgba(255, 235, 59, 0.5)";
+        });
+
+        // 3秒后渐变移除高亮
+        setTimeout(() => {
+          targetElements.forEach((element) => {
+            element.style.transition = "background-color 1s ease";
+            element.style.backgroundColor = "rgba(255, 235, 59, 0.3)";
+          });
+        }, 3000);
+
+        // 5秒后完全移除高亮
+        setTimeout(() => {
+          targetElements.forEach((element) => {
+            element.classList.remove("risk-highlight");
+            element.style.backgroundColor = "";
+            element.style.transition = "";
+            element.style.boxShadow = "";
+          });
+        }, 5000);
+      } else {
+        console.warn(`未找到ID为 ${JSON.stringify(idArray)} 的元素`);
+      }
+    }
+
     // 渲染风险列表
     function renderRiskList(container, data) {
       const riskMessages = document.getElementById(container);
@@ -48,7 +121,34 @@
       data.forEach((item, idx) => {
         const riskCard = document.createElement("div");
         riskCard.style.cssText =
-          "background:#f5f7ff;border:1px solid #dfe6ff;border-radius:8px;padding:12px 12px 10px;margin-bottom:12px;";
+          "background:#f5f7ff;border:1px solid #dfe6ff;border-radius:8px;padding:12px 12px 10px;margin-bottom:12px;cursor:pointer;transition:all 0.3s ease;";
+
+        // 添加hover效果的事件监听
+        riskCard.addEventListener("mouseenter", function () {
+          this.style.backgroundColor = "#e8ecff";
+          this.style.borderColor = "#c5d4ff";
+          this.style.transform = "translateX(-2px)";
+        });
+        riskCard.addEventListener("mouseleave", function () {
+          this.style.backgroundColor = "#f5f7ff";
+          this.style.borderColor = "#dfe6ff";
+          this.style.transform = "translateX(0)";
+        });
+
+        // 添加点击事件跳转
+        if (item.spanId) {
+          riskCard.setAttribute("data-span-id", item.spanId);
+          riskCard.addEventListener("click", function (e) {
+            // 如果点击的是按钮，不触发跳转
+            if (
+              e.target.tagName === "BUTTON" ||
+              e.target.parentElement?.tagName === "BUTTON"
+            ) {
+              return;
+            }
+            scrollToAndHighlight(item.spanId);
+          });
+        }
 
         riskCard.innerHTML = `
           <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;">
@@ -59,6 +159,11 @@
               <div style="font-weight:600;color:#333;font-size:14px;">${escapeHtml(
                 item.title || ""
               )}</div>
+              ${
+                item.spanId
+                  ? '<span style="color:#3366ff;font-size:12px;margin-left:auto;">📍</span>'
+                  : ""
+              }
             </div>
             <div style="display:flex;align-items:center;gap:10px;color:#667085;">
               <button data-act="up" data-idx="${idx}" style="border:0;background:transparent;cursor:pointer;font-size:14px;">👍 <span>${
@@ -117,17 +222,6 @@
       });
     }
 
-    // 更新统计数字
-    function updateStatistics() {
-      const riskCount = document.getElementById("riskCount");
-      const warningCount = document.getElementById("warningCount");
-      const suggestionCount = document.getElementById("suggestionCount");
-
-      if (riskCount) riskCount.textContent = riskItems.length;
-      if (warningCount) warningCount.textContent = "2";
-      if (suggestionCount) suggestionCount.textContent = riskItems.length;
-    }
-
     // 获取风险信息复选框
     const riskCheckbox = document.getElementById("riskWarning");
     const riskDlg = document.getElementById("riskWarningDlg");
@@ -142,7 +236,6 @@
 
           // 渲染风险列表
           renderRiskList("riskMessages", riskItems);
-          updateStatistics();
         } else {
           // 取消勾选时隐藏对话框
           riskDlg.style.display = "none";
@@ -154,7 +247,6 @@
       if (riskCheckbox.checked) {
         riskDlg.style.display = "block";
         renderRiskList("riskMessages", riskItems);
-        updateStatistics();
       }
     }
 
@@ -169,44 +261,6 @@
           riskCheckbox.checked = false;
         }
       };
-    }
-
-    // 刷新风险按钮
-    const refreshBtn = document.getElementById("refreshRiskBtn");
-    if (refreshBtn) {
-      refreshBtn.addEventListener("click", () => {
-        console.log("刷新风险数据...");
-        // 模拟添加新的风险项
-        const newRisk = {
-          tag: "新发现",
-          title: "投标保证金设置过高",
-          tip: "投标保证金超过项目预算的2%，可能限制中小企业参与。",
-          basis:
-            "《政府采购货物和服务招标投标管理办法》第三十八条：投标保证金不得超过采购项目预算金额的2%。",
-          linkText: "查看法规",
-          linkUrl: "javascript:void(0)",
-          advice: "建议将投标保证金调整为项目预算的2%以内。",
-          up: 0,
-          down: 0,
-        };
-
-        // 检查是否已存在相同标题的风险
-        const exists = riskItems.some((item) => item.title === newRisk.title);
-        if (!exists) {
-          riskItems.push(newRisk);
-        }
-
-        renderRiskList("riskMessages", riskItems);
-        updateStatistics();
-
-        // 显示提示
-        const toast = document.createElement("div");
-        toast.style.cssText =
-          "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#4caf50;color:white;padding:10px 20px;border-radius:4px;z-index:10000;";
-        toast.textContent = exists ? "风险数据已是最新" : "发现新的风险项";
-        document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 2000);
-      });
     }
 
     // 导出报告按钮
