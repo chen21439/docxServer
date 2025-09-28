@@ -16,7 +16,7 @@ import java.util.List;
 @CrossOrigin(origins = "*", allowedHeaders = "*")
 public class DocxController {
 
-    private final static String dir = "E:\\programFile\\AIProgram\\docxServer\\src\\main\\resources\\";
+    private final static String dir = "E:\\programFile\\AIProgram\\docxServer\\src\\main\\resources\\docx\\香港中文大学\\";
 
     @PostMapping("/comment")
     public void comment(@RequestBody List<String> ids, HttpServletResponse response) throws IOException {
