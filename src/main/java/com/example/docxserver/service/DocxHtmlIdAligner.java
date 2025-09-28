@@ -58,17 +58,235 @@ public class DocxHtmlIdAligner {
         SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
         String timestamp = sdf.format(new Date());
         File htmlOut = new File(dir + "香港中文大学_withId_" + timestamp + ".html");
+        File txtOut = new File(dir + "香港中文大学_tags_" + timestamp + ".txt");
 
 //        debugSpanId(docx,"p-00811-r-004");
 
         List<Span> spans = extractRunsAsSpans(docx);
         System.out.println("Extracted spans: " + spans.size());
 
+        // 将标签和文本写入txt文件
+        writeSpansToTxt(spans, txtOut);
+        System.out.println("Tags written to: " + txtOut.getAbsolutePath());
+
         String html = readString(htmlIn);
         String outHtml = injectIds(spans, html);
 
         writeString(htmlOut, outHtml);
         System.out.println("Done. output written to: " + htmlOut.getAbsolutePath());
+    }
+
+    /**
+     * 将提取的所有标签和文本内容写入txt文件，保持HTML结构
+     * 输出格式保留<p>, <table>, <tr>, <td>等HTML标签
+     * @param spans 提取的标签列表
+     * @param txtFile 输出的txt文件
+     */
+    static void writeSpansToTxt(List<Span> spans, File txtFile) throws IOException {
+        try (BufferedWriter writer = new BufferedWriter(
+                new OutputStreamWriter(new FileOutputStream(txtFile), StandardCharsets.UTF_8))) {
+
+            // 跟踪当前的段落/表格状态
+            int currentPara = -1;
+            String currentTable = null;
+            String currentRow = null;
+            String currentCell = null;
+            boolean inTable = false;
+            boolean inRow = false;
+            boolean inCell = false;
+            boolean inPara = false;
+
+            for (Span span : spans) {
+                String id = span.id;
+
+                // 解析ID以确定元素类型
+                if (id.startsWith("p-")) {
+                    // 段落文本
+                    if (inCell) {
+                        // 不需要关闭，继续在单元格内
+                    } else {
+                        // 关闭之前的表格结构（如果有）
+                        if (inTable) {
+                            if (inCell) {
+                                writer.write("</td>");
+                                writer.newLine();
+                                inCell = false;
+                            }
+                            if (inRow) {
+                                writer.write("</tr>");
+                                writer.newLine();
+                                inRow = false;
+                            }
+                            writer.write("</table>");
+                            writer.newLine();
+                            inTable = false;
+                        }
+
+                        // 检查是否需要关闭之前的段落
+                        if (inPara && span.paraIndex != currentPara) {
+                            writer.write("</p>");
+                            writer.newLine();
+                            inPara = false;
+                        }
+
+                        // 开始新段落
+                        if (!inPara || span.paraIndex != currentPara) {
+                            writer.write("<p>");
+                            currentPara = span.paraIndex;
+                            inPara = true;
+                        }
+                    }
+
+                    // 写入span内容
+                    writer.write("<span id=\"" + span.id + "\">" +
+                                escapeHtml(span.raw) + "</span>");
+
+                } else if (id.startsWith("t")) {
+                    // 表格文本
+                    // 解析表格ID结构: t{table}-r{row}-c{cell}-p{para}-r{run}
+                    // 或嵌套表格: t{table}-r{row}-c{cell}-nested-r{row}-c{cell}-p{para}-r{run}
+                    String[] parts = id.split("-");
+
+                    // 关闭之前的段落（如果有）
+                    if (inPara) {
+                        writer.write("</p>");
+                        writer.newLine();
+                        inPara = false;
+                    }
+
+                    String tableId = parts[0]; // t001
+                    String rowId = parts[1];   // r001
+                    String cellId = parts[2];  // c001
+
+                    // 检查是否是新表格
+                    if (!inTable || !tableId.equals(currentTable)) {
+                        // 关闭之前的表格（如果有）
+                        if (inTable) {
+                            if (inCell) {
+                                writer.write("</td>");
+                                writer.newLine();
+                                inCell = false;
+                            }
+                            if (inRow) {
+                                writer.write("</tr>");
+                                writer.newLine();
+                                inRow = false;
+                            }
+                            writer.write("</table>");
+                            writer.newLine();
+                        }
+
+                        // 开始新表格
+                        writer.write("<table>");
+                        writer.newLine();
+                        currentTable = tableId;
+                        inTable = true;
+                        currentRow = null;
+                        currentCell = null;
+                    }
+
+                    // 检查是否是新行
+                    if (!inRow || !rowId.equals(currentRow)) {
+                        // 关闭之前的单元格和行（如果有）
+                        if (inCell) {
+                            writer.write("</td>");
+                            writer.newLine();
+                            inCell = false;
+                        }
+                        if (inRow) {
+                            writer.write("</tr>");
+                            writer.newLine();
+                        }
+
+                        // 开始新行
+                        writer.write("<tr>");
+                        writer.newLine();
+                        currentRow = rowId;
+                        inRow = true;
+                        currentCell = null;
+                    }
+
+                    // 检查是否是新单元格
+                    if (!inCell || !cellId.equals(currentCell)) {
+                        // 关闭之前的单元格（如果有）
+                        if (inCell) {
+                            writer.write("</td>");
+                            writer.newLine();
+                        }
+
+                        // 开始新单元格
+                        writer.write("<td>");
+                        currentCell = cellId;
+                        inCell = true;
+                    }
+
+                    // 写入span内容
+                    writer.write("<span id=\"" + span.id + "\">" +
+                                escapeHtml(span.raw) + "</span>");
+                }
+            }
+
+            // 关闭所有未关闭的标签
+            if (inCell) {
+                writer.write("</td>");
+                writer.newLine();
+            }
+            if (inRow) {
+                writer.write("</tr>");
+                writer.newLine();
+            }
+            if (inTable) {
+                writer.write("</table>");
+                writer.newLine();
+            }
+            if (inPara) {
+                writer.write("</p>");
+                writer.newLine();
+            }
+
+            // 写入统计信息
+            writer.newLine();
+            writer.write("<!-- ");
+            StringBuilder separator = new StringBuilder();
+            for (int i = 0; i < 80; i++) separator.append("=");
+            writer.write(separator.toString());
+            writer.newLine();
+            writer.write("总计标签数: " + spans.size());
+            writer.newLine();
+
+            // 统计段落数和表格数
+            Set<Integer> paragraphs = new HashSet<>();
+            Set<String> tables = new HashSet<>();
+            for (Span span : spans) {
+                if (span.paraIndex >= 0) {
+                    paragraphs.add(span.paraIndex);
+                }
+                if (span.id.startsWith("t")) {
+                    String[] parts = span.id.split("-");
+                    if (parts.length > 0) {
+                        tables.add(parts[0]);
+                    }
+                }
+            }
+            writer.write("涉及段落数: " + paragraphs.size());
+            writer.newLine();
+            writer.write("涉及表格数: " + tables.size());
+            writer.newLine();
+            writer.write(" -->");
+            writer.newLine();
+        }
+    }
+
+    /**
+     * 转义HTML特殊字符
+     */
+    private static String escapeHtml(String text) {
+        if (text == null) return "";
+        return text.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace("\"", "&quot;")
+                   .replace("'", "&#39;");
     }
 
     /**
