@@ -137,8 +137,12 @@ public class DocxHtmlIdAligner {
                         currentCell = null;
                     }
 
-                    // 写入段落
-                    writer.write("<p id=\"" + paragraphId + "\">" + paragraphText + "</p>");
+                    // 写入段落（空段落不带ID）
+                    if (paragraphText.length() == 0) {
+                        writer.write("<p></p>");
+                    } else {
+                        writer.write("<p id=\"" + paragraphId + "\">" + paragraphText + "</p>");
+                    }
                     writer.newLine();
 
                 } else if (paragraphId.startsWith("t")) {
@@ -178,8 +182,8 @@ public class DocxHtmlIdAligner {
                             writer.newLine();
                         }
 
-                        // 开始新表格
-                        writer.write("<table>");
+                        // 开始新表格（带ID）
+                        writer.write("<table id=\"" + tableId + "\">");
                         writer.newLine();
                         currentTable = tableId;
                         inTable = true;
@@ -222,8 +226,12 @@ public class DocxHtmlIdAligner {
                         inCell = true;
                     }
 
-                    // 写入段落（表格单元格中的段落）
-                    writer.write("<p id=\"" + paragraphId + "\">" + paragraphText + "</p>");
+                    // 写入段落（表格单元格中的段落，空段落不带ID）
+                    if (paragraphText.length() == 0) {
+                        writer.write("<p></p>");
+                    } else {
+                        writer.write("<p id=\"" + paragraphId + "\">" + paragraphText + "</p>");
+                    }
                     writer.newLine();
                 }
             }
@@ -637,10 +645,10 @@ public class DocxHtmlIdAligner {
                     List<XWPFRun> runs = p.getRuns();
                     if (runs == null || runs.isEmpty()) {
                         String txt = p.getText();
-                        if (txt != null && !txt.trim().isEmpty()) {
-                            String id = String.format("p-%05d-r-%03d", paraIdx+1, 0);
-                            out.add(new Span(id, txt, paraIdx, 0));
-                        }
+                        // 即使是空段落也要添加到spans列表，以保持段落索引的连续性
+                        String id = String.format("p-%05d-r-%03d", paraIdx+1, 0);
+                        if (txt == null) txt = "";
+                        out.add(new Span(id, txt, paraIdx, 0));
                         paraIdx++;
                         continue;
                     }
@@ -663,8 +671,8 @@ public class DocxHtmlIdAligner {
                 }
             }
         }
-        // 过滤空白 norm
-        out.removeIf(s -> s.norm.isEmpty());
+        // 不再过滤空白段落，保留所有段落以维持索引连续性
+        // out.removeIf(s -> s.norm.isEmpty());
         return out;
     }
 
@@ -680,11 +688,11 @@ public class DocxHtmlIdAligner {
                         List<XWPFRun> runs = p.getRuns();
                         if (runs == null || runs.isEmpty()) {
                             String txt = p.getText();
-                            if (txt != null && !txt.trim().isEmpty()) {
-                                String id = String.format("t%03d-r%03d-c%03d-p%03d-r%03d",
-                                    tableIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, 0);
-                                out.add(new Span(id, txt, -1, 0));
-                            }
+                            // 即使是空段落也要添加到spans列表，以保持段落索引的连续性
+                            String id = String.format("t%03d-r%03d-c%03d-p%03d-r%03d",
+                                tableIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, 0);
+                            if (txt == null) txt = "";
+                            out.add(new Span(id, txt, -1, 0));
                             cellParaIdx++;
                             continue;
                         }
@@ -722,11 +730,11 @@ public class DocxHtmlIdAligner {
                         List<XWPFRun> runs = p.getRuns();
                         if (runs == null || runs.isEmpty()) {
                             String txt = p.getText();
-                            if (txt != null && !txt.trim().isEmpty()) {
-                                String id = String.format("t%03d-r%03d-c%03d-nested-r%03d-c%03d-p%03d-r%03d",
-                                    parentTableIdx+1, parentRowIdx+1, parentCellIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, 0);
-                                out.add(new Span(id, txt, -1, 0));
-                            }
+                            // 即使是空段落也要添加到spans列表，以保持段落索引的连续性
+                            String id = String.format("t%03d-r%03d-c%03d-nested-r%03d-c%03d-p%03d-r%03d",
+                                parentTableIdx+1, parentRowIdx+1, parentCellIdx+1, rowIdx+1, cellIdx+1, cellParaIdx+1, 0);
+                            if (txt == null) txt = "";
+                            out.add(new Span(id, txt, -1, 0));
                             cellParaIdx++;
                             continue;
                         }
@@ -795,9 +803,14 @@ public class DocxHtmlIdAligner {
         Elements blocks = doc.select("p, td, th, li, div, span, font, pre, blockquote");
         int htmlBlockIndex = 0; // 指针：内循环从此处开始扫描
         int matchedCount = 0;
+        int skippedEmptyCount = 0;
 
         for (Span span : spans) {
-            if (span.norm.isEmpty()) continue;
+            // 跳过空段落，不注入ID到HTML
+            if (span.norm.isEmpty()) {
+                skippedEmptyCount++;
+                continue;
+            }
             boolean matched = false;
 
             // -------- 第一轮：从 htmlBlockIndex 向后扫描 --------
@@ -873,7 +886,10 @@ public class DocxHtmlIdAligner {
             }
         }
 
-        System.out.println(String.format("Matched spans: %d / %d", matchedCount, spans.size()));
+        int nonEmptySpans = spans.size() - skippedEmptyCount;
+        System.out.println(String.format("Total spans: %d (Non-empty: %d, Empty: %d)", spans.size(), nonEmptySpans, skippedEmptyCount));
+        System.out.println(String.format("Matched spans: %d / %d (%.2f%%)", matchedCount, nonEmptySpans,
+            nonEmptySpans > 0 ? (matchedCount * 100.0 / nonEmptySpans) : 0));
         return doc.outerHtml();
     }
 
