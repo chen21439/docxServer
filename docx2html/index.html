@@ -1,0 +1,368 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document.xml 父级元素提取工具</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            border-bottom: 3px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+
+        .control-panel {
+            background: #f9f9f9;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+
+        input[type="text"], input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        input[type="number"] {
+            width: 150px;
+        }
+
+        .extract-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        .extract-option:first-of-type {
+            margin-top: 0;
+        }
+
+        .extract-option .option-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 140px;
+            color: #555;
+        }
+
+        .extract-option .hint {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .extract-option input[type="number"] {
+            width: 100px;
+        }
+
+        .extract-option input[type="text"] {
+            flex: 1;
+            max-width: 220px;
+        }
+
+        .extract-hint {
+            font-size: 12px;
+            color: #666;
+            margin-top: 8px;
+            line-height: 1.6;
+        }
+
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+
+        button:hover {
+            background: #45a049;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .result-container {
+            margin-top: 30px;
+        }
+
+        .result-header {
+            background: #2196F3;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 4px 4px 0 0;
+            font-weight: 500;
+        }
+
+        .result-content {
+            background: #f5f5f5;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-top: none;
+            border-radius: 0 0 4px 4px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .xml-tree {
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .element {
+            margin-left: 20px;
+        }
+
+        .tag-name {
+            color: #e91e63;
+            font-weight: bold;
+        }
+
+        .attr-name {
+            color: #2196F3;
+        }
+
+        .attr-value {
+            color: #4CAF50;
+        }
+
+        .text-content {
+            color: #333;
+            background: #fff3cd;
+            padding: 2px 5px;
+            border-radius: 3px;
+            display: inline-block;
+            margin: 2px 0;
+        }
+
+        .highlight {
+            background: #ffeb3b;
+            font-weight: bold;
+        }
+
+        .info {
+            background: #e3f2fd;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            color: #1976d2;
+        }
+
+        .error {
+            background: #ffebee;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            color: #c62828;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+
+        /* 标签页样式 */
+        .tab-btn {
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .tab-btn:hover {
+            background: #f5f5f5 !important;
+        }
+
+        .tab-btn.active {
+            color: #4CAF50 !important;
+            border-bottom-color: #4CAF50 !important;
+        }
+
+        .tab-content {
+            animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* XML树视图样式 */
+        .xml-node {
+            margin-left: 20px;
+            position: relative;
+        }
+
+        .xml-node.root {
+            margin-left: 0;
+        }
+
+        .node-line {
+            margin: 2px 0;
+            line-height: 1.6;
+        }
+
+        .node-header {
+            cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 3px;
+            transition: background 0.2s;
+            display: inline-block;
+        }
+
+        .node-header:hover {
+            background: #e0e0e0;
+        }
+
+        .toggle-icon {
+            display: inline-block;
+            width: 14px;
+            color: #666;
+            user-select: none;
+        }
+
+        .level-badge {
+            display: inline-block;
+            background: #2196F3;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            margin-left: 8px;
+            font-weight: normal;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .filter-highlight {
+            background: #ffeb3b !important;
+            border-left: 3px solid #4CAF50;
+            padding-left: 8px !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📄 Document.xml 可视化工具</h1>
+
+        <!-- 功能选择标签 -->
+        <div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #ddd;">
+            <button class="tab-btn active" data-tab="filter" style="flex: 1; background: transparent; color: #4CAF50; border: none; border-bottom: 3px solid #4CAF50; padding: 15px;">
+                🔎 层级/标签过滤
+            </button>
+            <button class="tab-btn" data-tab="search" style="flex: 1; background: transparent; color: #666; border: none; border-bottom: 3px solid transparent; padding: 15px;">
+                🔍 文本搜索
+            </button>
+        </div>
+
+        <!-- 层级/标签过滤面板 -->
+        <div class="control-panel tab-content" id="filter-panel">
+            <div class="input-group">
+                <label for="filterInput">过滤器：</label>
+                <input type="text" id="filterInput" placeholder="输入层级数字(如:5)或标签名(如:tr)" />
+                <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                    • 输入数字：显示指定层级的完整元素（如输入 5 只显示第5层）<br>
+                    • 输入标签名：显示所有该标签的元素（如输入 tr 显示所有 w:tr 标签）
+                </div>
+            </div>
+
+            <div style="margin-top: 15px;">
+                <button id="applyFilterBtn">应用过滤</button>
+                <button id="clearFilterBtn" style="background: #666;">清除过滤</button>
+                <button id="expandAllBtn" style="background: #2196F3;">展开全部</button>
+                <button id="collapseAllBtn" style="background: #FF9800;">折叠全部</button>
+            </div>
+        </div>
+
+        <!-- 文本搜索面板 -->
+        <div class="control-panel tab-content" id="search-panel" style="display: none;">
+                        <div class="input-group">
+                <label for="searchText">搜索文本内容：</label>
+                <input type="text" id="searchText" placeholder="例如：2月的财务报表..." />
+            </div>
+
+            <div class="input-group">
+                <label>提取方式：</label>
+                <div class="extract-option">
+                    <label class="option-label">
+                        <input type="radio" name="extractMode" value="level" checked />
+                        父级层数
+                    </label>
+                    <input type="number" id="parentLevel" min="1" value="3" />
+                    <span class="hint">向上提取 N 级父元素</span>
+                </div>
+                <div class="extract-option">
+                    <label class="option-label">
+                        <input type="radio" name="extractMode" value="tag" />
+                        指定标签
+                    </label>
+                    <input type="text" id="parentTag" placeholder="例如：tbl" disabled />
+                    <span class="hint">向上查找直到遇到该标签</span>
+                </div>
+                <div class="extract-hint">
+                    - 选择“父级层数”时请输入正整数，例如 3<br>
+                    - 选择“指定标签”时请输入标签，例如 tbl 可匹配 w:tbl
+                </div>
+            </div>
+
+
+            <button id="searchBtn">🔍 搜索并提取</button>
+        </div>
+
+        <div id="resultContainer" class="result-container" style="display: none;">
+            <div class="result-header">提取结果</div>
+            <div class="result-content">
+                <div id="resultContent"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="index.js"></script>
+</body>
+</html>
+
+
