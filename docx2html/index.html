@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+﻿﻿﻿﻿﻿﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -289,40 +289,19 @@
     <div class="container">
         <h1>📄 Document.xml 可视化工具</h1>
 
-        <!-- 功能选择标签 -->
-        <div style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #ddd;">
-            <button class="tab-btn active" data-tab="filter" style="flex: 1; background: transparent; color: #4CAF50; border: none; border-bottom: 3px solid #4CAF50; padding: 15px;">
-                🔎 层级/标签过滤
-            </button>
-            <button class="tab-btn" data-tab="search" style="flex: 1; background: transparent; color: #666; border: none; border-bottom: 3px solid transparent; padding: 15px;">
-                🔍 文本搜索
-            </button>
-        </div>
-
-        <!-- 层级/标签过滤面板 -->
-        <div class="control-panel tab-content" id="filter-panel">
+        <!-- 文本搜索面板 -->
+        <div class="control-panel">
             <div class="input-group">
-                <label for="filterInput">过滤器：</label>
-                <input type="text" id="filterInput" placeholder="输入层级数字(如:5)或标签名(如:tr)" />
+                <label for="projectFolder">目录名称：</label>
+                <input type="text" id="projectFolder" placeholder="例如：少年宫" value="家具" />
                 <div style="font-size: 12px; color: #666; margin-top: 5px;">
-                    • 输入数字：显示指定层级的完整元素（如输入 5 只显示第5层）<br>
-                    • 输入标签名：显示所有该标签的元素（如输入 tr 显示所有 w:tr 标签）
+                    指定服务器上的目录名称，例如"少年宫"，系统会读取其中的 XML。
                 </div>
             </div>
-
-            <div style="margin-top: 15px;">
-                <button id="applyFilterBtn">应用过滤</button>
-                <button id="clearFilterBtn" style="background: #666;">清除过滤</button>
-                <button id="expandAllBtn" style="background: #2196F3;">展开全部</button>
-                <button id="collapseAllBtn" style="background: #FF9800;">折叠全部</button>
-            </div>
-        </div>
-
-        <!-- 文本搜索面板 -->
-        <div class="control-panel tab-content" id="search-panel" style="display: none;">
-                        <div class="input-group">
+            
+            <div class="input-group">
                 <label for="searchText">搜索文本内容：</label>
-                <input type="text" id="searchText" placeholder="例如：2月的财务报表..." />
+                <input type="text" id="searchText" value="T3827-1999 《轻工产品金属镀层和化学处" placeholder="例如：2月的财务报表..." />
             </div>
 
             <div class="input-group">
@@ -360,6 +339,10 @@
             </div>
         </div>
     </div>
+
+
+
+
 
     <script src="index.js"></script>
 </body>

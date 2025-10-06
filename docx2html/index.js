@@ -4,30 +4,15 @@
 const XML_FILE_PATH = '/api/document.xml';
 
 let xmlDoc = null;
-let allNodes = [];
-let currentFilter = null;
-let currentMode = 'filter'; // 'filter' 或 'search'
+let projectCache = new Map(); // 项目缓存
+let currentProject = null;
 
 // 页面加载时初始化
 document.addEventListener('DOMContentLoaded', () => {
-    loadXMLFile();
-
-    // 绑定标签切换
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const tab = e.target.dataset.tab;
-            switchTab(tab);
-        });
-    });
-
-    // 绑定过滤功能
-    document.getElementById('applyFilterBtn').addEventListener('click', applyFilter);
-    document.getElementById('clearFilterBtn').addEventListener('click', clearFilter);
-    document.getElementById('expandAllBtn').addEventListener('click', () => toggleAllNodes(true));
-    document.getElementById('collapseAllBtn').addEventListener('click', () => toggleAllNodes(false));
-    document.getElementById('filterInput').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') applyFilter();
-    });
+    loadAvailableProjects();
+    
+    // 绑定项目文件夹切换
+    document.getElementById('projectFolder').addEventListener('change', handleProjectChange);
 
     // 绑定搜索按钮事件
     document.getElementById('searchBtn').addEventListener('click', handleSearch);
@@ -40,6 +25,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     initExtractionModeControls();
+
+    // 安装结果区增强
+    setupResultEnhancer();
+    
+    // 页面加载时自动加载默认项目
+    const defaultProject = document.getElementById('projectFolder').value.trim();
+    if (defaultProject) {
+        loadProjectData(defaultProject);
+    }
 });
 
 // 切换标签
@@ -69,39 +63,134 @@ function switchTab(tab) {
     }
 }
 
-// 加载XML文件
-async function loadXMLFile() {
+// 加载可用的项目列表
+async function loadAvailableProjects() {
     try {
-        const response = await fetch(XML_FILE_PATH);
-        if (!response.ok) {
-            throw new Error(`无法加载文件: ${response.statusText}`);
+        const response = await fetch('/api/projects');
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.projects) {
+                updateProjectSelector(data.projects);
+            }
+        }
+    } catch (error) {
+        console.warn('获取项目列表失败:', error);
+    }
+}
+
+// 更新项目选择器
+function updateProjectSelector(projects) {
+    const projectInput = document.getElementById('projectFolder');
+    if (!projectInput) return;
+
+    // 如果有多个项目，可以考虑改为下拉选择
+    if (projects.length > 0) {
+        const currentProject = projects.find(p => p.isCurrent);
+        if (currentProject) {
+            projectInput.value = currentProject.name;
+        } else {
+            projectInput.value = projects[0].name;
+        }
+    }
+}
+
+// 加载项目数据（带缓存）
+async function loadProjectData(projectFolder) {
+    if (!projectFolder) return;
+
+    // 检查缓存
+    if (projectCache.has(projectFolder)) {
+        console.log(`✅ 从缓存加载项目: ${projectFolder}`);
+        xmlDoc = projectCache.get(projectFolder);
+        currentProject = projectFolder;
+        document.getElementById('searchBtn').disabled = false;
+        return;
+    }
+
+    try {
+        showLoading();
+        
+        // 设置项目文件夹
+        const response = await fetch('/api/set-project', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ projectFolder })
+        });
+
+        const data = await response.json();
+        if (!data.success) {
+            throw new Error(data.message);
         }
 
-        const xmlText = await response.text();
+        // 加载XML文件
+        const xmlResponse = await fetch(XML_FILE_PATH);
+        if (!xmlResponse.ok) {
+            throw new Error(`无法加载文件: ${xmlResponse.statusText}`);
+        }
+
+        const xmlText = await xmlResponse.text();
         const parser = new DOMParser();
         xmlDoc = parser.parseFromString(xmlText, 'text/xml');
 
-        console.log('✅ XML文件加载成功');
-        document.getElementById('searchBtn').disabled = false;
+        // 缓存项目数据
+        projectCache.set(projectFolder, xmlDoc);
+        currentProject = projectFolder;
 
-        // 自动显示XML树（默认显示过滤模式）
-        if (currentMode === 'filter') {
-            displayXMLTree();
+        console.log(`✅ 项目加载成功: ${projectFolder}`);
+        document.getElementById('searchBtn').disabled = false;
+        
+        // 清除结果显示
+        const resultContainer = document.getElementById('resultContainer');
+        resultContainer.style.display = 'none';
+
+        // 提供全局获取函数，供增强模块使用
+        window.AppState = {
+            getXmlDoc: () => xmlDoc,
+            getProject: () => currentProject
+        };
+
+        // 初始化并加载 iframe 中的 docx.html（如果增强模块已引入）
+        if (window.DocxEnhancer) {
+            window.DocxEnhancer.init({
+                iframeId: 'docFrame',
+                getXmlDoc: window.AppState.getXmlDoc,
+                getProjectName: window.AppState.getProject
+            });
+            window.DocxEnhancer.load(currentProject);
         }
+
     } catch (error) {
-        console.error('❌ 加载XML文件失败:', error);
-        showError(`加载XML文件失败: ${error.message}<br>请确保文件路径正确并启动了本地服务器`);
+        console.error('❌ 加载项目失败:', error);
+        showError(`加载项目失败: ${error.message}`);
         document.getElementById('searchBtn').disabled = true;
+    }
+}
+
+// 处理项目文件夹切换
+async function handleProjectChange() {
+    const projectFolder = document.getElementById('projectFolder').value.trim();
+    if (!projectFolder || projectFolder === currentProject) return;
+    
+    await loadProjectData(projectFolder);
+
+    // 同步更新 iframe 的 docx.html
+    if (window.DocxEnhancer) {
+        window.DocxEnhancer.load(projectFolder);
     }
 }
 
 // 处理搜索
 function handleSearch() {
-    const searchText = document.getElementById('searchText').value.trim();
+    let searchText = document.getElementById('searchText').value.trim();
+    const projectFolder = document.getElementById('projectFolder').value.trim();
 
     if (!searchText) {
-        showError('请输入要搜索的文本内容');
-        return;
+        // 默认搜索文本兜底
+        searchText = 'T3827-1999 《轻工产品金属镀层和化学处';
+        const input = document.getElementById('searchText');
+        if (input) input.value = searchText;
     }
 
     const selector = getExtractionSelector();
@@ -119,7 +208,8 @@ function handleSearch() {
         body: JSON.stringify({
             text: searchText,
             mode: selector.type,
-            value: selector.value
+            value: selector.value,
+            projectFolder: projectFolder
         })
     })
         .then(async (response) => {
@@ -156,6 +246,413 @@ function renderSearchHtml(html) {
     resultContent.innerHTML = html;
     resultContainer.style.display = 'block';
     resultContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    // 在“查看对应HTML”按钮旁插入操作按钮（查看/复制/扩大）
+    const viewBtns = resultContent.querySelectorAll('.btn-view-html');
+    viewBtns.forEach((btn) => {
+        if (btn.dataset.enhanced) return;
+        const idx = btn.getAttribute('data-index') || '';
+
+        const btnExpand = document.createElement('button');
+        btnExpand.className = 'me-mini-btn btn-expand-html';
+        btnExpand.textContent = '扩大HTML范围';
+        btnExpand.setAttribute('data-index', idx);
+
+        const btnShrink = document.createElement('button');
+        btnShrink.className = 'me-mini-btn btn-shrink-html';
+        btnShrink.textContent = '缩小HTML范围';
+        btnShrink.setAttribute('data-index', idx);
+
+        const btnCopyHtml = document.createElement('button');
+        btnCopyHtml.className = 'me-mini-btn btn-copy-html';
+        btnCopyHtml.textContent = '复制目标HTML';
+        btnCopyHtml.setAttribute('data-index', idx);
+
+        const btnCopyXml = document.createElement('button');
+        btnCopyXml.className = 'me-mini-btn btn-copy-xml';
+        btnCopyXml.textContent = '复制目标XML';
+        btnCopyXml.setAttribute('data-index', idx);
+
+        btn.insertAdjacentElement('afterend', btnCopyXml);
+        btn.insertAdjacentElement('afterend', btnCopyHtml);
+        btn.insertAdjacentElement('afterend', btnShrink);
+        btn.insertAdjacentElement('afterend', btnExpand);
+        btn.dataset.enhanced = '1';
+    });
+
+    // 事件委托：查看/复制
+    resultContent.removeEventListener('click', onResultContentClick);
+    resultContent.addEventListener('click', onResultContentClick);
+}
+
+async function onResultContentClick(e) {
+    // 扩大HTML范围
+    const expandBtn = e.target.closest('.btn-expand-html');
+    if (expandBtn) {
+        const idx = expandBtn.getAttribute('data-index') || '';
+        const previewBox = document.getElementById('html-preview-' + idx);
+        const viewBtn = document.querySelector('.btn-view-html[data-index="' + idx + '"]');
+        if (!previewBox || !viewBtn) return;
+
+        // 需要重新从源文档按更大的范围渲染
+        const pos = viewBtn.getAttribute('data-pos') || '';
+        const selType = (viewBtn.getAttribute('data-sel-type') || '').toLowerCase();
+        const selVal = (viewBtn.getAttribute('data-sel-val') || '').toLowerCase();
+
+        try {
+            const project = (window.AppState && window.AppState.getProject) ? window.AppState.getProject() : document.getElementById('projectFolder').value.trim();
+            const doc = await getProjectDocxDom(project);
+            let target = pos ? doc.getElementById(pos) : null;
+            if (!target) return;
+
+            // 当前范围记录在预览框 data-scope，逐级扩大
+            const curScope = (previewBox.getAttribute('data-scope') || '').toLowerCase();
+            const broader = pickBroaderNode(target, curScope, selType, selVal);
+            const escaped = broader.outerHTML.replace(/</g, '<').replace(/>/g, '>');
+            previewBox.innerHTML = '<div style="font-family:monospace;white-space:pre-wrap;">' + escaped + '</div>';
+            previewBox.setAttribute('data-scope', getNodeScopeName(broader));
+            previewBox.setAttribute('data-html', broader.outerHTML);
+        } catch (err) {
+            showError('扩大范围失败：' + (err && err.message ? err.message : String(err)));
+        }
+        return;
+    }
+
+    // 缩小HTML范围
+    const shrinkBtn = e.target.closest('.btn-shrink-html');
+    if (shrinkBtn) {
+        const idx = shrinkBtn.getAttribute('data-index') || '';
+        const previewBox = document.getElementById('html-preview-' + idx);
+        const viewBtn = document.querySelector('.btn-view-html[data-index="' + idx + '"]');
+        if (!previewBox || !viewBtn) {
+            showError('请先点击“查看对应HTML”加载片段');
+            return;
+        }
+        const pos = (previewBox.getAttribute('data-pos') || viewBtn.getAttribute('data-pos') || '');
+        const selType = (previewBox.getAttribute('data-sel-type') || viewBtn.getAttribute('data-sel-type') || '').toLowerCase();
+        const selVal = (previewBox.getAttribute('data-sel-val') || viewBtn.getAttribute('data-sel-val') || '').toLowerCase();
+        if (!pos) {
+            showError('请先点击“查看对应HTML”再缩小范围');
+            return;
+        }
+        try {
+            const project = (window.AppState && window.AppState.getProject) ? window.AppState.getProject() : document.getElementById('projectFolder').value.trim();
+            const doc = await getProjectDocxDom(project);
+            const target = doc.getElementById(pos);
+            if (!target) {
+                showError('未在 docx.html 中找到初始元素');
+                return;
+            }
+            const curScope = (previewBox.getAttribute('data-scope') || '').toLowerCase();
+            const narrower = pickNarrowerNode(target, curScope, selType, selVal);
+            const escaped = narrower.outerHTML.replace(/</g, '<').replace(/>/g, '>');
+            previewBox.innerHTML = '<div style="font-family:monospace;white-space:pre-wrap;">' + escaped + '</div>';
+            previewBox.setAttribute('data-scope', getNodeScopeName(narrower));
+            previewBox.setAttribute('data-html', narrower.outerHTML);
+            previewBox.setAttribute('data-pos', pos);
+            previewBox.setAttribute('data-sel-type', selType);
+            previewBox.setAttribute('data-sel-val', selVal);
+        } catch (err) {
+            showError('缩小范围失败：' + (err && err.message ? err.message : String(err)));
+        }
+        return;
+    }
+
+    // 复制目标HTML
+    const copyHtmlBtn = e.target.closest('.btn-copy-html');
+    if (copyHtmlBtn) {
+        const idx = copyHtmlBtn.getAttribute('data-index') || '';
+        const previewBox = document.getElementById('html-preview-' + idx);
+        if (!previewBox || !previewBox.textContent.trim()) {
+            showError('请先点击“查看对应HTML”加载片段');
+            return;
+        }
+        const htmlRaw = previewBox.getAttribute('data-html') || unescapeHtml(previewBox.textContent || '');
+        await copyHtml(htmlRaw);
+        return;
+    }
+
+    // 复制目标XML
+    const copyXmlBtn = e.target.closest('.btn-copy-xml');
+    if (copyXmlBtn) {
+        // 找到同一卡片内的 xml-tree
+        let card = copyXmlBtn.parentElement;
+        while (card && !card.querySelector('.xml-tree')) {
+            card = card.parentElement;
+        }
+        const xmlTree = card ? card.querySelector('.xml-tree') : null;
+        if (!xmlTree) {
+            showError('未找到目标父级的 XML 区域');
+            return;
+        }
+        const xmlText = (xmlTree.innerText || '').trim();
+        if (!xmlText) {
+            showError('目标父级 XML 内容为空');
+            return;
+        }
+        await copyText(xmlText);
+        return;
+    }
+
+    // 查看对应HTML
+    const btn = e.target.closest('.btn-view-html');
+    if (!btn) return;
+
+    const pos = btn.getAttribute('data-pos') || '';
+    const idx = btn.getAttribute('data-index') || '';
+    const selType = (btn.getAttribute('data-sel-type') || '').toLowerCase();
+    const selVal = (btn.getAttribute('data-sel-val') || '').toLowerCase();
+    const previewBox = document.getElementById('html-preview-' + idx);
+    if (!previewBox) return;
+
+    // 找到该卡片内的“匹配文本”
+    let card = btn.parentElement;
+    while (card && !card.querySelector('.text-content')) {
+        card = card.parentElement;
+    }
+    const matchedText = (card && card.querySelector('.text-content')) ? normText(card.querySelector('.text-content').textContent || '') : '';
+
+    try {
+        const project = (window.AppState && window.AppState.getProject) ? window.AppState.getProject() : document.getElementById('projectFolder').value.trim();
+        if (!project) {
+            previewBox.innerHTML = '<div class="error">未确定项目目录，无法加载 docx.html</div>';
+            return;
+        }
+        const doc = await getProjectDocxDom(project);
+        let target = pos ? doc.getElementById(pos) : null;
+
+        // 若按ID未找到，使用文本包含回退定位
+        if (!target && matchedText) {
+            const candidates = doc.querySelectorAll('*[id]');
+            for (const el of candidates) {
+                if (normText(el.textContent || '').includes(matchedText)) {
+                    target = el;
+                    break;
+                }
+            }
+        }
+
+        if (!target) {
+            previewBox.innerHTML = '<div class="error">未能在 docx.html 中定位到匹配元素</div>';
+            return;
+        }
+
+        // 基于“XML 目标父级文本”的覆盖规则，逐层上卷选取最佳父级
+        const xmlSectionText = getXmlSectionTextFromCard(card);
+        let displayNode = xmlSectionText ? pickNodeByXmlCoverage(target, xmlSectionText) : pickHtmlTargetNode(target, selType, selVal);
+
+        // 若片段过小，自动扩大一次
+        let escaped = displayNode.outerHTML.replace(/</g, '<').replace(/>/g, '>');
+        if (escaped.length < 200) {
+            const broader = pickBroaderNode(target, getNodeScopeName(displayNode), selType, selVal);
+            if (broader !== displayNode) {
+                displayNode = broader;
+                escaped = displayNode.outerHTML.replace(/</g, '<').replace(/>/g, '>');
+            }
+        }
+
+        previewBox.innerHTML = '<div style="font-family:monospace;white-space:pre-wrap;">' + escaped + '</div>';
+        // 记录范围与定位信息，供“扩大/缩小/复制HTML”使用
+        previewBox.setAttribute('data-scope', getNodeScopeName(displayNode));
+        previewBox.setAttribute('data-html', displayNode.outerHTML);
+        previewBox.setAttribute('data-pos', pos || '');
+        previewBox.setAttribute('data-sel-type', selType || '');
+        previewBox.setAttribute('data-sel-val', selVal || '');
+    } catch (err) {
+        previewBox.innerHTML = '<div class="error">加载/解析 docx.html 失败：' + (err && err.message ? err.message : String(err)) + '</div>';
+    }
+}
+
+// 依据 selector 选择更合适的 HTML 父级容器
+function pickHtmlTargetNode(node, selType, selVal) {
+    if (!node || !node.closest) return node;
+
+    // tag 模式：直接映射到表格语义
+    if (selType === 'tag') {
+        if (selVal === 'tbl') return node.closest('table') || node;
+        if (selVal === 'tr') return node.closest('tr') || node;
+        if (selVal === 'tc' || selVal === 'td') return node.closest('td') || node;
+        if (selVal === 'p') return node.closest('p') || node;
+        // 默认回退：块级
+        return node.closest('td, tr, table, p') || node;
+    }
+
+    // level 模式：启发式上卷到更有意义的容器（优先单元格/段落）
+    // 这样更贴合“目标父级”的可视语义
+    const preferred = node.closest('td, p, tr, table');
+    return preferred || node;
+}
+
+/**
+ * 从结果卡片内的 XML 展示区域抽取纯文本，剔除“已截断”等提示
+ */
+function getXmlSectionTextFromCard(card) {
+    if (!card) return '';
+    const xmlTree = card.querySelector('.xml-tree');
+    if (!xmlTree) return '';
+    // 收集展示中的文本片段（渲染时文本节点被包在 .text-content）
+    const parts = Array.from(xmlTree.querySelectorAll('.text-content')).map(el => el.textContent || '');
+    const joined = parts.join(' ');
+    return normText(joined)
+        .replace(/\(\s*内容过大，已截断\s*\)/g, '')
+        .replace(/\(\s*还有\s*\d+\s*个子节点\s*\)/g, '')
+        .trim();
+}
+
+/**
+ * 按“覆盖规则”逐层上卷：
+ * - 从命中的 HTML 节点开始
+ * - 若当前父节点的纯文本是 xmlText 的子集（xmlText.includes(parentText) 且长度不超过 xmlText），则继续上卷
+ * - 一旦不满足（超过或不被包含），停在上一个仍为子集的层级
+ */
+function pickNodeByXmlCoverage(node, xmlText) {
+    if (!node) return node;
+    const xmlN = normText(xmlText || '');
+    if (!xmlN) return node;
+
+    let cur = node;
+    let best = cur;
+    const body = node.ownerDocument && node.ownerDocument.body;
+
+    while (cur && cur !== body && cur.parentElement) {
+        const parent = cur.parentElement;
+        const parentText = normText(parent.textContent || '');
+        if (!parentText) break;
+
+        // 仅当父节点文本是 XML 文本的子集且长度不超过 XML 文本，才上卷
+        if (parentText.length <= xmlN.length && xmlN.includes(parentText)) {
+            best = parent;
+            cur = parent;
+            continue;
+        }
+        break;
+    }
+    return best;
+}
+
+async function copyText(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+    } catch (e) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } finally { document.body.removeChild(ta); }
+    }
+}
+
+async function copyHtml(htmlString) {
+    const plain = htmlString || '';
+    // 优先以 HTML MIME 写入，保留标签
+    if (navigator.clipboard && window.ClipboardItem) {
+        try {
+            const item = new ClipboardItem({
+                'text/html': new Blob([plain], { type: 'text/html' }),
+                'text/plain': new Blob([plain], { type: 'text/plain' })
+            });
+            await navigator.clipboard.write([item]);
+            return;
+        } catch (e) {
+            // 回退到纯文本
+        }
+    }
+    await copyText(plain);
+}
+
+function unescapeHtml(s) {
+    return (s || '')
+        .replace(/</g, '<')
+        .replace(/>/g, '>')
+        .replace(/&/g, '&');
+}
+
+// 计算当前节点范围标签名，用于记录/扩大
+function getNodeScopeName(node) {
+    if (!node) return '';
+    const tag = (node.tagName || '').toLowerCase();
+    if (tag === 'td' || tag === 'th') return 'td';
+    if (tag === 'tr') return 'tr';
+    if (tag === 'table') return 'table';
+    if (tag === 'p') return 'p';
+    if (tag === 'body') return 'body';
+    return tag || '';
+}
+
+/** 逐级扩大：基于当前 scope 向上走一层（更大父容器） */
+function pickBroaderNode(target, currentScope, selType, selVal) {
+    // 基于原始 target 来扩大，避免越扩越偏离
+    const prefer = (t) => t || target;
+
+    const table = target.closest ? target.closest('table') : null;
+    const tr = target.closest ? target.closest('tr') : null;
+    const td = target.closest ? (target.closest('td, th')) : null;
+    const p = target.closest ? target.closest('p') : null;
+
+    const orderFromTd = [td, tr, table, (table && table.parentElement) || table, target.ownerDocument.body].filter(Boolean);
+    const orderFromP = [p, td, tr, table, target.ownerDocument.body].filter(Boolean);
+
+    let order = orderFromTd;
+    if (selType === 'tag' && selVal === 'p') order = orderFromP;
+    else if (selType === 'tag' && (selVal === 'tbl' || selVal === 'tr' || selVal === 'tc' || selVal === 'td')) order = orderFromTd;
+    else order = orderFromP;
+
+    // 找到当前 scope 在序列中的位置，向后取下一层
+    const curIdx = order.findIndex(n => getNodeScopeName(n) === currentScope);
+    if (curIdx >= 0 && curIdx + 1 < order.length) return prefer(order[curIdx + 1]);
+
+    // 未记录时，从首层（更语义化）开始
+    return prefer(order[0]);
+}
+
+/** 逐级缩小：基于当前 scope 向下靠近目标一层 */
+function pickNarrowerNode(target, currentScope, selType, selVal) {
+    if (!target || !target.closest) return target;
+    // 当前 scope 未记录时，先按默认初始范围
+    if (!currentScope) {
+        const init = pickHtmlTargetNode(target, selType, selVal);
+        return init;
+    }
+    const body = target.ownerDocument.body;
+    switch (currentScope) {
+        case 'body': {
+            const tbl = target.closest('table'); if (tbl) return tbl;
+            const tr = target.closest('tr'); if (tr) return tr;
+            const td = target.closest('td, th'); if (td) return td;
+            const p = target.closest('p'); if (p) return p;
+            return target;
+        }
+        case 'table': {
+            const tr = target.closest('tr'); if (tr) return tr;
+            const td = target.closest('td, th'); if (td) return td;
+            const p = target.closest('p'); if (p) return p;
+            return target;
+        }
+        case 'tr': {
+            const td = target.closest('td, th'); if (td) return td;
+            const p = target.closest('p'); if (p) return p;
+            return target;
+        }
+        case 'td': {
+            const p = target.closest('p'); if (p) return p;
+            return target;
+        }
+        case 'p':
+        default:
+            return target;
+    }
+}
+
+
+
+// 文本规范化
+function normText(s) {
+    if (!s) return '';
+    return s.replace(/&nbsp;/g, ' ')
+            .replace(/\u00A0/g, ' ')
+            .replace(/[\u200B-\u200D\uFEFF]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
 }
 
 function getExtractionSelector() {
@@ -255,296 +752,417 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// ================== 新增：XML树视图和过滤功能 ==================
-
-// 显示XML树结构
-function displayXMLTree() {
-    if (!xmlDoc) return;
-
-    const resultContainer = document.getElementById('resultContainer');
+/* 结果区增强：自动补齐操作按钮 + 委托事件 + 自动预载 + 回退定位 + 复制HTML为带标签 */
+function setupResultEnhancer() {
     const resultContent = document.getElementById('resultContent');
+    if (!resultContent) return;
 
-    resultContainer.style.display = 'block';
-    resultContent.innerHTML = '<div class="loading">🔄 正在构建XML树...</div>';
+    // 委托事件
+    resultContent.removeEventListener('click', onResultContentClickEnhanced);
+    resultContent.addEventListener('click', onResultContentClickEnhanced);
 
-    setTimeout(() => {
-        allNodes = [];
-        const rootElement = xmlDoc.documentElement;
-        const treeHtml = createNodeElement(rootElement, 1, null);
+    // 按钮补齐（当服务端只给了“查看对应HTML”时，在其旁边插入扩展按钮）
+    const enhanceButtons = () => {
+        const viewBtns = resultContent.querySelectorAll('.btn-view-html');
+        viewBtns.forEach((btn) => {
+            if (btn.dataset.enhanced) return;
+            const idx = btn.getAttribute('data-index') || '';
 
-        resultContent.innerHTML = `
-            <div class="info">
-                总节点数: <strong>${allNodes.length}</strong> |
-                最大层级: <strong>${Math.max(...allNodes.map(n => n.level))}</strong>
-            </div>
-            <div class="xml-tree">
-                ${treeHtml}
-            </div>
-        `;
-    }, 100);
-}
+            const mk = (cls, text) => {
+                const b = document.createElement('button');
+                b.className = 'me-mini-btn ' + cls;
+                b.textContent = text;
+                b.setAttribute('data-index', idx);
+                return b;
+            };
 
-// 创建节点元素HTML
-function createNodeElement(node, level, parentPath) {
-    const path = parentPath ? `${parentPath}/${node.nodeName}` : node.nodeName;
-    const nodeId = `node-${allNodes.length}`;
+            const btnExpand = mk('btn-expand-html', '扩大HTML范围');
+            const btnShrink = mk('btn-shrink-html', '缩小HTML范围');
+            const btnCopyHtml = mk('btn-copy-html', '复制目标HTML');
+            const btnCopyXml = mk('btn-copy-xml', '复制目标XML');
 
-    // 存储节点信息
-    const nodeInfo = {
-        id: nodeId,
-        level: level,
-        tagName: node.nodeName,
-        path: path,
-        hasChildren: node.children.length > 0
+            btn.insertAdjacentElement('afterend', btnCopyXml);
+            btn.insertAdjacentElement('afterend', btnCopyHtml);
+            btn.insertAdjacentElement('afterend', btnShrink);
+            btn.insertAdjacentElement('afterend', btnExpand);
+            btn.dataset.enhanced = '1';
+        });
     };
-    allNodes.push(nodeInfo);
 
-    let html = `<div class="xml-node ${level === 1 ? 'root' : ''}" id="${nodeId}">`;
+    // 首次尝试
+    enhanceButtons();
 
-    // 节点头部
-    html += `<div class="node-line">`;
-    html += `<span class="node-header">`;
-
-    // 折叠图标
-    const hasContent = node.children.length > 0 || (node.textContent && node.textContent.trim());
-    html += `<span class="toggle-icon">${node.children.length > 0 ? '▼' : '  '}</span>`;
-
-    // 标签名
-    html += `<span class="tag-name">&lt;${node.nodeName}</span>`;
-
-    // 层级标记
-    html += `<span class="level-badge">L${level}</span>`;
-
-    // 属性
-    if (node.attributes && node.attributes.length > 0) {
-        for (let i = 0; i < node.attributes.length; i++) {
-            const attr = node.attributes[i];
-            html += ` <span class="attr-name">${attr.name}</span>=`;
-            html += `<span class="attr-value">"${escapeHtml(attr.value)}"</span>`;
-        }
-    }
-
-    html += `<span class="tag-name">&gt;</span>`;
-    html += `</span>`; // node-header
-    html += `</div>`; // node-line
-
-    // 子节点容器
-    html += `<div class="children-container">`;
-
-    // 文本内容
-    let hasTextContent = false;
-    for (let child of node.childNodes) {
-        if (child.nodeType === 3) { // TEXT_NODE
-            const text = child.textContent.trim();
-            if (text) {
-                html += `<div class="text-content">${escapeHtml(text.substring(0, 100))}${text.length > 100 ? '...' : ''}</div>`;
-                hasTextContent = true;
-            }
-        }
-    }
-
-    // 子元素
-    if (node.children.length > 0) {
-        for (let child of node.children) {
-            html += createNodeElement(child, level + 1, path);
-        }
-    }
-
-    html += `</div>`; // children-container
-    html += `<span class="tag-name">&lt;/${node.nodeName}&gt;</span>`;
-    html += `</div>`; // xml-node
-
-    return html;
+    // 结果区变化时再次增强
+    const mo = new MutationObserver(() => enhanceButtons());
+    mo.observe(resultContent, { childList: true, subtree: true });
 }
 
-// 应用过滤器
-function applyFilter() {
-    const filterInput = document.getElementById('filterInput').value.trim();
+async function onResultContentClickEnhanced(e) {
+    // 扩大HTML范围
+    const expandBtn = e.target.closest('.btn-expand-html');
+    if (expandBtn) {
+        const idx = expandBtn.getAttribute('data-index') || '';
+        const previewBox = document.getElementById('html-preview-' + idx);
+        const viewBtn = document.querySelector('.btn-view-html[data-index="' + idx + '"]');
+        if (!previewBox || !viewBtn) return;
 
-    if (!filterInput) {
-        showError('请输入过滤条件（层级数字或标签名）');
+        // 自动预载
+        if (!previewBox.textContent.trim() || !previewBox.getAttribute('data-pos')) {
+            await autoLoadPreview(idx);
+        }
+
+        const pos = viewBtn.getAttribute('data-pos') || '';
+        const selType = (viewBtn.getAttribute('data-sel-type') || '').toLowerCase();
+        const selVal = (viewBtn.getAttribute('data-sel-val') || '').toLowerCase();
+
+        try {
+            const project = document.getElementById('projectFolder').value.trim();
+            const doc = await getProjectDocxDom(project);
+
+            // 从同一卡片取匹配文本用于回退定位
+            let c = viewBtn.parentElement;
+            while (c && !c.querySelector('.text-content')) c = c.parentElement;
+            const matchedText = (c && c.querySelector('.text-content')) ? normText(c.querySelector('.text-content').textContent || '') : '';
+
+            const target = resolveTarget(doc, pos, matchedText);
+            if (!target) { showError('未在 docx.html 中找到初始元素'); return; }
+
+            const curScope = (previewBox.getAttribute('data-scope') || '').toLowerCase();
+            const broader = pickBroaderNode(target, curScope, selType, selVal);
+
+            // 预览显示用转义，复制用 data-html 原始标签
+            const escaped = broader.outerHTML.replace(/</g, '<').replace(/>/g, '>');
+            previewBox.innerHTML = '<div style="font-family:monospace;white-space:pre-wrap;">' + escaped + '</div>';
+            previewBox.setAttribute('data-scope', getNodeScopeName(broader));
+            previewBox.setAttribute('data-pos', pos);
+            previewBox.setAttribute('data-sel-type', selType);
+            previewBox.setAttribute('data-sel-val', selVal);
+            previewBox.setAttribute('data-html', broader.outerHTML);
+        } catch (err) {
+            showError('扩大范围失败：' + (err && err.message ? err.message : String(err)));
+        }
         return;
     }
 
-    if (allNodes.length === 0) {
-        displayXMLTree();
-        setTimeout(() => applyFilter(), 500);
+    // 缩小HTML范围
+    const shrinkBtn = e.target.closest('.btn-shrink-html');
+    if (shrinkBtn) {
+        const idx = shrinkBtn.getAttribute('data-index') || '';
+        const previewBox = document.getElementById('html-preview-' + idx);
+        const viewBtn = document.querySelector('.btn-view-html[data-index="' + idx + '"]');
+        if (!previewBox || !viewBtn) return;
+
+        // 自动预载
+        if (!previewBox.textContent.trim() || !previewBox.getAttribute('data-pos')) {
+            await autoLoadPreview(idx);
+        }
+
+        const pos = (previewBox.getAttribute('data-pos') || viewBtn.getAttribute('data-pos') || '');
+        const selType = (previewBox.getAttribute('data-sel-type') || viewBtn.getAttribute('data-sel-type') || '').toLowerCase();
+        const selVal = (previewBox.getAttribute('data-sel-val') || viewBtn.getAttribute('data-sel-val') || '').toLowerCase();
+
+        try {
+            const project = document.getElementById('projectFolder').value.trim();
+            const doc = await getProjectDocxDom(project);
+
+            let c = viewBtn.parentElement;
+            while (c && !c.querySelector('.text-content')) c = c.parentElement;
+            const matchedText = (c && c.querySelector('.text-content')) ? normText(c.querySelector('.text-content').textContent || '') : '';
+
+            const target = resolveTarget(doc, pos, matchedText);
+            if (!target) { showError('未在 docx.html 中找到初始元素'); return; }
+
+            const curScope = (previewBox.getAttribute('data-scope') || '').toLowerCase();
+            const narrower = pickNarrowerNode(target, curScope, selType, selVal);
+
+            const escaped = narrower.outerHTML.replace(/</g, '<').replace(/>/g, '>');
+            previewBox.innerHTML = '<div style="font-family:monospace;white-space:pre-wrap;">' + escaped + '</div>';
+            previewBox.setAttribute('data-scope', getNodeScopeName(narrower));
+            previewBox.setAttribute('data-pos', pos);
+            previewBox.setAttribute('data-sel-type', selType);
+            previewBox.setAttribute('data-sel-val', selVal);
+            previewBox.setAttribute('data-html', narrower.outerHTML);
+        } catch (err) {
+            showError('缩小范围失败：' + (err && err.message ? err.message : String(err)));
+        }
         return;
     }
 
-    // 判断是数字还是标签名
-    const isNumber = /^\d+$/.test(filterInput);
+    // 复制目标HTML（带标签）
+    const copyHtmlBtn = e.target.closest('.btn-copy-html');
+    if (copyHtmlBtn) {
+        const idx = copyHtmlBtn.getAttribute('data-index') || '';
+        const previewBox = document.getElementById('html-preview-' + idx);
+        if (!previewBox) return;
 
-    if (isNumber) {
-        const targetLevel = parseInt(filterInput);
-        currentFilter = { type: 'level', value: targetLevel };
-        filterByLevel(targetLevel);
-    } else {
-        currentFilter = { type: 'tag', value: filterInput };
-        filterByTag(filterInput);
-    }
-}
-
-// 按层级过滤
-function filterByLevel(targetLevel) {
-    let matchCount = 0;
-
-    allNodes.forEach(nodeInfo => {
-        const element = document.getElementById(nodeInfo.id);
-        if (!element) return;
-
-        const shouldShow = nodeInfo.level === targetLevel;
-
-        if (shouldShow) {
-            element.classList.remove('hidden');
-            element.classList.add('filter-highlight');
-
-            // 展开该节点
-            const childrenContainer = element.querySelector('.children-container');
-            const toggle = element.querySelector('.toggle-icon');
-            if (childrenContainer) {
-                childrenContainer.classList.remove('hidden');
-                if (toggle) toggle.textContent = '▼';
-            }
-
-            // 确保父节点可见
-            showParents(element);
-            matchCount++;
-        } else {
-            element.classList.remove('filter-highlight');
+        // 自动预载
+        if (!previewBox.textContent.trim() || !previewBox.getAttribute('data-html')) {
+            await autoLoadPreview(idx);
         }
-    });
 
-    updateFilterInfo(matchCount, `第 ${targetLevel} 层`);
-
-    if (matchCount === 0) {
-        showError(`未找到第 ${targetLevel} 层的节点`);
+        const htmlRaw = previewBox.getAttribute('data-html') || '';
+        if (!htmlRaw) { showError('请先点击“查看对应HTML”加载片段'); return; }
+        await copyHtml(htmlRaw);
+        return;
     }
-}
 
-// 按标签过滤
-function filterByTag(tagFilter) {
-    let matchCount = 0;
-    const lowerFilter = tagFilter.toLowerCase();
-
-    allNodes.forEach(nodeInfo => {
-        const element = document.getElementById(nodeInfo.id);
-        if (!element) return;
-
-        const tagName = nodeInfo.tagName.toLowerCase();
-        // 支持前缀匹配
-        const matches = tagName.includes(lowerFilter) || tagName.endsWith(':' + lowerFilter);
-
-        if (matches) {
-            element.classList.remove('hidden');
-            element.classList.add('filter-highlight');
-
-            // 展开该节点
-            const childrenContainer = element.querySelector('.children-container');
-            const toggle = element.querySelector('.toggle-icon');
-            if (childrenContainer && nodeInfo.hasChildren) {
-                childrenContainer.classList.remove('hidden');
-                if (toggle) toggle.textContent = '▼';
-            }
-
-            // 确保父节点可见
-            showParents(element);
-            matchCount++;
-        } else {
-            element.classList.remove('filter-highlight');
-        }
-    });
-
-    updateFilterInfo(matchCount, `标签 "${tagFilter}"`);
-
-    if (matchCount === 0) {
-        showError(`未找到包含 "${tagFilter}" 的标签`);
+    // 复制目标XML（纯文本）
+    const copyXmlBtn = e.target.closest('.btn-copy-xml');
+    if (copyXmlBtn) {
+        let card = copyXmlBtn.parentElement;
+        while (card && !card.querySelector('.xml-tree')) card = card.parentElement;
+        const xmlTree = card ? card.querySelector('.xml-tree') : null;
+        if (!xmlTree) { showError('未找到目标父级的 XML 区域'); return; }
+        const xmlText = (xmlTree.innerText || '').trim();
+        if (!xmlText) { showError('目标父级 XML 内容为空'); return; }
+        await copyText(xmlText);
+        return;
     }
-}
 
-// 显示父节点
-function showParents(element) {
-    let parent = element.parentElement;
-    while (parent && parent.id !== 'resultContent') {
-        if (parent.classList.contains('xml-node')) {
-            parent.classList.remove('hidden');
+    // 查看对应HTML
+    const btn = e.target.closest('.btn-view-html');
+    if (!btn) return;
 
-            // 展开父节点
-            const childrenContainer = parent.querySelector('.children-container');
-            const toggle = parent.querySelector('.toggle-icon');
-            if (childrenContainer) {
-                childrenContainer.classList.remove('hidden');
-                if (toggle && toggle.textContent !== '  ') {
-                    toggle.textContent = '▼';
-                }
+    const pos = btn.getAttribute('data-pos') || '';
+    const idx = btn.getAttribute('data-index') || '';
+    const selType = (btn.getAttribute('data-sel-type') || '').toLowerCase();
+    const selVal = (btn.getAttribute('data-sel-val') || '').toLowerCase();
+    const previewBox = document.getElementById('html-preview-' + idx);
+    if (!previewBox) return;
+
+    let card = btn.parentElement;
+    while (card && !card.querySelector('.text-content')) card = card.parentElement;
+    const matchedText = (card && card.querySelector('.text-content')) ? normText(card.querySelector('.text-content').textContent || '') : '';
+
+    try {
+        const project = document.getElementById('projectFolder').value.trim();
+        if (!project) { previewBox.innerHTML = '<div class="error">未确定项目目录，无法加载 docx.html</div>'; return; }
+        const doc = await getProjectDocxDom(project);
+
+        let target = resolveTarget(doc, pos, matchedText);
+        if (!target) { previewBox.innerHTML = '<div class="error">未能在 docx.html 中定位到匹配元素</div>'; return; }
+
+        // XML覆盖规则：从命中元素逐层上卷，直到“超过XML文本”为止，停在上一层
+        const xmlSectionText = getXmlSectionTextFromCard(card);
+        let displayNode = xmlSectionText ? pickNodeByXmlCoverage(target, xmlSectionText) : pickHtmlTargetNode(target, selType, selVal);
+
+        // 片段过小自动扩大一次
+        let escaped = displayNode.outerHTML.replace(/</g, '<').replace(/>/g, '>');
+        if (escaped.length < 200) {
+            const broader = pickBroaderNode(target, getNodeScopeName(displayNode), selType, selVal);
+            if (broader !== displayNode) {
+                displayNode = broader;
+                escaped = displayNode.outerHTML.replace(/</g, '<').replace(/>/g, '>');
             }
         }
-        parent = parent.parentElement;
+
+        previewBox.innerHTML = '<div style="font-family:monospace;white-space:pre-wrap;">' + escaped + '</div>';
+        previewBox.setAttribute('data-scope', getNodeScopeName(displayNode));
+        previewBox.setAttribute('data-pos', pos || '');
+        previewBox.setAttribute('data-sel-type', selType || '');
+        previewBox.setAttribute('data-sel-val', selVal || '');
+        previewBox.setAttribute('data-html', displayNode.outerHTML);
+    } catch (err) {
+        previewBox.innerHTML = '<div class="error">加载/解析 docx.html 失败：' + (err && err.message ? err.message : String(err)) + '</div>';
     }
 }
 
-// 清除过滤
-function clearFilter() {
-    currentFilter = null;
-    document.getElementById('filterInput').value = '';
-
-    allNodes.forEach(nodeInfo => {
-        const element = document.getElementById(nodeInfo.id);
-        if (element) {
-            element.classList.remove('hidden', 'filter-highlight');
-        }
-    });
-
-    updateFilterInfo(allNodes.length, '全部');
+// 辅助：自动触发“查看对应HTML”
+async function autoLoadPreview(idx) {
+    const btn = document.querySelector('.btn-view-html[data-index="' + idx + '"]');
+    if (!btn) return false;
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 80));
+    return true;
 }
 
-// 展开/折叠所有节点
-function toggleAllNodes(expand) {
-    allNodes.forEach(nodeInfo => {
-        const element = document.getElementById(nodeInfo.id);
-        if (!element) return;
-
-        const childrenContainer = element.querySelector('.children-container');
-        const toggle = element.querySelector('.toggle-icon');
-
-        if (childrenContainer && nodeInfo.hasChildren) {
-            if (expand) {
-                childrenContainer.classList.remove('hidden');
-                if (toggle) toggle.textContent = '▼';
-            } else {
-                childrenContainer.classList.add('hidden');
-                if (toggle) toggle.textContent = '▶';
+// 辅助：按 id + 文本匹配回退定位
+function resolveTarget(doc, pos, matchedText) {
+    let target = pos ? doc.getElementById(pos) : null;
+    if (!target && matchedText) {
+        const nodes = doc.querySelectorAll('*[id]');
+        for (const el of nodes) {
+            if (normText(el.textContent || '').includes(matchedText)) {
+                target = el;
+                break;
             }
         }
-    });
+    }
+    return target;
 }
 
-// 更新过滤信息
-function updateFilterInfo(count, filterDesc) {
-    const info = document.querySelector('.info');
-    if (info) {
-        info.innerHTML = `
-            总节点数: <strong>${allNodes.length}</strong> |
-            最大层级: <strong>${Math.max(...allNodes.map(n => n.level))}</strong> |
-            显示节点: <strong>${count}</strong> (${filterDesc})
-        `;
+// 离屏加载并缓存项目 docx.html
+const __docxHtmlCache = new Map();
+async function getProjectDocxDom(project) {
+    if (__docxHtmlCache.has(project)) return __docxHtmlCache.get(project);
+    const res = await fetch('./' + project + '/docx.html', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const html = await res.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    __docxHtmlCache.set(project, doc);
+    return doc;
+}
+
+// 文本规范化（去空格/不可见字符）
+function normText(s) {
+    if (!s) return '';
+    return s.replace(/&nbsp;/g, ' ')
+            .replace(/\u00A0/g, ' ')
+            .replace(/[\u200B-\u200D\uFEFF]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+}
+
+// 复制纯文本
+async function copyText(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+    } catch (e) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } finally { document.body.removeChild(ta); }
     }
 }
 
-// 绑定节点折叠事件（需要在DOM生成后调用）
-document.addEventListener('click', (e) => {
-    if (e.target.classList.contains('node-header') || e.target.closest('.node-header')) {
-        const header = e.target.classList.contains('node-header') ? e.target : e.target.closest('.node-header');
-        const nodeDiv = header.closest('.xml-node');
-        const childrenContainer = nodeDiv.querySelector(':scope > .children-container');
-        const toggle = header.querySelector('.toggle-icon');
+// 复制HTML（带标签）
+async function copyHtml(htmlString) {
+    const plain = htmlString || '';
+    if (navigator.clipboard && window.ClipboardItem) {
+        try {
+            const item = new ClipboardItem({
+                'text/html': new Blob([plain], { type: 'text/html' }),
+                'text/plain': new Blob([plain], { type: 'text/plain' })
+            });
+            await navigator.clipboard.write([item]);
+            return;
+        } catch (e) { /* 回退到纯文本 */ }
+    }
+    await copyText(plain);
+}
 
-        if (childrenContainer && toggle && toggle.textContent !== '  ') {
-            const isCollapsed = childrenContainer.classList.toggle('hidden');
-            toggle.textContent = isCollapsed ? '▶' : '▼';
+// 依据 selector 选择更合适的 HTML 父级容器
+function pickHtmlTargetNode(node, selType, selVal) {
+    if (!node || !node.closest) return node;
+
+    if (selType === 'tag') {
+        if (selVal === 'tbl') return node.closest('table') || node;
+        if (selVal === 'tr') return node.closest('tr') || node;
+        if (selVal === 'tc' || selVal === 'td') return node.closest('td, th') || node;
+        if (selVal === 'p') return node.closest('p') || node;
+        return node.closest('td, th, tr, table, p') || node;
+    }
+
+    const preferred = node.closest('td, th, p, tr, table');
+    return preferred || node;
+}
+
+// 从结果卡片内抽取 XML 父级文本（剔除提示）
+function getXmlSectionTextFromCard(card) {
+    if (!card) return '';
+    const xmlTree = card.querySelector('.xml-tree');
+    if (!xmlTree) return '';
+    const parts = Array.from(xmlTree.querySelectorAll('.text-content')).map(el => el.textContent || '');
+    const joined = parts.join(' ');
+    return normText(joined)
+        .replace(/\(\s*内容过大，已截断\s*\)/g, '')
+        .replace(/\(\s*还有\s*\d+\s*个子节点\s*\)/g, '')
+        .trim();
+}
+
+// 覆盖规则：从命中元素逐层上卷，父文本为XML子集就继续，上卷到“超过”为止，停在上一层
+function pickNodeByXmlCoverage(node, xmlText) {
+    if (!node) return node;
+    const xmlN = normText(xmlText || '');
+    if (!xmlN) return node;
+
+    let cur = node;
+    let best = cur;
+    const body = node.ownerDocument && node.ownerDocument.body;
+
+    while (cur && cur !== body && cur.parentElement) {
+        const parent = cur.parentElement;
+        const parentText = normText(parent.textContent || '');
+        if (!parentText) break;
+        if (parentText.length <= xmlN.length && xmlN.includes(parentText)) {
+            best = parent;
+            cur = parent;
+            continue;
         }
+        break;
     }
-});
+    return best;
+}
+
+// 记录当前范围标签名
+function getNodeScopeName(node) {
+    if (!node) return '';
+    const tag = (node.tagName || '').toLowerCase();
+    if (tag === 'td' || tag === 'th') return 'td';
+    if (tag === 'tr') return 'tr';
+    if (tag === 'table') return 'table';
+    if (tag === 'p') return 'p';
+    if (tag === 'body') return 'body';
+    return tag || '';
+}
+
+// 逐级扩大：基于当前 scope 向上走一层
+function pickBroaderNode(target, currentScope, selType, selVal) {
+    if (!target || !target.closest) return target;
+
+    const table = target.closest('table');
+    const tr = target.closest('tr');
+    const td = target.closest('td, th');
+    const p = target.closest('p');
+
+    const orderFromP = [p, td, tr, table, target.ownerDocument.body].filter(Boolean);
+    const orderFromTd = [td, tr, table, (table && table.parentElement) || table, target.ownerDocument.body].filter(Boolean);
+
+    let order = orderFromP;
+    if (selType === 'tag' && (selVal === 'tbl' || selVal === 'tr' || selVal === 'tc' || selVal === 'td')) order = orderFromTd;
+
+    const curIdx = order.findIndex(n => getNodeScopeName(n) === currentScope);
+    if (curIdx >= 0 && curIdx + 1 < order.length) return order[curIdx + 1];
+    return order[0];
+}
+
+// 逐级缩小：基于当前 scope 向下靠近目标一层
+function pickNarrowerNode(target, currentScope, selType, selVal) {
+    if (!target || !target.closest) return target;
+    if (!currentScope) return pickHtmlTargetNode(target, selType, selVal);
+
+    switch (currentScope) {
+        case 'body': {
+            const tbl = target.closest('table'); if (tbl) return tbl;
+            const tr = target.closest('tr'); if (tr) return tr;
+            const td = target.closest('td, th'); if (td) return td;
+            const p = target.closest('p'); if (p) return p;
+            return target;
+        }
+        case 'table': {
+            const tr = target.closest('tr'); if (tr) return tr;
+            const td = target.closest('td, th'); if (td) return td;
+            const p = target.closest('p'); if (p) return p;
+            return target;
+        }
+        case 'tr': {
+            const td = target.closest('td, th'); if (td) return td;
+            const p = target.closest('p'); if (p) return p;
+            return target;
+        }
+        case 'td': {
+            const p = target.closest('p'); if (p) return p;
+            return target;
+        }
+        case 'p':
+        default:
+            return target;
+    }
+}
+
+
 
 
 
