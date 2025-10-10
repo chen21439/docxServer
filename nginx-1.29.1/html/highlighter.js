@@ -845,6 +845,43 @@
     };
   }
 
+  // ============================================================================
+  // 复制规范化文本到剪贴板
+  // ============================================================================
+  function copyToClipboard(text, btnElement) {
+    navigator.clipboard.writeText(text).then(() => {
+      const originalText = btnElement.textContent;
+      btnElement.textContent = '已复制!';
+      btnElement.style.background = '#2196F3';
+
+      setTimeout(() => {
+        btnElement.textContent = originalText;
+        btnElement.style.background = '#4CAF50';
+      }, 1500);
+    }).catch(err => {
+      console.error('复制失败:', err);
+      alert('复制失败，请手动复制');
+    });
+  }
+
+  // ============================================================================
+  // 获取规范化文本（用于复制按钮）
+  // ============================================================================
+  function getNormalizedTextForSpan(span) {
+    try {
+      const { spans: rawMatchingSpans } = findMatchingSpans(span.pid);
+      if (rawMatchingSpans.length === 0) {
+        return span.text || '';
+      }
+      const matchingSpans = filterTopLevelSpans(rawMatchingSpans);
+      const { text: normalizedText } = getContainerAndText(span.pid, matchingSpans, span.text);
+      return normalizedText;
+    } catch (error) {
+      console.error('获取规范化文本失败:', error);
+      return span.text || '';
+    }
+  }
+
   // 显示风险列表（暴露到全局，供外部调用）
   function displayRiskList(data) {
     const statsDiv = document.getElementById("risk-list-stats");
@@ -996,6 +1033,13 @@
                   `    期望文本 (${m.expected.length}字符): "${m.expected}"`
                 );
               }
+
+              // 获取并打印规范化后的完整容器文本
+              if (m.span) {
+                const normalizedText = getNormalizedTextForSpan(m.span);
+                console.log(`    📋 规范化完整文本 (${normalizedText.length}字符): "${normalizedText}"`);
+              }
+
               console.log(`    ❌ 文本未在容器中找到`);
             });
           }
@@ -1016,6 +1060,12 @@
               console.log(`  源 ${idx + 1}: ${m.span.pid} [${m.start}, ${m.end})`);
               console.log(`    期望: "${m.expected}"`);
               console.log(`    实际: "${m.actual}"`);
+
+              // 获取并打印规范化后的完整容器文本
+              if (m.span) {
+                const normalizedText = getNormalizedTextForSpan(m.span);
+                console.log(`    📋 规范化完整文本 (${normalizedText.length}字符): "${normalizedText}"`);
+              }
             });
           }
 
@@ -1038,9 +1088,17 @@
           }
         });
 
+        // 存储 span 数据，用于复制按钮的事件处理
+        const spanDataMap = new Map();
+
         spanDetailsHtml = Array.from(uniqueSpans.values())
           .map(
-            (span, idx) => `
+            (span, idx) => {
+              const copyBtnId = `copy-btn-${item.uniqueId}-${idx}`;
+              // 存储 span 数据供后续使用
+              spanDataMap.set(copyBtnId, span);
+
+              return `
                     <div style="margin-top: 8px; padding: 8px; background: #f9f9f9; border-left: 3px solid #2196F3; border-radius: 2px;">
                         <div style="font-size: 11px; color: #666; margin-bottom: 4px;">
                             <strong>片段 ${idx + 1}:</strong> ${
@@ -1055,16 +1113,40 @@
                         ${
                           span.text
                             ? `
-                            <div style="font-size: 11px; color: #333; background: white; padding: 4px; border-radius: 2px; margin-top: 4px;">
-                                "${span.text}"
+                            <div style="position: relative;">
+                                <div style="font-size: 11px; color: #333; background: white; padding: 4px; padding-right: 90px; border-radius: 2px; margin-top: 4px;">
+                                    "${span.text}"
+                                </div>
+                                <button class="copy-normalized-btn" data-copy-btn-id="${copyBtnId}"
+                                        style="position: absolute; top: 8px; right: 4px; padding: 2px 8px; background: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 10px; opacity: 0.8; transition: opacity 0.2s;"
+                                        onmouseover="this.style.opacity='1'"
+                                        onmouseout="this.style.opacity='0.8'"
+                                        title="复制规范后的完整文本">
+                                    复制完整版
+                                </button>
                             </div>
                         `
                             : ""
                         }
                     </div>
-                `
+                `;
+            }
           )
           .join("");
+
+        // 绑定复制按钮的点击事件
+        setTimeout(() => {
+          spanDataMap.forEach((span, btnId) => {
+            const btn = itemDiv.querySelector(`[data-copy-btn-id="${btnId}"]`);
+            if (btn) {
+              btn.addEventListener('click', (e) => {
+                e.stopPropagation(); // 阻止事件冒泡到父元素的高亮事件
+                const normalizedText = getNormalizedTextForSpan(span);
+                copyToClipboard(normalizedText, btn);
+              });
+            }
+          });
+        }, 0);
       }
 
       // 构建不匹配信息HTML
@@ -1508,7 +1590,7 @@
         console.error(`期望文本 (${expectedText.length}字符): "${expectedText}"`);
         console.error(`严格规范化期望 (${strictExpected.length}字符): "${strictExpected}"`);
         console.error(`严格规范化容器 (${strictContainerText.length}字符): "${strictContainerText.substring(0, 200)}..."`);
-        console.error(`容器文本预览: "${containerText.substring(0, 200)}..."`);
+        console.error(`📋 规范化完整文本 (${containerText.length}字符): "${containerText}"`);
 
         // 跳过此项，不进行高亮
         return;
