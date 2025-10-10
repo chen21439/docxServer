@@ -438,6 +438,88 @@
   }
 
   // ============================================================================
+  // 公共方法：检查文本是否匹配（基于严格规范化）
+  // ============================================================================
+  // 参数:
+  //   - expectedText: 期望的文本
+  //   - containerText: 容器的文本
+  // 返回:
+  //   - { matched: boolean, strictExpected: string, strictContainer: string }
+  //
+  // 说明:
+  //   使用严格规范化（去除所有空格）进行文本匹配
+  //   验证逻辑、容错逻辑和高亮逻辑都使用此方法，确保一致性
+  function checkTextMatch(expectedText, containerText) {
+    const strictExpected = strictNormalizeText(expectedText);
+    const strictContainer = strictNormalizeText(containerText);
+    const matched = strictContainer.includes(strictExpected);
+
+    return {
+      matched,
+      strictExpected,
+      strictContainer
+    };
+  }
+
+  // ============================================================================
+  // 公共方法：从多个P容器中选择文本匹配的容器
+  // ============================================================================
+  // 参数:
+  //   - matchingSpans: 所有匹配的span元素
+  //   - expectedText: 期望的文本（用于匹配）
+  // 返回:
+  //   - 过滤后的spans（只包含匹配容器下的spans）
+  //
+  // 说明:
+  //   当匹配到的spans分布在多个P容器时，通过文本匹配选择正确的容器
+  //   验证逻辑和高亮逻辑都使用此方法，确保一致性
+  function filterSpansByMatchedContainer(matchingSpans, expectedText) {
+    if (!expectedText || matchingSpans.length === 0) {
+      return matchingSpans;
+    }
+
+    // 按容器分组：找出所有唯一的P容器
+    const containerMap = new Map(); // key: 容器元素, value: 该容器下的spans
+
+    matchingSpans.forEach(span => {
+      let container = span;
+      while (container && container.tagName !== "P" && container.tagName !== "BODY") {
+        container = container.parentElement;
+      }
+
+      if (container && container.tagName === "P") {
+        if (!containerMap.has(container)) {
+          containerMap.set(container, []);
+        }
+        containerMap.get(container).push(span);
+      }
+    });
+
+    // 如果只有一个P容器，直接返回
+    if (containerMap.size <= 1) {
+      return matchingSpans;
+    }
+
+    // 如果有多个P容器，进行文本匹配过滤
+    console.log(`⚠️ 检测到 ${containerMap.size} 个P容器，进行文本匹配过滤...`);
+
+    // 遍历每个容器，检查是否包含期望文本（使用共用方法）
+    for (const [container, spans] of containerMap.entries()) {
+      const containerRawText = getTextByDOMOrder(container);
+      const { matched } = checkTextMatch(expectedText, containerRawText);
+
+      if (matched) {
+        console.log(`✅ 文本匹配成功，选择容器: P (包含 ${spans.length} 个span)`);
+        return spans; // 返回匹配容器下的spans
+      }
+    }
+
+    // 如果都不匹配，返回原始spans（使用第一个容器）
+    console.warn(`❌ 未找到文本匹配的容器，使用所有spans`);
+    return matchingSpans;
+  }
+
+  // ============================================================================
   // 公共方法：根据 pid 查找匹配的 span 元素
   // ============================================================================
   function findMatchingSpans(pid) {
@@ -508,54 +590,10 @@
     const targetTag = pidParts[0].startsWith("t") ? "TD" : "P";
 
     // ============================================================================
-    // 容错处理：当匹配到多个段落（P）容器时，只处理文字匹配的那个段落
+    // 容错处理：当匹配到多个段落（P）容器时，使用共用方法过滤
     // ============================================================================
-    if (targetTag === "P" && expectedText && matchingSpans.length > 0) {
-      // 按容器分组：找出所有唯一的P容器
-      const containerMap = new Map(); // key: 容器元素, value: 该容器下的spans
-
-      matchingSpans.forEach(span => {
-        let container = span;
-        while (container && container.tagName !== "P" && container.tagName !== "BODY") {
-          container = container.parentElement;
-        }
-
-        if (container && container.tagName === "P") {
-          if (!containerMap.has(container)) {
-            containerMap.set(container, []);
-          }
-          containerMap.get(container).push(span);
-        }
-      });
-
-      // 如果找到多个P容器，进行文本匹配过滤
-      if (containerMap.size > 1) {
-        console.log(`⚠️ 检测到 ${containerMap.size} 个P容器，进行文本匹配过滤...`);
-
-        const strictExpected = strictNormalizeText(expectedText);
-        let matchedContainer = null;
-        let matchedSpans = [];
-
-        // 遍历每个容器，检查是否包含期望文本
-        for (const [container, spans] of containerMap.entries()) {
-          const containerRawText = getTextByDOMOrder(container);
-          const containerStrictText = strictNormalizeText(containerRawText);
-
-          if (containerStrictText.includes(strictExpected)) {
-            console.log(`✅ 文本匹配成功，选择容器: P (严格规范化文本包含期望内容)`);
-            matchedContainer = container;
-            matchedSpans = spans;
-            break;
-          }
-        }
-
-        // 如果找到匹配的容器，更新matchingSpans为该容器下的spans
-        if (matchedContainer) {
-          matchingSpans = matchedSpans;
-        } else {
-          console.warn(`❌ 未找到文本匹配的容器，使用第一个容器`);
-        }
-      }
+    if (targetTag === "P") {
+      matchingSpans = filterSpansByMatchedContainer(matchingSpans, expectedText);
     }
 
     // ============================================================================
@@ -756,8 +794,8 @@
         return;
       }
 
-      // 3. 使用公共方法获取容器和容器文本
-      const { container, text: containerText, rawText } = getContainerAndText(pid, matchingSpans);
+      // 3. 使用公共方法获取容器和容器文本（传递期望文本用于容错）
+      const { container, text: containerText, rawText } = getContainerAndText(pid, matchingSpans, expectedText);
 
       if (!container) {
         textMismatches.push({ reason: "container_not_found", span });
@@ -765,11 +803,10 @@
       }
 
       // 4. 检查文本是否存在于容器中（允许位置偏差，忽略空格差异）
-      // 使用严格规范化进行匹配（去除所有空格）
-      const normalizedExpected = strictNormalizeText(expectedText);
-      const normalizedContainer = strictNormalizeText(containerText);
+      // 使用共用方法进行文本匹配检查
+      const { matched } = checkTextMatch(expectedText, containerText);
 
-      if (!normalizedContainer.includes(normalizedExpected)) {
+      if (!matched) {
         // 文本不存在
         textMismatches.push({
           reason: "text_not_found",
@@ -850,7 +887,26 @@
     const DEBUG_MODE = false;
     const DEBUG_FILTER_TEXT = "优质冷轧钢板制成";
 
-    data.dataList.forEach((item, index) => {
+    // ============================================================================
+    // 排序：将文字没匹配到的放在最上方
+    // ============================================================================
+    const sortedDataList = [...data.dataList].sort((a, b) => {
+      const validationA = a.spanList && a.spanList.length > 0
+        ? validateRiskItem(a)
+        : { textValid: true };
+      const validationB = b.spanList && b.spanList.length > 0
+        ? validateRiskItem(b)
+        : { textValid: true };
+
+      // 文字不匹配的排在前面
+      if (!validationA.textValid && validationB.textValid) return -1;
+      if (validationA.textValid && !validationB.textValid) return 1;
+
+      // 其他情况保持原顺序
+      return 0;
+    });
+
+    sortedDataList.forEach((item, index) => {
       // 调试模式：过滤数据
       if (DEBUG_MODE) {
         let shouldShow = false;
@@ -1418,8 +1474,8 @@
       // ============================================================================
       // 新策略：使用严格规范化 + 前端计算位置（frontStart/frontEnd）
       // ============================================================================
-      // 1. 严格规范化期望文本（去除所有空格）
-      const strictExpected = strictNormalizeText(expectedText);
+      // 1. 使用共用方法检查文本匹配
+      const { matched, strictExpected } = checkTextMatch(expectedText, containerText);
 
       console.log(`[${timestamp}] 严格规范化后 - 容器: ${strictContainerText.length}字符, 期望: ${strictExpected.length}字符`);
       console.log(`[${timestamp}] 严格规范化容器文本完整内容: "${strictContainerText}"`);
@@ -1430,7 +1486,7 @@
 
       let searchStart, searchEnd;
 
-      if (frontStart !== -1) {
+      if (matched && frontStart !== -1) {
         // ✅ 找到了！计算 frontEnd
         const frontEnd = frontStart + strictExpected.length;
 
