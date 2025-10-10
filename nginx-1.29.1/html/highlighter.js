@@ -595,6 +595,80 @@
   }
 
   // ============================================================================
+  // 公共方法：根据 pid 查找匹配的 span 元素
+  // ============================================================================
+  function findMatchingSpans(pid) {
+    const allSpans = document.querySelectorAll("span[id]");
+    const pidParts = pid.split("-");
+    let matchingSpans = [];
+
+    // 1. 优先尝试精确匹配
+    matchingSpans = Array.from(allSpans).filter(s => s.id === pid);
+    if (matchingSpans.length > 0) {
+      return { spans: matchingSpans, method: "精确匹配" };
+    }
+
+    // 2. 根据格式选择匹配策略
+    if (pidParts.length === 4 && pidParts[0].startsWith("t") && pidParts[3].startsWith("p")) {
+      // t格式: t005-r015-c005-p001 -> 匹配整个单元格 t005-r015-c005-pXXX-rXXX
+      const cellPrefix = pidParts.slice(0, 3).join("-");
+      matchingSpans = Array.from(allSpans).filter(s => {
+        if (!s.id.startsWith(cellPrefix + "-")) return false;
+        const parts = s.id.split("-");
+        return parts.length >= 5 && parts[3].startsWith("p") && parts[4].startsWith("r");
+      });
+      return { spans: matchingSpans, method: `单元格前缀匹配 ("${cellPrefix}-pXXX-rXXX")` };
+    } else if (pidParts.length >= 2 && pidParts[0].startsWith("p")) {
+      // p格式: p-00097 -> 匹配 p-00097-r-XXX
+      matchingSpans = Array.from(allSpans).filter(s => {
+        return s.id.startsWith(pid + "-") && s.id.split("-").length >= 3;
+      });
+      return { spans: matchingSpans, method: "p-格式前缀匹配 (pid + '-')" };
+    } else {
+      // 其他格式：尝试通用前缀匹配
+      matchingSpans = Array.from(allSpans).filter(s => s.id.startsWith(pid + "-"));
+      return { spans: matchingSpans, method: "通用前缀匹配 (pid + '-')" };
+    }
+  }
+
+  // ============================================================================
+  // 公共方法：过滤嵌套的 span（只保留顶层 span）
+  // ============================================================================
+  function filterTopLevelSpans(spans) {
+    return spans.filter((spanA) => {
+      return !spans.some((spanB) => {
+        return spanA !== spanB && spanB.contains(spanA);
+      });
+    });
+  }
+
+  // ============================================================================
+  // 公共方法：根据匹配的 span 获取容器和容器文本
+  // ============================================================================
+  function getContainerAndText(pid, matchingSpans) {
+    const pidParts = pid.split("-");
+    const targetTag = pidParts[0].startsWith("t") ? "TD" : "P";
+
+    // 找到容器
+    let container = matchingSpans[0];
+    while (container && container.tagName !== targetTag && container.tagName !== "BODY") {
+      container = container.parentElement;
+    }
+
+    if (!container || container.tagName === "BODY") {
+      return { container: null, text: "" };
+    }
+
+    // 手动拼接所有匹配的 span 的 textContent（不包含标签间的空格）
+    let containerText = "";
+    matchingSpans.forEach((s) => {
+      containerText += s.textContent;
+    });
+
+    return { container, text: containerText };
+  }
+
+  // ============================================================================
   // 验证函数 - 匹配逻辑说明
   // ============================================================================
   //
@@ -688,20 +762,9 @@
       const expectedText = span.text || "";
       const pid = span.pid;
 
-      // 1. 定位准确性验证：检查是否能通过 pid 前缀找到元素
-      const allSpans = document.querySelectorAll("span[id]");
-      const directMatch = Array.from(allSpans).find(s => s.id === pid);
-
-      // 支持两种前缀匹配格式：
-      // 格式1: p-00097 -> p-00097-r-XXX
-      // 格式2: t014-r005-c002-p001 -> t014-r005-c002-p001-rXXX
-      let prefixMatches = Array.from(allSpans).filter(s => {
-        if (s.id === pid) return true;
-        // 检查是否以 pid + "-" 或 pid + "-r-" 开头
-        return s.id.startsWith(pid + "-");
-      });
-
-      const locationAccurate = directMatch || prefixMatches.length > 0;
+      // 1. 使用公共方法查找匹配的 span
+      const { spans: rawMatchingSpans } = findMatchingSpans(pid);
+      const locationAccurate = rawMatchingSpans.length > 0;
 
       if (!locationAccurate) {
         locationMismatches.push({
@@ -709,73 +772,29 @@
           span,
           pid: pid
         });
-      }
-
-      // 2. 文字匹配验证：从单元格前缀提取文本进行匹配
-      const pidParts = span.pid.split("-");
-
-      let matchingSpans;
-      if (pidParts.length === 4 && pidParts[0].startsWith("t") && pidParts[3].startsWith("p")) {
-        // t格式: t005-r015-c005-p001 -> 匹配整个单元格 t005-r015-c005-pXXX-rXXX
-        const cellPrefix = pidParts.slice(0, 3).join("-"); // t005-r015-c005
-        matchingSpans = Array.from(allSpans).filter((s) => {
-          // 匹配格式: t005-r015-c005-pXXX-rXXX (至少5段，第4段以p开头，第5段以r开头)
-          if (!s.id.startsWith(cellPrefix + "-")) return false;
-          const parts = s.id.split("-");
-          return parts.length >= 5 && parts[3].startsWith("p") && parts[4].startsWith("r");
-        });
-      } else if (pidParts.length >= 2 && pidParts[0].startsWith("p")) {
-        // p格式: p-00097 -> 匹配 p-00097-r-XXX
-        matchingSpans = Array.from(allSpans).filter((s) =>
-          s.id.startsWith(span.pid + "-") && s.id.split("-").length >= 3
-        );
-      } else {
-        // 默认：使用单元格前缀
-        const cellPrefix = pidParts.length >= 3 ? pidParts.slice(0, 3).join("-") : span.pid;
-        matchingSpans = Array.from(allSpans).filter((s) =>
-          s.id.startsWith(cellPrefix + "-")
-        );
-      }
-
-      if (matchingSpans.length === 0) {
-        textMismatches.push({ reason: "cell_not_found", span });
         return;
       }
 
-      // 过滤掉嵌套的 span：只保留顶层的 span
-      matchingSpans = matchingSpans.filter((spanA) => {
-        return !matchingSpans.some((spanB) => {
-          return spanA !== spanB && spanB.contains(spanA);
-        });
-      });
+      // 2. 使用公共方法过滤嵌套的 span
+      const matchingSpans = filterTopLevelSpans(rawMatchingSpans);
 
-      // 找到容器：t格式找TD，p格式找P
-      let container = matchingSpans[0];
-      let targetTag = pidParts[0].startsWith("t") ? "TD" : "P";
-
-      while (
-        container &&
-        container.tagName !== targetTag &&
-        container.tagName !== "BODY"
-      ) {
-        container = container.parentElement;
+      if (matchingSpans.length === 0) {
+        textMismatches.push({ reason: "no_top_level_spans", span });
+        return;
       }
 
-      if (!container || container.tagName === "BODY") {
+      // 3. 使用公共方法获取容器和容器文本
+      const { container, text: containerText } = getContainerAndText(pid, matchingSpans);
+
+      if (!container) {
         textMismatches.push({ reason: "container_not_found", span });
         return;
       }
 
-      // 获取容器文本：手动拼接所有匹配的 span 的 textContent（不包含标签间的空格）
-      let containerText = "";
-      matchingSpans.forEach((s) => {
-        containerText += s.textContent;
-      });
-
       // 标准化函数：移除所有空白字符，用于模糊匹配
       const normalize = (text) => text.replace(/\s+/g, "");
 
-      // 1. 检查文本是否存在于容器中（允许位置偏差，忽略空格差异）
+      // 4. 检查文本是否存在于容器中（允许位置偏差，忽略空格差异）
       const normalizedExpected = normalize(expectedText);
       const normalizedContainer = normalize(containerText);
 
@@ -790,7 +809,7 @@
         });
       }
 
-      // 2. 检查位置是否精确匹配（start + end + text 完全一致）
+      // 5. 检查位置是否精确匹配（start + end + text 完全一致）
       const extractedText = containerText.substring(span.start, span.end);
       if (extractedText !== expectedText) {
         positionMismatches.push({
@@ -800,7 +819,8 @@
           actual: extractedText,
           start: span.start,
           end: span.end,
-          containerLength: containerText.length
+          containerLength: containerText.length,
+          containerText: containerText
         });
       }
     });
@@ -1034,10 +1054,9 @@
                   return `
                   <div style="font-size: 10px; color: #d32f2f; margin-top: 4px; padding: 4px; background: white; border-radius: 2px; border-left: 2px solid #d32f2f;">
                     <div><strong>源 ${idx + 1}:</strong> ${m.span.pid}</div>
-                    <div>期望: "${m.expected.substring(0, 40)}${
-                    m.expected.length > 40 ? "..." : ""
-                  }"</div>
-                    <div>❌ 文本未在容器中找到</div>
+                    <div style="margin-top: 4px;"><strong>期望文本 (${m.expected.length}字符):</strong></div>
+                    <div style="background: #f9f9f9; padding: 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; max-height: 100px; overflow-y: auto;">"${m.expected}"</div>
+                    <div style="margin-top: 4px; color: #d32f2f;">❌ 文本未在容器中找到</div>
                   </div>
                 `;
                 } else {
@@ -1064,6 +1083,32 @@
                 <div style="font-size: 10px; color: #c62828; margin-top: 4px; padding: 4px; background: white; border-radius: 2px; border-left: 2px solid #c62828;">
                   <div><strong>源 ${idx + 1}:</strong> ${m.pid}</div>
                   <div>❌ 无法通过 pid 前缀找到元素</div>
+                </div>
+              `;
+              })
+              .join("")}
+          </div>
+        `;
+      }
+
+      // 位置精确性警告
+      if (hasPositionInaccuracy && validation.positionMismatches.length > 0) {
+        mismatchWarningHtml += `
+          <div style="margin-top: 8px; padding: 8px; background: #e3f2fd; border-left: 3px solid #2196F3; border-radius: 2px;">
+            <div style="font-size: 11px; color: #1565c0; font-weight: bold; margin-bottom: 4px;">
+              📍 位置不精确 (${validation.positionMismatches.length} 处)
+            </div>
+            ${validation.positionMismatches
+              .map((m, idx) => {
+                return `
+                <div style="font-size: 10px; color: #1565c0; margin-top: 4px; padding: 4px; background: white; border-radius: 2px; border-left: 2px solid #2196F3;">
+                  <div><strong>源 ${idx + 1}:</strong> ${m.span.pid} [${m.start}, ${m.end})</div>
+                  <div style="margin-top: 4px;"><strong>期望文本 (${m.expected.length}字符):</strong></div>
+                  <div style="background: #f9f9f9; padding: 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; max-height: 80px; overflow-y: auto;">"${m.expected}"</div>
+                  <div style="margin-top: 4px;"><strong>实际提取 (${m.actual.length}字符):</strong></div>
+                  <div style="background: #fff3e0; padding: 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; max-height: 80px; overflow-y: auto;">"${m.actual}"</div>
+                  <div style="margin-top: 4px;"><strong>容器文本 (${m.containerLength}字符):</strong></div>
+                  <div style="background: #f5f5f5; padding: 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; max-height: 100px; overflow-y: auto; font-size: 9px;">"${m.containerText || ''}"</div>
                 </div>
               `;
               })
@@ -1333,64 +1378,24 @@
 
     // 为每个唯一的源位置添加高亮
     Array.from(uniqueSources.values()).forEach((span, spanIndex) => {
-      const allSpans = document.querySelectorAll("span[id]");
-
-      // 判断 pid 格式
-      const pidParts = span.pid.split("-");
-      let matchingSpans = [];
-      let matchMethod = "";
-
-      // 1. 优先尝试精确匹配 pid
-      matchingSpans = Array.from(allSpans).filter(s => s.id === span.pid);
-      if (matchingSpans.length > 0) {
-        matchMethod = "精确匹配";
-      }
-
-      // 2. 根据格式选择匹配策略
-      if (matchingSpans.length === 0) {
-        if (pidParts.length === 4 && pidParts[0].startsWith("t") && pidParts[3].startsWith("p")) {
-          // t格式: t005-r015-c005-p001 -> 匹配整个单元格 t005-r015-c005-pXXX-rXXX
-          const cellPrefix = pidParts.slice(0, 3).join("-"); // t005-r015-c005
-          matchingSpans = Array.from(allSpans).filter(s => {
-            // 匹配格式: t005-r015-c005-pXXX-rXXX (至少5段，第4段以p开头，第5段以r开头)
-            if (!s.id.startsWith(cellPrefix + "-")) return false;
-            const parts = s.id.split("-");
-            return parts.length >= 5 && parts[3].startsWith("p") && parts[4].startsWith("r");
-          });
-          matchMethod = `单元格前缀匹配 ("${cellPrefix}-pXXX-rXXX")`;
-        } else if (pidParts.length >= 2 && pidParts[0].startsWith("p")) {
-          // p格式: p-00097 -> 匹配 p-00097-r-XXX
-          matchingSpans = Array.from(allSpans).filter(s => {
-            return s.id.startsWith(span.pid + "-") && s.id.split("-").length >= 3;
-          });
-          matchMethod = "p-格式前缀匹配 (pid + '-')";
-        } else {
-          // 其他格式：尝试通用前缀匹配
-          matchingSpans = Array.from(allSpans).filter(s => s.id.startsWith(span.pid + "-"));
-          matchMethod = "通用前缀匹配 (pid + '-')";
-        }
-      }
+      // 1. 使用公共方法查找匹配的 span
+      const { spans: rawMatchingSpans, method: matchMethod } = findMatchingSpans(span.pid);
 
       console.log(`[${timestamp}] 原始 pid: "${span.pid}"`);
       console.log(`[${timestamp}] 匹配方式: ${matchMethod}`);
       console.log(
-        `[${timestamp}] 匹配到 ${matchingSpans.length} 个 span:`,
-        matchingSpans.map((s) => s.id)
+        `[${timestamp}] 匹配到 ${rawMatchingSpans.length} 个 span:`,
+        rawMatchingSpans.map((s) => s.id)
       );
 
-      if (matchingSpans.length === 0) {
+      if (rawMatchingSpans.length === 0) {
         console.warn(`未找到匹配 ${span.pid} 的元素（包括所有前缀匹配策略）`);
         return;
       }
 
-      // 过滤掉嵌套的 span：只保留顶层的 span（不被其他匹配的 span 包含的）
-      const beforeFilter = matchingSpans.length;
-      matchingSpans = matchingSpans.filter((spanA) => {
-        // 检查 spanA 是否被其他匹配的 span 包含
-        return !matchingSpans.some((spanB) => {
-          return spanA !== spanB && spanB.contains(spanA);
-        });
-      });
+      // 2. 使用公共方法过滤嵌套的 span
+      const beforeFilter = rawMatchingSpans.length;
+      const matchingSpans = filterTopLevelSpans(rawMatchingSpans);
 
       console.log(
         `[${timestamp}] 过滤嵌套: ${beforeFilter} -> ${matchingSpans.length} 个顶层 span`
@@ -1404,23 +1409,11 @@
         matchingSpans.map((s) => `"${s.textContent}"`)
       );
 
-      // 找到包含这些span的容器
-      // - t格式(表格内)：找 TD 容器
-      // - p格式(表格外)：找 P 容器
-      let container = matchingSpans[0];
-      let targetTag = pidParts[0].startsWith("t") ? "TD" : "P";
+      // 3. 使用公共方法获取容器和容器文本
+      const { container, text: containerText } = getContainerAndText(span.pid, matchingSpans);
 
-      // 向上查找容器
-      while (
-        container &&
-        container.tagName !== targetTag &&
-        container.tagName !== "BODY"
-      ) {
-        container = container.parentElement;
-      }
-
-      if (!container || container.tagName === "BODY") {
-        console.warn(`未找到 ${span.pid} 的 ${targetTag} 容器`);
+      if (!container) {
+        console.warn(`未找到 ${span.pid} 的容器`);
         return;
       }
 
@@ -1434,13 +1427,6 @@
       // 使用 start 和 end（这是基于容器文本的位置）
       const start = span.start;
       const end = span.end;
-
-      // 获取容器文本：手动拼接所有匹配的 span 的 textContent（不包含标签间的空格）
-      // 这样拼接出来的文本与 JSON 中的 pidText 格式一致
-      let containerText = "";
-      matchingSpans.forEach((s) => {
-        containerText += s.textContent;
-      });
 
       console.log(
         `[${timestamp}] 容器文本长度: ${containerText.length}, 期望文本长度: ${expectedText.length}`
