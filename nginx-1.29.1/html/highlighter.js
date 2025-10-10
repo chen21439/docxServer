@@ -2,209 +2,6 @@
 (function () {
   "use strict";
 
-  // 创建控制面板
-  function createControlPanel() {
-    const panel = document.createElement("div");
-    panel.id = "highlight-panel";
-    panel.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: white;
-            border: 1px solid #ccc;
-            border-radius: 8px;
-            padding: 15px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            z-index: 10000;
-            font-family: Arial, sans-serif;
-            width: 400px;
-            max-height: 80vh;
-            overflow-y: auto;
-        `;
-
-    panel.innerHTML = `
-            <div style="position: sticky; top: 0; background: white; z-index: 1; padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
-                <h3 style="margin: 0; font-size: 16px;">文本高亮工具</h3>
-                <div style="display: flex; gap: 5px;">
-                    <button id="enlarge-panel-btn" title="放大面板" style="padding: 4px 8px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">+</button>
-                    <button id="shrink-panel-btn" title="缩小面板" style="padding: 4px 8px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">−</button>
-                    <button id="toggle-panel-btn" title="最小化/展开" style="padding: 4px 8px; background: #9E9E9E; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">_</button>
-                    <button id="close-panel-btn" title="隐藏面板" style="padding: 4px 8px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">×</button>
-                </div>
-            </div>
-            <div id="panel-content">
-
-            <!-- 模式选择 -->
-            <div style="margin-bottom: 15px; padding: 10px; background: #f0f0f0; border-radius: 4px;">
-                <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: bold;">选择模式:</label>
-                <div style="margin-bottom: 5px;">
-                    <input type="radio" id="mode-single" name="highlight-mode" value="single">
-                    <label for="mode-single" style="margin-left: 5px; font-size: 13px;">单个元素高亮</label>
-                </div>
-                <div style="margin-bottom: 5px;">
-                    <input type="radio" id="mode-prefix" name="highlight-mode" value="prefix">
-                    <label for="mode-prefix" style="margin-left: 5px; font-size: 13px;">前缀匹配(整个单元格)</label>
-                </div>
-                <div>
-                    <input type="radio" id="mode-list" name="highlight-mode" value="list" checked>
-                    <label for="mode-list" style="margin-left: 5px; font-size: 13px;">风险列表</label>
-                </div>
-            </div>
-
-            <!-- 手动输入模式 -->
-            <div id="manual-input-area">
-                <div style="margin-bottom: 10px;">
-                    <label style="display: block; margin-bottom: 5px; font-size: 14px;">
-                        <span id="input-label">元素ID:</span>
-                    </label>
-                    <input type="text" id="element-id" placeholder="例如: p-01102-r-001"
-                        style="width: 100%; padding: 5px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
-                    <div id="input-hint" style="font-size: 11px; color: #999; margin-top: 3px;">单个元素高亮</div>
-                </div>
-                <div style="margin-bottom: 10px;">
-                    <label style="display: block; margin-bottom: 5px; font-size: 14px;">起始位置:</label>
-                    <input type="number" id="start-pos" value="0" min="0"
-                        style="width: 100%; padding: 5px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
-                </div>
-                <div style="margin-bottom: 10px;">
-                    <label style="display: block; margin-bottom: 5px; font-size: 14px;">结束位置:</label>
-                    <input type="number" id="end-pos" value="0" min="0"
-                        style="width: 100%; padding: 5px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
-                </div>
-                <div style="margin-bottom: 10px;">
-                    <button id="highlight-btn"
-                        style="width: 100%; padding: 8px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">
-                        确定高亮
-                    </button>
-                </div>
-            </div>
-
-            <!-- 风险列表模式 -->
-            <div id="risk-list-area" style="display: none;">
-                <div style="margin-bottom: 10px;">
-                    <button id="load-list-btn"
-                        style="width: 100%; padding: 8px; background: #FF9800; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">
-                        加载风险列表
-                    </button>
-                </div>
-                <div id="risk-list-container" style="display: none;">
-                    <div id="risk-list-stats" style="font-size: 12px; color: #666; margin-bottom: 10px; padding: 8px; background: #f9f9f9; border-radius: 4px;"></div>
-                    <div id="risk-list-items"></div>
-                </div>
-            </div>
-            <div style="margin-bottom: 10px;">
-                <button id="clear-btn"
-                    style="width: 100%; padding: 8px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">
-                    清除高亮
-                </button>
-            </div>
-            <div id="status-msg" style="font-size: 12px; color: #666; margin-top: 10px;"></div>
-            <div style="margin-top: 10px;">
-                <button id="toggle-html-btn"
-                    style="width: 100%; padding: 6px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; display: none;">
-                    显示/隐藏 HTML结构
-                </button>
-            </div>
-            <div id="html-structure" style="margin-top: 10px; padding: 10px; background: #f5f5f5; border-radius: 4px; max-height: 200px; overflow-y: auto; display: none;">
-                <div style="font-size: 13px; font-weight: bold; margin-bottom: 5px; color: #333;">HTML原始结构:</div>
-                <pre id="html-content" style="margin: 0; font-size: 10px; white-space: pre-wrap; word-wrap: break-word; font-family: 'Courier New', monospace; color: #666;"></pre>
-            </div>
-            </div>
-        `;
-
-    document.body.appendChild(panel);
-
-    // 添加控制按钮事件
-    setupPanelControls(panel);
-  }
-
-  // 设置面板控制功能
-  function setupPanelControls(panel) {
-    const enlargeBtn = document.getElementById("enlarge-panel-btn");
-    const shrinkBtn = document.getElementById("shrink-panel-btn");
-    const toggleBtn = document.getElementById("toggle-panel-btn");
-    const closeBtn = document.getElementById("close-panel-btn");
-    const panelContent = document.getElementById("panel-content");
-
-    let isMinimized = false;
-    let currentWidth = 400; // 默认宽度
-
-    // 放大面板
-    enlargeBtn.addEventListener("click", function() {
-      currentWidth = Math.min(currentWidth + 100, 1000); // 最大1000px
-      panel.style.width = currentWidth + "px";
-    });
-
-    // 缩小面板
-    shrinkBtn.addEventListener("click", function() {
-      currentWidth = Math.max(currentWidth - 100, 300); // 最小300px
-      panel.style.width = currentWidth + "px";
-    });
-
-    // 最小化/展开
-    toggleBtn.addEventListener("click", function() {
-      isMinimized = !isMinimized;
-      if (isMinimized) {
-        panelContent.style.display = "none";
-        panel.style.height = "auto";
-        panel.style.maxHeight = "none";
-        toggleBtn.textContent = "□";
-        toggleBtn.title = "展开";
-      } else {
-        panelContent.style.display = "block";
-        panel.style.height = "";
-        panel.style.maxHeight = "80vh";
-        toggleBtn.textContent = "_";
-        toggleBtn.title = "最小化";
-      }
-    });
-
-    // 隐藏面板
-    closeBtn.addEventListener("click", function() {
-      panel.style.display = "none";
-      // 创建一个重新显示的按钮
-      createShowPanelButton();
-    });
-  }
-
-  // 创建显示面板的按钮
-  function createShowPanelButton() {
-    // 检查是否已存在
-    if (document.getElementById("show-panel-btn")) return;
-
-    const showBtn = document.createElement("button");
-    showBtn.id = "show-panel-btn";
-    showBtn.innerHTML = "📝";
-    showBtn.title = "显示高亮工具";
-    showBtn.style.cssText = `
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      width: 50px;
-      height: 50px;
-      background: #4CAF50;
-      color: white;
-      border: none;
-      border-radius: 50%;
-      cursor: pointer;
-      font-size: 24px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-      z-index: 9999;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    `;
-
-    showBtn.addEventListener("click", function() {
-      const panel = document.getElementById("highlight-panel");
-      if (panel) {
-        panel.style.display = "block";
-      }
-      showBtn.remove();
-    });
-
-    document.body.appendChild(showBtn);
-  }
 
   // 高亮指定范围的文本（支持嵌套标签，只使用规范化模式）
   function highlightText(elementId, start, end) {
@@ -230,7 +27,8 @@
       return false;
     }
 
-    const originalText = element.textContent;
+    // 使用 getTextByDOMOrder 确保文本顺序正确
+    const originalText = getTextByDOMOrder(element);
 
     // 规范化：只去除换行符和制表符，保留普通空格，并合并连续空格
     const offsetMapping = { type: "normalize", map: [] };
@@ -412,7 +210,8 @@
     console.log(`[${timestamp}] 找到容器: ${container.tagName}`);
 
     // 获取容器的原始文本
-    const originalText = container.textContent;
+    // 使用 getTextByDOMOrder 确保文本顺序正确
+    const originalText = getTextByDOMOrder(container);
 
     // 规范化：只去除换行符和制表符，保留普通空格，并合并连续空格
     const offsetMapping = { type: "normalize", map: [] };
@@ -595,6 +394,41 @@
   }
 
   // ============================================================================
+  // 公共方法：按 DOM 顺序提取文本
+  // ============================================================================
+  // 解决 textContent 提取顺序不正确的问题
+  // 例如: <span>A<span>B</span>C</span>
+  // textContent 可能提取为 "ABC" 或 "BAC"，取决于浏览器实现
+  // 此函数保证按 DOM 树的 childNodes 顺序提取，结果总是 "ABC"
+  function getTextByDOMOrder(element) {
+    let result = '';
+
+    // 按顺序遍历所有子节点
+    element.childNodes.forEach(node => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        // 文本节点：直接添加文本内容
+        result += node.nodeValue;
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        // 元素节点：递归获取其文本
+        result += getTextByDOMOrder(node);
+      }
+    });
+
+    return result;
+  }
+
+  // ============================================================================
+  // 公共方法：规范化文本
+  // ============================================================================
+  // 去除换行、回车、制表符，合并连续空格，去除首尾空格
+  function normalizeText(text) {
+    return text
+      .replace(/[\n\r\t]/g, "")  // 去除换行、回车、制表符
+      .replace(/ +/g, " ")        // 合并连续空格
+      .trim();                     // 去除首尾空格
+  }
+
+  // ============================================================================
   // 公共方法：根据 pid 查找匹配的 span 元素
   // ============================================================================
   function findMatchingSpans(pid) {
@@ -656,16 +490,38 @@
     }
 
     if (!container || container.tagName === "BODY") {
-      return { container: null, text: "" };
+      return { container: null, text: "", rawText: "", spanTextMap: [] };
     }
 
-    // 手动拼接所有匹配的 span 的 textContent（不包含标签间的空格）
-    let containerText = "";
+    // 手动拼接所有匹配的 span 的 textContent，并记录每个span的文本信息
+    let rawText = "";
+    const spanTextMap = [];
+
     matchingSpans.forEach((s) => {
-      containerText += s.textContent;
+      // 使用 getTextByDOMOrder 确保文本顺序正确
+      const spanRawText = getTextByDOMOrder(s);
+      const spanNormalizedText = normalizeText(spanRawText);
+
+      spanTextMap.push({
+        span: s,
+        rawText: spanRawText,
+        normalizedText: spanNormalizedText,
+        rawStart: rawText.length,
+        rawEnd: rawText.length + spanRawText.length
+      });
+
+      rawText += spanRawText;
     });
 
-    return { container, text: containerText };
+    // 规范化整个容器文本
+    const normalizedText = normalizeText(rawText);
+
+    return {
+      container,
+      text: normalizedText,      // 规范化后的文本（用于匹配）
+      rawText: rawText,          // 原始文本（保留以便调试）
+      spanTextMap: spanTextMap   // 每个span的文本映射信息
+    };
   }
 
   // ============================================================================
@@ -784,7 +640,7 @@
       }
 
       // 3. 使用公共方法获取容器和容器文本
-      const { container, text: containerText } = getContainerAndText(pid, matchingSpans);
+      const { container, text: containerText, rawText } = getContainerAndText(pid, matchingSpans);
 
       if (!container) {
         textMismatches.push({ reason: "container_not_found", span });
@@ -805,6 +661,7 @@
           span,
           expected: expectedText,
           containerLength: containerText.length,
+          rawTextLength: rawText.length,
           textExists: false,
         });
       }
@@ -820,7 +677,8 @@
           start: span.start,
           end: span.end,
           containerLength: containerText.length,
-          containerText: containerText
+          containerText: containerText,
+          rawTextLength: rawText.length
         });
       }
     });
@@ -1406,11 +1264,11 @@
       );
       console.log(
         `[${timestamp}] 每个 span 的文本:`,
-        matchingSpans.map((s) => `"${s.textContent}"`)
+        matchingSpans.map((s) => `"${getTextByDOMOrder(s)}"`)
       );
 
       // 3. 使用公共方法获取容器和容器文本
-      const { container, text: containerText } = getContainerAndText(span.pid, matchingSpans);
+      const { container, text: containerText, rawText, spanTextMap } = getContainerAndText(span.pid, matchingSpans);
 
       if (!container) {
         console.warn(`未找到 ${span.pid} 的容器`);
@@ -1429,7 +1287,7 @@
       const end = span.end;
 
       console.log(
-        `[${timestamp}] 容器文本长度: ${containerText.length}, 期望文本长度: ${expectedText.length}`
+        `[${timestamp}] 容器文本长度: ${containerText.length} (规范化), 原始: ${rawText.length}, 期望文本长度: ${expectedText.length}`
       );
       console.log(`[${timestamp}] JSON提供范围: [${start}, ${end})`);
 
@@ -1453,7 +1311,8 @@
         // 完全找不到文本
         console.error(`❌ [文本未找到] ${span.pid}`);
         console.error(`期望文本 (${expectedText.length}字符): "${expectedText}"`);
-        console.error(`容器文本 (${containerText.length}字符): "${containerText}"`);
+        console.error(`规范化文本 (${containerText.length}字符): "${containerText}"`);
+        console.error(`原始文本 (${rawText.length}字符): "${rawText.substring(0, 200)}..."`);
         console.error(`容器文本[${start}:${end}]: "${containerText.substring(start, end)}"`);
 
         // 使用JSON提供的位置（虽然不匹配，但至少尝试高亮某些内容）
@@ -1462,78 +1321,113 @@
       }
 
       // 保存原始内容并高亮匹配的span元素
-      let charCount = 0; // 基于拼接的span文本的字符计数
+      // 使用规范化文本的位置计算，在每个span的规范化文本中进行高亮
+      let normalizedCharCount = 0; // 基于规范化文本的字符计数
 
-      matchingSpans.forEach((matchSpan) => {
-        const spanText = matchSpan.textContent;
-        const spanStart = charCount;
-        const spanEnd = charCount + spanText.length;
+      spanTextMap.forEach((spanInfo) => {
+        const matchSpan = spanInfo.span;
+        const spanNormalizedText = spanInfo.normalizedText;
+        const spanNormalizedStart = normalizedCharCount;
+        const spanNormalizedEnd = normalizedCharCount + spanNormalizedText.length;
 
-        // 检查当前span是否与高亮范围有交集
-        if (spanEnd > searchStart && spanStart < searchEnd) {
+        // 检查当前span是否与高亮范围有交集（基于规范化文本的位置）
+        if (spanNormalizedEnd > searchStart && spanNormalizedStart < searchEnd) {
           // 保存原始内容
           if (!matchSpan.hasAttribute("data-original-html")) {
             matchSpan.setAttribute("data-original-html", matchSpan.innerHTML);
           }
 
-          // 计算在当前span内的相对位置
-          const relStart = Math.max(0, searchStart - spanStart);
-          const relEnd = Math.min(spanText.length, searchEnd - spanStart);
+          // 计算在当前span的规范化文本内的相对位置
+          const relStart = Math.max(0, searchStart - spanNormalizedStart);
+          const relEnd = Math.min(spanNormalizedText.length, searchEnd - spanNormalizedStart);
 
-          // 克隆并处理该span
+          // 克隆并处理该span - 在原始文本中进行高亮
           const newSpan = matchSpan.cloneNode(true);
-          let spanCharCount = 0;
 
-          function processNode(node) {
-            if (node.nodeType === Node.TEXT_NODE) {
-              const nodeText = node.textContent;
-              const nodeStart = spanCharCount;
-              const nodeEnd = spanCharCount + nodeText.length;
+          // 在span的原始textContent中对规范化后的文本进行定位和高亮
+          // 需要找到规范化文本在原始文本中的对应位置
+          const spanRawText = spanInfo.rawText;
 
-              if (nodeEnd > relStart && nodeStart < relEnd) {
-                const fragment = document.createDocumentFragment();
-                const nodeRelStart = Math.max(0, relStart - nodeStart);
-                const nodeRelEnd = Math.min(
-                  nodeText.length,
-                  relEnd - nodeStart
-                );
+          // 在原始文本中查找对应的位置（将规范化位置映射回原始文本）
+          let rawStartIdx = -1;
+          let rawEndIdx = -1;
 
-                if (nodeRelStart > 0) {
-                  fragment.appendChild(
-                    document.createTextNode(nodeText.substring(0, nodeRelStart))
-                  );
-                }
+          // 遍历原始文本，找到对应的规范化片段位置
+          let normalizedIdx = 0;
+          for (let rawIdx = 0; rawIdx < spanRawText.length; rawIdx++) {
+            const char = spanRawText[rawIdx];
+            // 跳过换行、回车、制表符
+            if (char === '\n' || char === '\r' || char === '\t') {
+              continue;
+            }
+            // 跳过多余的空格
+            if (char === ' ' && rawIdx > 0 && spanRawText[rawIdx - 1] === ' ') {
+              continue;
+            }
 
-                const highlightSpan = document.createElement("span");
-                highlightSpan.className = highlightClass;
-                highlightSpan.style.cssText =
-                  "background-color: #ffeb3b; font-weight: bold; border-bottom: 2px solid #f44336;";
-                highlightSpan.textContent = nodeText.substring(
-                  nodeRelStart,
-                  nodeRelEnd
-                );
-                fragment.appendChild(highlightSpan);
+            // 找到起始位置
+            if (normalizedIdx === relStart && rawStartIdx === -1) {
+              rawStartIdx = rawIdx;
+            }
 
-                if (nodeRelEnd < nodeText.length) {
-                  fragment.appendChild(
-                    document.createTextNode(nodeText.substring(nodeRelEnd))
-                  );
-                }
+            normalizedIdx++;
 
-                node.parentNode.replaceChild(fragment, node);
-              }
-              spanCharCount += nodeText.length;
-            } else if (node.nodeType === Node.ELEMENT_NODE) {
-              const childNodes = Array.from(node.childNodes);
-              childNodes.forEach((child) => processNode(child));
+            // 找到结束位置
+            if (normalizedIdx === relEnd && rawEndIdx === -1) {
+              rawEndIdx = rawIdx + 1;
+              break;
             }
           }
 
-          processNode(newSpan);
-          matchSpan.innerHTML = newSpan.innerHTML;
+          // 如果找到了对应位置，进行高亮
+          if (rawStartIdx !== -1 && rawEndIdx !== -1) {
+            let spanCharCount = 0;
+
+            function processNode(node) {
+              if (node.nodeType === Node.TEXT_NODE) {
+                const nodeText = node.textContent;
+                const nodeStart = spanCharCount;
+                const nodeEnd = spanCharCount + nodeText.length;
+
+                if (nodeEnd > rawStartIdx && nodeStart < rawEndIdx) {
+                  const fragment = document.createDocumentFragment();
+                  const nodeRelStart = Math.max(0, rawStartIdx - nodeStart);
+                  const nodeRelEnd = Math.min(nodeText.length, rawEndIdx - nodeStart);
+
+                  if (nodeRelStart > 0) {
+                    fragment.appendChild(
+                      document.createTextNode(nodeText.substring(0, nodeRelStart))
+                    );
+                  }
+
+                  const highlightSpan = document.createElement("span");
+                  highlightSpan.className = highlightClass;
+                  highlightSpan.style.cssText =
+                    "background-color: #ffeb3b; font-weight: bold; border-bottom: 2px solid #f44336;";
+                  highlightSpan.textContent = nodeText.substring(nodeRelStart, nodeRelEnd);
+                  fragment.appendChild(highlightSpan);
+
+                  if (nodeRelEnd < nodeText.length) {
+                    fragment.appendChild(
+                      document.createTextNode(nodeText.substring(nodeRelEnd))
+                    );
+                  }
+
+                  node.parentNode.replaceChild(fragment, node);
+                }
+                spanCharCount += nodeText.length;
+              } else if (node.nodeType === Node.ELEMENT_NODE) {
+                const childNodes = Array.from(node.childNodes);
+                childNodes.forEach((child) => processNode(child));
+              }
+            }
+
+            processNode(newSpan);
+            matchSpan.innerHTML = newSpan.innerHTML;
+          }
         }
 
-        charCount += spanText.length;
+        normalizedCharCount += spanNormalizedText.length;
       });
 
       highlightedCount++;
@@ -1582,12 +1476,10 @@
     );
   }
 
-  // 显示状态消息
+  // 显示状态消息（委托给UI模块）
   function showStatus(message, type) {
-    const statusDiv = document.getElementById("status-msg");
-    if (statusDiv) {
-      statusDiv.textContent = message;
-      statusDiv.style.color = type === "error" ? "#f44336" : "#4CAF50";
+    if (window.HighlighterUI && window.HighlighterUI.showStatus) {
+      window.HighlighterUI.showStatus(message, type);
     }
   }
 
@@ -1602,177 +1494,17 @@
   }
 
   function setup() {
-    createControlPanel();
-
-    const elementIdInput = document.getElementById("element-id");
-    const startPosInput = document.getElementById("start-pos");
-    const endPosInput = document.getElementById("end-pos");
-    const highlightBtn = document.getElementById("highlight-btn");
-    const clearBtn = document.getElementById("clear-btn");
-    const inputLabel = document.getElementById("input-label");
-    const inputHint = document.getElementById("input-hint");
-    const toggleHtmlBtn = document.getElementById("toggle-html-btn");
-    const htmlStructure = document.getElementById("html-structure");
-
-    // 切换HTML结构显示/隐藏
-    toggleHtmlBtn.addEventListener("click", function () {
-      if (htmlStructure.style.display === "none") {
-        htmlStructure.style.display = "block";
-      } else {
-        htmlStructure.style.display = "none";
-      }
-    });
-
-    const manualInputArea = document.getElementById("manual-input-area");
-    const riskListArea = document.getElementById("risk-list-area");
-    const loadListBtn = document.getElementById("load-list-btn");
-
-    // 监听模式切换
-    document
-      .querySelectorAll('input[name="highlight-mode"]')
-      .forEach((radio) => {
-        radio.addEventListener("change", function () {
-          if (this.value === "single") {
-            manualInputArea.style.display = "block";
-            riskListArea.style.display = "none";
-            inputLabel.textContent = "元素ID:";
-            elementIdInput.placeholder = "例如: p-01102-r-001";
-            inputHint.textContent = "单个元素高亮";
-          } else if (this.value === "prefix") {
-            manualInputArea.style.display = "block";
-            riskListArea.style.display = "none";
-            inputLabel.textContent = "单元格前缀:";
-            elementIdInput.placeholder = "例如: t011-r168-c003";
-            inputHint.textContent = "匹配整个单元格的所有段落文本";
-          } else if (this.value === "list") {
-            manualInputArea.style.display = "none";
-            riskListArea.style.display = "block";
-          }
-          // 清空之前的状态
-          htmlStructure.style.display = "none";
-          toggleHtmlBtn.style.display = "none";
-          showStatus("", "success");
-        });
+    // 初始化UI并传入核心功能函数
+    if (window.HighlighterUI && window.HighlighterUI.initUI) {
+      window.HighlighterUI.initUI({
+        highlightText,
+        highlightByPrefix,
+        clearHighlight,
+        loadRiskList,
+        normalizeText,
+        getTextByDOMOrder
       });
-
-    // 初始化模式
-    const checkedMode = document.querySelector(
-      'input[name="highlight-mode"]:checked'
-    );
-    if (checkedMode && checkedMode.value === "list") {
-      manualInputArea.style.display = "none";
-      riskListArea.style.display = "block";
     }
-
-    // 加载列表按钮
-    loadListBtn.addEventListener("click", function () {
-      loadRiskList();
-    });
-
-    // 当输入元素ID时，自动设置结束位置为文本长度
-    elementIdInput.addEventListener("change", function () {
-      const elementId = this.value.trim();
-      if (elementId) {
-        const mode = document.querySelector(
-          'input[name="highlight-mode"]:checked'
-        ).value;
-
-        if (mode === "single") {
-          // 单个元素模式
-          const element = document.getElementById(elementId);
-          if (element) {
-            // 规范化文本
-            const text = element.textContent
-              .replace(/[\n\r\t]/g, "")
-              .replace(/ +/g, " ")
-              .trim();
-            const textLength = text.length;
-            endPosInput.value = textLength;
-            showStatus(`文本长度: ${textLength} 字符 (规范化后)`, "success");
-
-            // 显示HTML原始结构（默认隐藏，需要点击按钮显示）
-            const htmlContent = document.getElementById("html-content");
-            htmlContent.textContent = element.innerHTML;
-            toggleHtmlBtn.style.display = "block";
-            htmlStructure.style.display = "none";
-          } else {
-            showStatus("警告: 未找到该元素", "error");
-            htmlStructure.style.display = "none";
-            toggleHtmlBtn.style.display = "none";
-          }
-        } else if (mode === "prefix") {
-          // 前缀匹配模式
-          const allSpans = document.querySelectorAll("span[id]");
-          const matchingSpans = Array.from(allSpans).filter((span) =>
-            span.id.startsWith(elementId)
-          );
-
-          if (matchingSpans.length > 0) {
-            // 找到包含这些span的单元格
-            let container = matchingSpans[0];
-            while (container && container.tagName !== "TD") {
-              container = container.parentElement;
-            }
-
-            if (container) {
-              // 规范化文本
-              const text = container.textContent
-                .replace(/[\n\r\t]/g, "")
-                .replace(/ +/g, " ")
-                .trim();
-              const textLength = text.length;
-              endPosInput.value = textLength;
-              showStatus(
-                `找到 ${matchingSpans.length} 个匹配元素，文本长度: ${textLength} 字符`,
-                "success"
-              );
-
-              // 显示整个td的HTML原始结构（默认隐藏，需要点击按钮显示）
-              const htmlContent = document.getElementById("html-content");
-              htmlContent.textContent = container.innerHTML;
-              toggleHtmlBtn.style.display = "block";
-              htmlStructure.style.display = "none";
-            } else {
-              showStatus("警告: 未找到包含元素的单元格", "error");
-              htmlStructure.style.display = "none";
-              toggleHtmlBtn.style.display = "none";
-            }
-          } else {
-            showStatus("警告: 未找到匹配的元素", "error");
-            htmlStructure.style.display = "none";
-            toggleHtmlBtn.style.display = "none";
-          }
-        }
-      }
-    });
-
-    // 确定按钮事件
-    highlightBtn.addEventListener("click", function () {
-      const elementId = elementIdInput.value.trim();
-      const start = parseInt(startPosInput.value) || 0;
-      const end = parseInt(endPosInput.value) || 0;
-
-      if (!elementId) {
-        showStatus("错误: 请输入元素ID或前缀", "error");
-        return;
-      }
-
-      const mode = document.querySelector(
-        'input[name="highlight-mode"]:checked'
-      ).value;
-
-      if (mode === "single") {
-        highlightText(elementId, start, end);
-      } else if (mode === "prefix") {
-        highlightByPrefix(elementId, start, end);
-      }
-    });
-
-    // 清除按钮事件
-    clearBtn.addEventListener("click", function () {
-      clearHighlight();
-      showStatus("已清除所有高亮", "success");
-    });
 
     const loadTimestamp = new Date().toLocaleString("zh-CN", {
       year: "numeric",
@@ -1783,7 +1515,7 @@
       second: "2-digit",
     });
     console.log(
-      `[${loadTimestamp}] 文本高亮工具已加载 - 版本: v6.0 (新增风险列表加载功能)`
+      `[${loadTimestamp}] 文本高亮工具核心已加载 - 版本: v7.0 (UI模块分离)`
     );
   }
 
