@@ -1356,6 +1356,12 @@
         console.log(`[${timestamp}] ✅ 严格匹配成功: frontStart=${frontStart}, frontEnd=${frontEnd}`);
         console.log(`[${timestamp}] 严格规范化后的文本片段: "${strictContainerText.substring(frontStart, frontEnd)}"`);
 
+        // 调试：打印 spanTextMap 的严格规范化位置
+        console.log(`[${timestamp}] spanTextMap 详情 (${spanTextMap.length}个span):`);
+        spanTextMap.forEach((info, idx) => {
+          console.log(`  [${idx}] strictStart=${info.strictStart}, strictEnd=${info.strictEnd}, strictText="${info.strictText}"`);
+        });
+
         // 3. 使用严格规范化的位置进行高亮
         searchStart = frontStart;
         searchEnd = frontEnd;
@@ -1373,105 +1379,101 @@
 
       // ============================================================================
       // 高亮渲染：基于严格规范化的位置（frontStart/frontEnd）
+      // 策略：直接处理整个容器，而不是逐个处理span
+      // 原因：有些文本（如"，得20分；"）可能不在任何匹配的span内，而是独立的文本节点
       // ============================================================================
-      spanTextMap.forEach((spanInfo) => {
-        const matchSpan = spanInfo.span;
-        const spanStrictStart = spanInfo.strictStart;
-        const spanStrictEnd = spanInfo.strictEnd;
 
-        // 检查当前span是否与高亮范围有交集（基于严格规范化的位置）
-        if (spanStrictEnd > searchStart && spanStrictStart < searchEnd) {
-          // 保存原始内容
-          if (!matchSpan.hasAttribute("data-original-html")) {
-            matchSpan.setAttribute("data-original-html", matchSpan.innerHTML);
-          }
+      // 保存容器原始内容
+      if (!container.hasAttribute("data-original-html")) {
+        container.setAttribute("data-original-html", container.innerHTML);
+      }
 
-          // 计算在当前span的严格规范化文本内的相对位置
-          const relStart = Math.max(0, searchStart - spanStrictStart);
-          const relEnd = Math.min(spanInfo.strictText.length, searchEnd - spanStrictStart);
+      // 1. 将严格规范化的位置（searchStart, searchEnd）映射回容器的原始文本位置
+      const containerRawText = rawText;
+      let rawStartIdx = -1;
+      let rawEndIdx = -1;
 
-          // 克隆并处理该span - 在原始文本中进行高亮
-          const newSpan = matchSpan.cloneNode(true);
+      // 遍历容器原始文本，找到严格规范化位置对应的原始位置
+      let strictIdx = 0;
+      for (let rawIdx = 0; rawIdx < containerRawText.length; rawIdx++) {
+        const char = containerRawText[rawIdx];
+        // 跳过所有空白字符（严格规范化）
+        if (/\s/.test(char)) {
+          continue;
+        }
 
-          // 在span的原始textContent中对严格规范化后的文本进行定位和高亮
-          // 需要找到严格规范化文本在原始文本中的对应位置
-          const spanRawText = spanInfo.rawText;
+        // 找到起始位置
+        if (strictIdx === searchStart && rawStartIdx === -1) {
+          rawStartIdx = rawIdx;
+        }
 
-          // 在原始文本中查找对应的位置（将严格规范化位置映射回原始文本）
-          let rawStartIdx = -1;
-          let rawEndIdx = -1;
+        strictIdx++;
 
-          // 遍历原始文本，找到对应的严格规范化片段位置
-          let strictIdx = 0;
-          for (let rawIdx = 0; rawIdx < spanRawText.length; rawIdx++) {
-            const char = spanRawText[rawIdx];
-            // 跳过所有空白字符（严格规范化：移除所有空格）
-            if (/\s/.test(char)) {
-              continue;
-            }
+        // 找到结束位置
+        if (strictIdx === searchEnd && rawEndIdx === -1) {
+          rawEndIdx = rawIdx + 1;
+          break;
+        }
+      }
 
-            // 找到起始位置
-            if (strictIdx === relStart && rawStartIdx === -1) {
-              rawStartIdx = rawIdx;
-            }
+      console.log(`[${timestamp}] 位置映射: strict[${searchStart}, ${searchEnd}) -> raw[${rawStartIdx}, ${rawEndIdx})`);
 
-            strictIdx++;
+      // 2. 如果找到了对应位置，对容器进行高亮
+      if (rawStartIdx !== -1 && rawEndIdx !== -1) {
+        // 克隆容器进行处理
+        const newContainer = container.cloneNode(true);
+        let containerCharCount = 0;
 
-            // 找到结束位置
-            if (strictIdx === relEnd && rawEndIdx === -1) {
-              rawEndIdx = rawIdx + 1;
-              break;
-            }
-          }
+        // 递归处理容器中的所有节点
+        function processNode(node) {
+          if (node.nodeType === Node.TEXT_NODE) {
+            const nodeText = node.textContent;
+            const nodeStart = containerCharCount;
+            const nodeEnd = containerCharCount + nodeText.length;
 
-          // 如果找到了对应位置，进行高亮
-          if (rawStartIdx !== -1 && rawEndIdx !== -1) {
-            let spanCharCount = 0;
+            // 检查当前文本节点是否与高亮范围有交集
+            if (nodeEnd > rawStartIdx && nodeStart < rawEndIdx) {
+              const fragment = document.createDocumentFragment();
+              const nodeRelStart = Math.max(0, rawStartIdx - nodeStart);
+              const nodeRelEnd = Math.min(nodeText.length, rawEndIdx - nodeStart);
 
-            function processNode(node) {
-              if (node.nodeType === Node.TEXT_NODE) {
-                const nodeText = node.textContent;
-                const nodeStart = spanCharCount;
-                const nodeEnd = spanCharCount + nodeText.length;
-
-                if (nodeEnd > rawStartIdx && nodeStart < rawEndIdx) {
-                  const fragment = document.createDocumentFragment();
-                  const nodeRelStart = Math.max(0, rawStartIdx - nodeStart);
-                  const nodeRelEnd = Math.min(nodeText.length, rawEndIdx - nodeStart);
-
-                  if (nodeRelStart > 0) {
-                    fragment.appendChild(
-                      document.createTextNode(nodeText.substring(0, nodeRelStart))
-                    );
-                  }
-
-                  const highlightSpan = document.createElement("span");
-                  highlightSpan.className = highlightClass;
-                  highlightSpan.style.cssText =
-                    "background-color: #ffeb3b; font-weight: bold; border-bottom: 2px solid #f44336;";
-                  highlightSpan.textContent = nodeText.substring(nodeRelStart, nodeRelEnd);
-                  fragment.appendChild(highlightSpan);
-
-                  if (nodeRelEnd < nodeText.length) {
-                    fragment.appendChild(
-                      document.createTextNode(nodeText.substring(nodeRelEnd))
-                    );
-                  }
-
-                  node.parentNode.replaceChild(fragment, node);
-                }
-                spanCharCount += nodeText.length;
-              } else if (node.nodeType === Node.ELEMENT_NODE) {
-                const childNodes = Array.from(node.childNodes);
-                childNodes.forEach((child) => processNode(child));
+              // 高亮前的文本
+              if (nodeRelStart > 0) {
+                fragment.appendChild(
+                  document.createTextNode(nodeText.substring(0, nodeRelStart))
+                );
               }
-            }
 
-            processNode(newSpan);
-            matchSpan.innerHTML = newSpan.innerHTML;
+              // 高亮部分
+              const highlightSpan = document.createElement("span");
+              highlightSpan.className = highlightClass;
+              highlightSpan.style.cssText =
+                "background-color: #ffeb3b; font-weight: bold; border-bottom: 2px solid #f44336;";
+              highlightSpan.textContent = nodeText.substring(nodeRelStart, nodeRelEnd);
+              fragment.appendChild(highlightSpan);
+
+              // 高亮后的文本
+              if (nodeRelEnd < nodeText.length) {
+                fragment.appendChild(
+                  document.createTextNode(nodeText.substring(nodeRelEnd))
+                );
+              }
+
+              node.parentNode.replaceChild(fragment, node);
+            }
+            containerCharCount += nodeText.length;
+          } else if (node.nodeType === Node.ELEMENT_NODE) {
+            // 递归处理子节点
+            const childNodes = Array.from(node.childNodes);
+            childNodes.forEach((child) => processNode(child));
           }
         }
-      });
+
+        processNode(newContainer);
+        container.innerHTML = newContainer.innerHTML;
+      } else {
+        console.error(`[${timestamp}] ❌ 位置映射失败：无法将strict位置映射到raw位置`);
+      }
 
       highlightedCount++;
 
