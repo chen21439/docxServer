@@ -462,11 +462,22 @@
       });
       return { spans: matchingSpans, method: `单元格前缀匹配 ("${cellPrefix}-pXXX-rXXX")` };
     } else if (pidParts.length >= 2 && pidParts[0].startsWith("p")) {
-      // p格式: p-00097 -> 匹配 p-00097-r-XXX
+      // p格式: p-00097 或 p-00097-r-001 -> 匹配该段落下的所有 run
+      // 提取段落前缀（去掉最后的 r-XXX 部分，如果存在）
+      let paragraphPrefix = pid;
+      if (pidParts.length >= 3 && pidParts[pidParts.length - 2] === "r") {
+        // 如果是 p-00097-r-001 格式，提取 p-00097
+        paragraphPrefix = pidParts.slice(0, pidParts.length - 2).join("-");
+      }
+
+      // 匹配该段落下的所有 run: p-00097-r-XXX
       matchingSpans = Array.from(allSpans).filter(s => {
-        return s.id.startsWith(pid + "-") && s.id.split("-").length >= 3;
+        if (!s.id.startsWith(paragraphPrefix + "-")) return false;
+        const parts = s.id.split("-");
+        // 确保是 p-XXXXX-r-XXX 格式（至少4段）
+        return parts.length >= 4 && parts[parts.length - 2] === "r";
       });
-      return { spans: matchingSpans, method: "p-格式前缀匹配 (pid + '-')" };
+      return { spans: matchingSpans, method: `段落前缀匹配 ("${paragraphPrefix}-r-XXX")` };
     } else {
       // 其他格式：尝试通用前缀匹配
       matchingSpans = Array.from(allSpans).filter(s => s.id.startsWith(pid + "-"));
@@ -488,18 +499,75 @@
   // ============================================================================
   // 公共方法：根据匹配的 span 获取容器和容器文本
   // ============================================================================
-  function getContainerAndText(pid, matchingSpans) {
+  // 参数:
+  //   - pid: 段落/单元格ID
+  //   - matchingSpans: 匹配到的所有 span 元素
+  //   - expectedText: (可选) 期望的文本内容，用于多容器时的文本匹配过滤
+  function getContainerAndText(pid, matchingSpans, expectedText = null) {
     const pidParts = pid.split("-");
     const targetTag = pidParts[0].startsWith("t") ? "TD" : "P";
 
-    // 找到容器
+    // ============================================================================
+    // 容错处理：当匹配到多个段落（P）容器时，只处理文字匹配的那个段落
+    // ============================================================================
+    if (targetTag === "P" && expectedText && matchingSpans.length > 0) {
+      // 按容器分组：找出所有唯一的P容器
+      const containerMap = new Map(); // key: 容器元素, value: 该容器下的spans
+
+      matchingSpans.forEach(span => {
+        let container = span;
+        while (container && container.tagName !== "P" && container.tagName !== "BODY") {
+          container = container.parentElement;
+        }
+
+        if (container && container.tagName === "P") {
+          if (!containerMap.has(container)) {
+            containerMap.set(container, []);
+          }
+          containerMap.get(container).push(span);
+        }
+      });
+
+      // 如果找到多个P容器，进行文本匹配过滤
+      if (containerMap.size > 1) {
+        console.log(`⚠️ 检测到 ${containerMap.size} 个P容器，进行文本匹配过滤...`);
+
+        const strictExpected = strictNormalizeText(expectedText);
+        let matchedContainer = null;
+        let matchedSpans = [];
+
+        // 遍历每个容器，检查是否包含期望文本
+        for (const [container, spans] of containerMap.entries()) {
+          const containerRawText = getTextByDOMOrder(container);
+          const containerStrictText = strictNormalizeText(containerRawText);
+
+          if (containerStrictText.includes(strictExpected)) {
+            console.log(`✅ 文本匹配成功，选择容器: P (严格规范化文本包含期望内容)`);
+            matchedContainer = container;
+            matchedSpans = spans;
+            break;
+          }
+        }
+
+        // 如果找到匹配的容器，更新matchingSpans为该容器下的spans
+        if (matchedContainer) {
+          matchingSpans = matchedSpans;
+        } else {
+          console.warn(`❌ 未找到文本匹配的容器，使用第一个容器`);
+        }
+      }
+    }
+
+    // ============================================================================
+    // 找到容器 (表格内找TD，表格外找P)
+    // ============================================================================
     let container = matchingSpans[0];
     while (container && container.tagName !== targetTag && container.tagName !== "BODY") {
       container = container.parentElement;
     }
 
     if (!container || container.tagName === "BODY") {
-      return { container: null, text: "", rawText: "", spanTextMap: [] };
+      return { container: null, text: "", rawText: "", strictText: "", spanTextMap: [] };
     }
 
     // 从容器直接提取完整文本（包括所有子节点，不只是匹配的 span）
@@ -1281,8 +1349,11 @@
 
     console.log(`[${timestamp}] 去重后的唯一源: ${uniqueSources.size} 个`);
 
+    // 用于记录是否已经执行过滚动定位
+    let hasScrolled = false;
+
     // 为每个唯一的源位置添加高亮
-    Array.from(uniqueSources.values()).forEach((span, spanIndex) => {
+    Array.from(uniqueSources.values()).forEach((span) => {
       // 1. 使用公共方法查找匹配的 span
       const { spans: rawMatchingSpans, method: matchMethod } = findMatchingSpans(span.pid);
 
@@ -1314,8 +1385,9 @@
         matchingSpans.map((s) => `"${getTextByDOMOrder(s)}"`)
       );
 
-      // 3. 使用公共方法获取容器和容器文本
-      const { container, text: containerText, strictText: strictContainerText, rawText, spanTextMap } = getContainerAndText(span.pid, matchingSpans);
+      // 3. 使用公共方法获取容器和容器文本（传递期望文本用于容错）
+      const expectedText = span.text || "";
+      const { container, text: containerText, strictText: strictContainerText, rawText, spanTextMap } = getContainerAndText(span.pid, matchingSpans, expectedText);
 
       if (!container) {
         console.warn(`未找到 ${span.pid} 的容器`);
@@ -1326,7 +1398,16 @@
         `[${timestamp}] 找到容器: ${container.tagName}, 包含 ${matchingSpans.length} 个匹配的 span`
       );
 
-      const expectedText = span.text || "";
+      // 定位：找到容器后立即滚动（只执行一次）
+      if (!hasScrolled) {
+        container.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+        hasScrolled = true;
+        console.log(`[${timestamp}] ✅ 已定位到容器: ${container.tagName}`);
+      }
+
       const element = container;
 
       console.log(
@@ -1422,14 +1503,19 @@
       if (rawStartIdx !== -1 && rawEndIdx !== -1) {
         // 克隆容器进行处理
         const newContainer = container.cloneNode(true);
-        let containerCharCount = 0;
+
+        // 使用闭包外的计数器来跟踪位置
+        let globalCharCount = 0;
 
         // 递归处理容器中的所有节点
         function processNode(node) {
           if (node.nodeType === Node.TEXT_NODE) {
             const nodeText = node.textContent;
-            const nodeStart = containerCharCount;
-            const nodeEnd = containerCharCount + nodeText.length;
+            const nodeStart = globalCharCount;
+            const nodeEnd = globalCharCount + nodeText.length;
+
+            // 更新全局计数器
+            globalCharCount += nodeText.length;
 
             // 检查当前文本节点是否与高亮范围有交集
             if (nodeEnd > rawStartIdx && nodeStart < rawEndIdx) {
@@ -1461,7 +1547,6 @@
 
               node.parentNode.replaceChild(fragment, node);
             }
-            containerCharCount += nodeText.length;
           } else if (node.nodeType === Node.ELEMENT_NODE) {
             // 递归处理子节点
             const childNodes = Array.from(node.childNodes);
@@ -1502,14 +1587,6 @@
             expectedText.length - actualHighlightedText.length
           } 字符差异`
         );
-      }
-
-      // 滚动到第一个高亮位置
-      if (spanIndex === 0 && matchingSpans.length > 0) {
-        matchingSpans[0].scrollIntoView({
-          behavior: "smooth",
-          block: "center",
-        });
       }
     });
 
