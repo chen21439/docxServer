@@ -1359,15 +1359,6 @@
               ${locationAccurateItems}/${validItems} 项
             </div>
           </div>
-          <div style="flex: 1; min-width: 140px; padding: 6px; background: ${positionAccuracyRate >= 90 ? '#e8f5e9' : positionAccuracyRate >= 70 ? '#fff3cd' : '#ffe0e0'}; border-radius: 4px;">
-            <div style="font-size: 11px; color: #666; margin-bottom: 2px;">📍 位置精确率</div>
-            <div style="font-size: 18px; font-weight: bold; color: ${positionAccuracyRate >= 90 ? '#2e7d32' : positionAccuracyRate >= 70 ? '#f57c00' : '#c62828'};">
-              ${positionAccuracyRate}%
-            </div>
-            <div style="font-size: 10px; color: #666; margin-top: 2px;">
-              ${positionAccurateItems}/${validItems} 项
-            </div>
-          </div>
         </div>
       `;
 
