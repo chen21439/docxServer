@@ -2,6 +2,11 @@
 (function () {
   "use strict";
 
+  // ============================================================================
+  // 调试开关：控制日志输出
+  // ============================================================================
+  const DEBUG_LOAD_RISK_LIST = false; // 设为 true 显示加载风险列表时的详细日志
+  const DEBUG_CLICK_RISK_ITEM = false; // 设为 true 显示点击风险项时的详细调试日志（容器匹配、文本分析等）
 
   // 高亮指定范围的文本（支持嵌套标签，只使用规范化模式）
   function highlightText(elementId, start, end) {
@@ -513,21 +518,87 @@
     }
 
     // 如果有多个容器，进行文本匹配过滤
-    console.log(`⚠️ 检测到 ${containerMap.size} 个${targetTag}容器，进行文本匹配过滤...`);
+    if (DEBUG_CLICK_RISK_ITEM) {
+      console.log(`⚠️ 检测到 ${containerMap.size} 个${targetTag}容器，进行文本匹配过滤...`);
+
+      // 【调试】输出每个容器的详细信息
+      let containerIndex = 0;
+      for (const [container, spans] of containerMap.entries()) {
+        containerIndex++;
+        console.log(`📦 容器 ${containerIndex}/${containerMap.size}:`, {
+          id: container.id,
+          tagName: container.tagName,
+          spanCount: spans.length,
+          spanIds: spans.map(s => s.id), // 显示所有span ID
+          textPreview: getTextByDOMOrder(container).substring(0, 100)
+        });
+      }
+
+      // 【调试】输出每个span的父容器路径（只显示前3个）
+      console.log(`🔍 检查前3个span的父容器路径:`);
+      matchingSpans.slice(0, 3).forEach(span => {
+        let path = [];
+        let current = span;
+        while (current && current !== document.body) {
+          if (current.id) {
+            path.push(`${current.tagName}#${current.id}`);
+          } else {
+            path.push(current.tagName);
+          }
+          current = current.parentElement;
+        }
+        console.log(`  ${span.id} -> ${path.join(' < ')}`);
+      });
+    }
 
     // 遍历每个容器，检查是否包含期望文本（使用共用方法）
+    let containerIndex = 0;
     for (const [container, spans] of containerMap.entries()) {
+      containerIndex++;
       const containerRawText = getTextByDOMOrder(container);
-      const { matched } = checkTextMatch(expectedText, containerRawText);
+      const { matched, strictExpected, strictContainer } = checkTextMatch(expectedText, containerRawText);
+
+      if (DEBUG_CLICK_RISK_ITEM) {
+        console.log(`🔍 容器 ${containerIndex} 文本匹配结果:`, {
+          containerId: container.id,
+          matched,
+          expectedLength: strictExpected.length,
+          containerLength: strictContainer.length,
+          expectedPreview: strictExpected.substring(0, 50),
+          containerPreview: strictContainer.substring(0, 50)
+        });
+
+        // 【调试】如果是容器3，输出更详细的信息
+        if (container.id === 't011-r008-c003') {
+          console.log(`📋 容器3详细分析:`);
+          console.log(`  期望文本（完整）: "${strictExpected}"`);
+          console.log(`  容器文本（前200字符）: "${strictContainer.substring(0, 200)}"`);
+          console.log(`  容器是否包含期望文本: ${strictContainer.includes(strictExpected)}`);
+
+          // 查找 "GB/T17592" 在容器文本中的位置
+          const searchText = "GB/T17592";
+          const index = strictContainer.indexOf(searchText);
+          if (index >= 0) {
+            console.log(`  ✅ 找到 "${searchText}" 在位置 ${index}`);
+            console.log(`  周围文本: "${strictContainer.substring(Math.max(0, index - 20), index + searchText.length + 20)}"`);
+          } else {
+            console.log(`  ❌ 未找到 "${searchText}"`);
+          }
+        }
+      }
 
       if (matched) {
-        console.log(`✅ 文本匹配成功，选择容器: ${targetTag} (包含 ${spans.length} 个span)`);
+        if (DEBUG_CLICK_RISK_ITEM) {
+          console.log(`✅ 文本匹配成功，选择容器: ${targetTag} (包含 ${spans.length} 个span)`);
+        }
         return spans; // 返回匹配容器下的spans
       }
     }
 
     // 如果都不匹配，返回原始spans（使用第一个容器）
-    console.warn(`❌ 未找到文本匹配的${targetTag}容器，使用所有spans`);
+    if (DEBUG_CLICK_RISK_ITEM) {
+      console.warn(`❌ 未找到文本匹配的${targetTag}容器，使用所有spans`);
+    }
     return matchingSpans;
   }
 
@@ -638,7 +709,7 @@
     const rawText = getTextByDOMOrder(container);
 
     // 调试日志：显示容器信息
-    if (expectedText) {
+    if (DEBUG_CLICK_RISK_ITEM && expectedText) {
       console.log(`🔍 [getContainerAndText] pid=${pid}, targetTag=${targetTag}, matchingSpans数量=${matchingSpans.length}`);
       console.log(`🔍 [getContainerAndText] 容器原始文本长度=${rawText.length}, 前100字符: "${rawText.substring(0, 100)}..."`);
       console.log(`🔍 [getContainerAndText] 期望文本: "${expectedText}"`);
@@ -921,13 +992,15 @@
     const itemsDiv = document.getElementById("risk-list-items");
     const container = document.getElementById("risk-list-container");
 
-    console.log("=".repeat(80));
-    console.log("开始批量验证所有风险项...");
-    console.log("验证策略：");
-    console.log("  1. 文字匹配率：检查文本内容是否匹配（允许位置偏差）");
-    console.log("  2. 定位准确率：检查是否能通过 pid 前缀找到对应元素");
-    console.log("  3. 位置精确率：检查 start + end + text 是否完全一致");
-    console.log("=".repeat(80));
+    if (DEBUG_LOAD_RISK_LIST) {
+      console.log("=".repeat(80));
+      console.log("开始批量验证所有风险项...");
+      console.log("验证策略：");
+      console.log("  1. 文字匹配率：检查文本内容是否匹配（允许位置偏差）");
+      console.log("  2. 定位准确率：检查是否能通过 pid 前缀找到对应元素");
+      console.log("  3. 位置精确率：检查 start + end + text 是否完全一致");
+      console.log("=".repeat(80));
+    }
 
     // 统计匹配情况
     let totalItems = 0;
@@ -1050,63 +1123,65 @@
         }
 
         // 输出详细日志
-        if (hasTextMismatch || hasLocationInaccuracy || hasPositionInaccuracy) {
-          console.group(
-            `${hasTextMismatch ? '❌' : '✅'} [#${index + 1}] ${item.reviewItemName} - ${item.sceneDesc}`
-          );
-          console.log(`uniqueId: ${item.uniqueId}`);
+        if (DEBUG_LOAD_RISK_LIST) {
+          if (hasTextMismatch || hasLocationInaccuracy || hasPositionInaccuracy) {
+            console.group(
+              `${hasTextMismatch ? '❌' : '✅'} [#${index + 1}] ${item.reviewItemName} - ${item.sceneDesc}`
+            );
+            console.log(`uniqueId: ${item.uniqueId}`);
 
-          // 输出文字匹配情况
-          if (hasTextMismatch && validation.textMismatches.length > 0) {
-            console.log('\n📝 文字匹配问题:');
-            validation.textMismatches.forEach((m, idx) => {
-              console.log(`  源 ${idx + 1}: ${m.span ? m.span.pid : "N/A"}`);
-              if (m.expected) {
-                console.log(
-                  `    期望文本 (${m.expected.length}字符): "${m.expected}"`
-                );
-              }
+            // 输出文字匹配情况
+            if (hasTextMismatch && validation.textMismatches.length > 0) {
+              console.log('\n📝 文字匹配问题:');
+              validation.textMismatches.forEach((m, idx) => {
+                console.log(`  源 ${idx + 1}: ${m.span ? m.span.pid : "N/A"}`);
+                if (m.expected) {
+                  console.log(
+                    `    期望文本 (${m.expected.length}字符): "${m.expected}"`
+                  );
+                }
 
-              // 获取并打印规范化后的完整容器文本
-              if (m.span) {
-                const normalizedText = getNormalizedTextForSpan(m.span);
-                console.log(`    📋 规范化完整文本 (${normalizedText.length}字符): "${normalizedText}"`);
-              }
+                // 获取并打印规范化后的完整容器文本
+                if (m.span) {
+                  const normalizedText = getNormalizedTextForSpan(m.span);
+                  console.log(`    📋 规范化完整文本 (${normalizedText.length}字符): "${normalizedText}"`);
+                }
 
-              console.log(`    ❌ 文本未在容器中找到`);
-            });
+                console.log(`    ❌ 文本未在容器中找到`);
+              });
+            }
+
+            // 输出定位准确性情况
+            if (hasLocationInaccuracy && validation.locationMismatches.length > 0) {
+              console.log('\n🎯 定位准确性问题:');
+              validation.locationMismatches.forEach((m, idx) => {
+                console.log(`  源 ${idx + 1}: ${m.pid}`);
+                console.log(`    ❌ 无法通过 pid 前缀找到元素`);
+              });
+            }
+
+            // 输出位置精确性情况
+            if (hasPositionInaccuracy && validation.positionMismatches.length > 0) {
+              console.log('\n📍 位置精确性问题:');
+              validation.positionMismatches.forEach((m, idx) => {
+                console.log(`  源 ${idx + 1}: ${m.span.pid} [${m.start}, ${m.end})`);
+                console.log(`    期望: "${m.expected}"`);
+                console.log(`    实际: "${m.actual}"`);
+
+                // 获取并打印规范化后的完整容器文本
+                if (m.span) {
+                  const normalizedText = getNormalizedTextForSpan(m.span);
+                  console.log(`    📋 规范化完整文本 (${normalizedText.length}字符): "${normalizedText}"`);
+                }
+              });
+            }
+
+            console.groupEnd();
+          } else {
+            console.log(
+              `✅ [完全匹配 #${index + 1}] ${item.reviewItemName} - ${item.sceneDesc}`
+            );
           }
-
-          // 输出定位准确性情况
-          if (hasLocationInaccuracy && validation.locationMismatches.length > 0) {
-            console.log('\n🎯 定位准确性问题:');
-            validation.locationMismatches.forEach((m, idx) => {
-              console.log(`  源 ${idx + 1}: ${m.pid}`);
-              console.log(`    ❌ 无法通过 pid 前缀找到元素`);
-            });
-          }
-
-          // 输出位置精确性情况
-          if (hasPositionInaccuracy && validation.positionMismatches.length > 0) {
-            console.log('\n📍 位置精确性问题:');
-            validation.positionMismatches.forEach((m, idx) => {
-              console.log(`  源 ${idx + 1}: ${m.span.pid} [${m.start}, ${m.end})`);
-              console.log(`    期望: "${m.expected}"`);
-              console.log(`    实际: "${m.actual}"`);
-
-              // 获取并打印规范化后的完整容器文本
-              if (m.span) {
-                const normalizedText = getNormalizedTextForSpan(m.span);
-                console.log(`    📋 规范化完整文本 (${normalizedText.length}字符): "${normalizedText}"`);
-              }
-            });
-          }
-
-          console.groupEnd();
-        } else {
-          console.log(
-            `✅ [完全匹配 #${index + 1}] ${item.reviewItemName} - ${item.sceneDesc}`
-          );
         }
       }
 
@@ -1314,24 +1389,26 @@
     const locationAccuracyRate = validItems > 0 ? ((locationAccurateItems / validItems) * 100).toFixed(2) : 0;
     const positionAccuracyRate = validItems > 0 ? ((positionAccurateItems / validItems) * 100).toFixed(2) : 0;
 
-    console.log("=".repeat(80));
-    console.log("验证完成！统计汇总:");
-    console.log(`  总计: ${totalItems} 项`);
-    console.log(`  ⚪ 无位置信息: ${noSpanItems} 项`);
-    console.log(`  有效项: ${validItems} 项`);
-    console.log(`\n  📝 文字匹配统计:`);
-    console.log(`    ✅ 匹配: ${textMatchedItems} 项`);
-    console.log(`    ❌ 不匹配: ${textMismatchedItems} 项`);
-    console.log(`    文字匹配率: ${textMatchRate}%`);
-    console.log(`\n  🎯 定位准确统计:`);
-    console.log(`    ✅ 准确: ${locationAccurateItems} 项`);
-    console.log(`    ❌ 不准确: ${locationInaccurateItems} 项`);
-    console.log(`    定位准确率: ${locationAccuracyRate}%`);
-    console.log(`\n  📍 位置精确统计 (start+end+text完全一致):`);
-    console.log(`    ✅ 精确: ${positionAccurateItems} 项`);
-    console.log(`    ❌ 不精确: ${positionInaccurateItems} 项`);
-    console.log(`    位置精确率: ${positionAccuracyRate}%`);
-    console.log("=".repeat(80));
+    if (DEBUG_LOAD_RISK_LIST) {
+      console.log("=".repeat(80));
+      console.log("验证完成！统计汇总:");
+      console.log(`  总计: ${totalItems} 项`);
+      console.log(`  ⚪ 无位置信息: ${noSpanItems} 项`);
+      console.log(`  有效项: ${validItems} 项`);
+      console.log(`\n  📝 文字匹配统计:`);
+      console.log(`    ✅ 匹配: ${textMatchedItems} 项`);
+      console.log(`    ❌ 不匹配: ${textMismatchedItems} 项`);
+      console.log(`    文字匹配率: ${textMatchRate}%`);
+      console.log(`\n  🎯 定位准确统计:`);
+      console.log(`    ✅ 准确: ${locationAccurateItems} 项`);
+      console.log(`    ❌ 不准确: ${locationInaccurateItems} 项`);
+      console.log(`    定位准确率: ${locationAccuracyRate}%`);
+      console.log(`\n  📍 位置精确统计 (start+end+text完全一致):`);
+      console.log(`    ✅ 精确: ${positionAccurateItems} 项`);
+      console.log(`    ❌ 不精确: ${positionInaccurateItems} 项`);
+      console.log(`    位置精确率: ${positionAccuracyRate}%`);
+      console.log("=".repeat(80));
+    }
 
     // 更新准确率统计信息到页面
     const accuracyStatsDiv = document.getElementById("accuracy-stats");
