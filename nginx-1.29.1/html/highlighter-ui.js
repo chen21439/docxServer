@@ -222,7 +222,7 @@
       highlightByPrefix,
       clearHighlight,
       loadRiskList,
-      normalizeText,
+      strictNormalizeText,
       getTextByDOMOrder
     } = handlers;
 
@@ -304,7 +304,7 @@
           const element = document.getElementById(elementId);
           if (element) {
             // 使用 getTextByDOMOrder 确保文本顺序正确，然后规范化
-            const text = normalizeText(getTextByDOMOrder(element));
+            const text = strictNormalizeText(getTextByDOMOrder(element));
             const textLength = text.length;
             endPosInput.value = textLength;
             showStatus(`文本长度: ${textLength} 字符 (规范化后)`, "success");
@@ -335,7 +335,7 @@
 
             if (container) {
               // 使用 getTextByDOMOrder 确保文本顺序正确，然后规范化
-              const text = normalizeText(getTextByDOMOrder(container));
+              const text = strictNormalizeText(getTextByDOMOrder(container));
               const textLength = text.length;
               endPosInput.value = textLength;
               showStatus(

@@ -6,7 +6,7 @@
   // 调试开关：控制日志输出
   // ============================================================================
   const DEBUG_LOAD_RISK_LIST = false; // 设为 true 显示加载风险列表时的详细日志
-  const DEBUG_CLICK_RISK_ITEM = false; // 设为 true 显示点击风险项时的详细调试日志（容器匹配、文本分析等）
+  const DEBUG_CLICK_RISK_ITEM = true; // 设为 true 显示点击风险项时的详细调试日志（容器匹配、文本分析等）
 
   // 高亮指定范围的文本（支持嵌套标签，只使用规范化模式）
   function highlightText(elementId, start, end) {
@@ -423,23 +423,99 @@
   }
 
   // ============================================================================
-  // 公共方法：规范化文本（轻量级）
+  // 公共方法：严格规范化文本（用于匹配和显示）
   // ============================================================================
-  // 用于位置计算和显示，保留基本结构
-  // 去除换行、回车、制表符，合并连续空格，去除首尾空格
-  function normalizeText(text) {
-    return text
-      .replace(/[\n\r\t]/g, "")  // 去除换行、回车、制表符
-      .replace(/ +/g, " ")        // 合并连续空格为单个空格
-      .trim();                     // 去除首尾空格
+  // 移除所有空白字符，用于文本匹配、验证和显示
+  function strictNormalizeText(text) {
+    return text.replace(/\s+/g, "");  // 去除所有空白字符（空格、换行、制表符等）
   }
 
   // ============================================================================
-  // 公共方法：严格规范化文本（用于匹配）
+  // 公共方法：通过 pid 直接查找容器并提取文本信息
   // ============================================================================
-  // 移除所有空白字符，用于文本匹配和验证
-  function strictNormalizeText(text) {
-    return text.replace(/\s+/g, "");  // 去除所有空白字符（空格、换行、制表符等）
+  // 参数:
+  //   - pid: 段落/单元格ID (例如 t005-r011-c006-p001 或 p-00097-r-001)
+  // 返回:
+  //   - container: 容器元素 (TD 或 P)
+  //   - rawText: 原始文本
+  //   - strictText: 严格规范化后的文本
+  //   - spanTextMap: 容器内所有span的位置映射信息
+  function findContainerByPid(pid) {
+    const pidParts = pid.split("-");
+    const targetTag = pidParts[0].startsWith("t") ? "TD" : "P";
+    let container = null;
+    let containerId = "";
+
+    if (targetTag === "TD") {
+      // 表格内：提取单元格ID (例如 t005-r011-c006-p001 -> t005-r011-c006)
+      containerId = pidParts.slice(0, 3).join("-");
+      container = document.getElementById(containerId);
+    } else {
+      // 表格外：提取段落ID (例如 p-00097-r-001 -> p-00097)
+      containerId = pidParts.slice(0, 2).join("-");
+      container = document.getElementById(containerId);
+    }
+
+    if (!container) {
+      return {
+        container: null,
+        containerId: containerId,
+        rawText: "",
+        strictText: "",
+        spanTextMap: []
+      };
+    }
+
+    // 从容器中获取所有的文本和span信息
+    const rawText = getTextByDOMOrder(container);
+    const strictText = strictNormalizeText(rawText);
+
+    // 收集容器内所有span
+    const allSpansInContainer = Array.from(container.querySelectorAll('span[id]'));
+
+    // 构建 spanTextMap
+    const spanTextMap = [];
+    let currentPosRaw = 0;
+    let currentPosStrict = 0;
+
+    function traverseAndMap(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const nodeRawText = node.nodeValue;
+        const nodeStrictText = strictNormalizeText(nodeRawText);
+        currentPosRaw += nodeRawText.length;
+        currentPosStrict += nodeStrictText.length;
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const isMatchingSpan = allSpansInContainer.some(s => s === node);
+        if (isMatchingSpan) {
+          const spanRawText = getTextByDOMOrder(node);
+          const spanStrictText = strictNormalizeText(spanRawText);
+          spanTextMap.push({
+            span: node,
+            rawText: spanRawText,
+            strictText: spanStrictText,
+            rawStart: currentPosRaw,
+            rawEnd: currentPosRaw + spanRawText.length,
+            strictStart: currentPosStrict,
+            strictEnd: currentPosStrict + spanStrictText.length
+          });
+          currentPosRaw += spanRawText.length;
+          currentPosStrict += spanStrictText.length;
+        } else {
+          node.childNodes.forEach(child => traverseAndMap(child));
+        }
+      }
+    }
+
+    container.childNodes.forEach(child => traverseAndMap(child));
+
+    return {
+      container,
+      containerId,
+      rawText,
+      strictText,
+      text: strictText,  // 保持兼容性
+      spanTextMap
+    };
   }
 
   // ============================================================================
@@ -704,6 +780,23 @@
       return { container: null, text: "", rawText: "", strictText: "", spanTextMap: [] };
     }
 
+    // ============================================================================
+    // 【新增】从容器中收集所有的span元素（不依赖传入的matchingSpans）
+    // ============================================================================
+    // 这样可以避免因为ID错误导致的span遗漏问题
+    // 例如：容器内有个span的ID是 t005-r012-c005-p010-r003（属于其他单元格）
+    //      但它确实在当前容器内，应该被包含在文本提取中
+    const allSpansInContainer = Array.from(container.querySelectorAll('span[id]'));
+
+    if (DEBUG_CLICK_RISK_ITEM && expectedText) {
+      console.log(`🔍 [getContainerAndText] 容器内所有span数量: ${allSpansInContainer.length}`);
+      console.log(`🔍 [getContainerAndText] 传入的matchingSpans数量: ${matchingSpans.length}`);
+      console.log(`🔍 [getContainerAndText] 容器内所有span IDs:`, allSpansInContainer.map(s => s.id));
+    }
+
+    // 使用容器内的所有span，而不是只用传入的matchingSpans
+    matchingSpans = allSpansInContainer;
+
     // 从容器直接提取完整文本（包括所有子节点，不只是匹配的 span）
     // 这样可以包含那些没有 id 的文本节点（如 "，得20分；"）
     const rawText = getTextByDOMOrder(container);
@@ -718,7 +811,6 @@
     // 记录每个匹配的 span 的文本信息（用于高亮时的精确定位）
     const spanTextMap = [];
     let currentPosRaw = 0;           // 原始文本位置
-    let currentPosNormalized = 0;     // 轻量规范化位置
     let currentPosStrict = 0;         // 严格规范化位置
 
     // 递归遍历容器的所有子节点，找到匹配的 span 并记录位置
@@ -726,38 +818,31 @@
       if (node.nodeType === Node.TEXT_NODE) {
         // 文本节点：更新所有位置
         const nodeRawText = node.nodeValue;
-        const nodeNormalizedText = normalizeText(nodeRawText);
         const nodeStrictText = strictNormalizeText(nodeRawText);
 
         currentPosRaw += nodeRawText.length;
-        currentPosNormalized += nodeNormalizedText.length;
         currentPosStrict += nodeStrictText.length;
       } else if (node.nodeType === Node.ELEMENT_NODE) {
         // 检查是否是我们匹配的 span
         const isMatchingSpan = matchingSpans.some(s => s === node);
 
         if (isMatchingSpan) {
-          // 记录这个 span 的信息（所有三种规范化）
+          // 记录这个 span 的信息
           const spanRawText = getTextByDOMOrder(node);
-          const spanNormalizedText = normalizeText(spanRawText);
           const spanStrictText = strictNormalizeText(spanRawText);
 
           spanTextMap.push({
             span: node,
             rawText: spanRawText,
-            normalizedText: spanNormalizedText,
             strictText: spanStrictText,
             rawStart: currentPosRaw,
             rawEnd: currentPosRaw + spanRawText.length,
-            normalizedStart: currentPosNormalized,
-            normalizedEnd: currentPosNormalized + spanNormalizedText.length,
             strictStart: currentPosStrict,
             strictEnd: currentPosStrict + spanStrictText.length
           });
 
           // 更新位置（跳过这个 span 的内容）
           currentPosRaw += spanRawText.length;
-          currentPosNormalized += spanNormalizedText.length;
           currentPosStrict += spanStrictText.length;
         } else {
           // 不是匹配的 span，递归处理子节点
@@ -769,16 +854,15 @@
     // 执行遍历和映射
     container.childNodes.forEach(child => traverseAndMap(child));
 
-    // 规范化整个容器文本（轻量级和严格）
-    const normalizedText = normalizeText(rawText);
+    // 严格规范化整个容器文本
     const strictText = strictNormalizeText(rawText);
 
     return {
       container,
-      text: normalizedText,      // 轻量规范化文本
-      strictText: strictText,    // 严格规范化文本（用于匹配）
+      text: strictText,          // 严格规范化文本（用于匹配和显示）
+      strictText: strictText,    // 严格规范化文本（保留兼容性）
       rawText: rawText,          // 原始文本（包含所有文本节点）
-      spanTextMap: spanTextMap   // 每个匹配span的文本映射信息（包含所有规范化级别）
+      spanTextMap: spanTextMap   // 每个匹配span的文本映射信息
     };
   }
 
@@ -876,41 +960,22 @@
       const expectedText = span.text || "";
       const pid = span.pid;
 
-      // 1. 使用公共方法查找匹配的 span
-      const { spans: rawMatchingSpans } = findMatchingSpans(pid);
-      const locationAccurate = rawMatchingSpans.length > 0;
+      // 使用新的公共方法直接查找容器
+      const { container, strictText: containerText, rawText } = findContainerByPid(pid);
 
-      if (!locationAccurate) {
+      if (!container) {
         locationMismatches.push({
-          reason: "element_not_found",
+          reason: "container_not_found",
           span,
           pid: pid
         });
         return;
       }
 
-      // 2. 使用公共方法过滤嵌套的 span
-      const matchingSpans = filterTopLevelSpans(rawMatchingSpans);
-
-      if (matchingSpans.length === 0) {
-        textMismatches.push({ reason: "no_top_level_spans", span });
-        return;
-      }
-
-      // 3. 使用公共方法获取容器和容器文本（传递期望文本用于容错）
-      const { container, text: containerText, rawText } = getContainerAndText(pid, matchingSpans, expectedText);
-
-      if (!container) {
-        textMismatches.push({ reason: "container_not_found", span });
-        return;
-      }
-
-      // 4. 检查文本是否存在于容器中（允许位置偏差，忽略空格差异）
-      // 使用共用方法进行文本匹配检查
+      // 检查文本是否存在于容器中
       const { matched } = checkTextMatch(expectedText, containerText);
 
       if (!matched) {
-        // 文本不存在
         textMismatches.push({
           reason: "text_not_found",
           span,
@@ -921,7 +986,7 @@
         });
       }
 
-      // 5. 检查位置是否精确匹配（start + end + text 完全一致）
+      // 检查位置是否精确匹配（start + end + text 完全一致）
       const extractedText = containerText.substring(span.start, span.end);
       if (extractedText !== expectedText) {
         positionMismatches.push({
@@ -972,14 +1037,9 @@
   // ============================================================================
   function getNormalizedTextForSpan(span) {
     try {
-      const { spans: rawMatchingSpans } = findMatchingSpans(span.pid);
-      if (rawMatchingSpans.length === 0) {
-        return span.text || '';
-      }
-      const matchingSpans = filterTopLevelSpans(rawMatchingSpans);
-      // 注意：不传入 expectedText，获取整个容器的完整文本，而不是过滤后的文本
-      const { text: normalizedText } = getContainerAndText(span.pid, matchingSpans, null);
-      return normalizedText;
+      // 使用新的公共方法直接查找容器并获取文本
+      const { strictText } = findContainerByPid(span.pid);
+      return strictText || span.text || '';
     } catch (error) {
       console.error('获取规范化文本失败:', error);
       return span.text || '';
@@ -1605,49 +1665,21 @@
 
     // 为每个唯一的源位置添加高亮
     Array.from(uniqueSources.values()).forEach((span) => {
-      // 1. 使用公共方法查找匹配的 span
-      const { spans: rawMatchingSpans, method: matchMethod } = findMatchingSpans(span.pid);
-
       console.log(`[${timestamp}] 原始 pid: "${span.pid}"`);
-      console.log(`[${timestamp}] 匹配方式: ${matchMethod}`);
-      console.log(
-        `[${timestamp}] 匹配到 ${rawMatchingSpans.length} 个 span:`,
-        rawMatchingSpans.map((s) => s.id)
-      );
 
-      if (rawMatchingSpans.length === 0) {
-        console.warn(`未找到匹配 ${span.pid} 的元素（包括所有前缀匹配策略）`);
-        return;
-      }
-
-      // 2. 使用公共方法过滤嵌套的 span
-      const beforeFilter = rawMatchingSpans.length;
-      const matchingSpans = filterTopLevelSpans(rawMatchingSpans);
-
-      console.log(
-        `[${timestamp}] 过滤嵌套: ${beforeFilter} -> ${matchingSpans.length} 个顶层 span`
-      );
-      console.log(
-        `[${timestamp}] 顶层 span IDs:`,
-        matchingSpans.map((s) => s.id)
-      );
-      console.log(
-        `[${timestamp}] 每个 span 的文本:`,
-        matchingSpans.map((s) => `"${getTextByDOMOrder(s)}"`)
-      );
-
-      // 3. 使用公共方法获取容器和容器文本（传递期望文本用于容错）
-      const expectedText = span.text || "";
-      const { container, text: containerText, strictText: strictContainerText, rawText, spanTextMap } = getContainerAndText(span.pid, matchingSpans, expectedText);
+      // 使用新的公共方法直接查找容器
+      const { container, containerId, rawText, strictText: strictContainerText, spanTextMap } = findContainerByPid(span.pid);
 
       if (!container) {
-        console.warn(`未找到 ${span.pid} 的容器`);
+        console.warn(`未找到 ${span.pid} 的容器 (尝试ID: ${containerId})`);
         return;
       }
 
-      console.log(
-        `[${timestamp}] 找到容器: ${container.tagName}, 包含 ${matchingSpans.length} 个匹配的 span`
-      );
+      console.log(`[${timestamp}] ✅ 找到容器: ${container.tagName}#${container.id}`);
+      console.log(`[${timestamp}] 容器内span数量: ${spanTextMap.length}`);
+
+      const expectedText = span.text || "";
+      const containerText = strictContainerText;
 
       // 定位：找到容器后立即滚动（只执行一次）
       if (!hasScrolled) {
@@ -1662,21 +1694,21 @@
       const element = container;
 
       console.log(
-        `[${timestamp}] 容器文本长度: ${containerText.length} (轻量规范化), 原始: ${rawText.length}, 期望文本长度: ${expectedText.length}`
+        `[${timestamp}] 容器文本长度: ${containerText.length} (严格规范化), 原始: ${rawText.length}, 期望文本长度: ${expectedText.length}`
       );
       console.log(`[${timestamp}] JSON提供范围: [${span.start}, ${span.end}) (已废弃，不再使用)`);
 
       // ============================================================================
-      // 新策略：使用严格规范化 + 前端计算位置（frontStart/frontEnd）
+      // 策略：使用严格规范化 + 前端计算位置（frontStart/frontEnd）
       // ============================================================================
       // 1. 使用共用方法检查文本匹配
       const { matched, strictExpected } = checkTextMatch(expectedText, containerText);
 
-      console.log(`[${timestamp}] 严格规范化后 - 容器: ${strictContainerText.length}字符, 期望: ${strictExpected.length}字符`);
-      console.log(`[${timestamp}] 严格规范化容器文本完整内容: "${strictContainerText}"`);
-      console.log(`[${timestamp}] 严格规范化期望文本完整内容: "${strictExpected}"`);
+      console.log(`[${timestamp}] 规范化后 - 容器: ${strictContainerText.length}字符, 期望: ${strictExpected.length}字符`);
+      console.log(`[${timestamp}] 规范化容器文本完整内容: "${strictContainerText}"`);
+      console.log(`[${timestamp}] 规范化期望文本完整内容: "${strictExpected}"`);
 
-      // 2. 在严格规范化的文本中查找位置（frontStart/frontEnd）
+      // 2. 在规范化的文本中查找位置（frontStart/frontEnd）
       const frontStart = strictContainerText.indexOf(strictExpected);
 
       let searchStart, searchEnd;
@@ -1685,25 +1717,42 @@
         // ✅ 找到了！计算 frontEnd
         const frontEnd = frontStart + strictExpected.length;
 
-        console.log(`[${timestamp}] ✅ 严格匹配成功: frontStart=${frontStart}, frontEnd=${frontEnd}`);
-        console.log(`[${timestamp}] 严格规范化后的文本片段: "${strictContainerText.substring(frontStart, frontEnd)}"`);
+        console.log(`[${timestamp}] ✅ 匹配成功: frontStart=${frontStart}, frontEnd=${frontEnd}`);
+        console.log(`[${timestamp}] 规范化后的文本片段: "${strictContainerText.substring(frontStart, frontEnd)}"`);
 
-        // 调试：打印 spanTextMap 的严格规范化位置
+        // 调试：打印 spanTextMap 的规范化位置
         console.log(`[${timestamp}] spanTextMap 详情 (${spanTextMap.length}个span):`);
         spanTextMap.forEach((info, idx) => {
           console.log(`  [${idx}] strictStart=${info.strictStart}, strictEnd=${info.strictEnd}, strictText="${info.strictText}"`);
         });
 
-        // 3. 使用严格规范化的位置进行高亮
+        // 3. 使用规范化的位置进行高亮
         searchStart = frontStart;
         searchEnd = frontEnd;
       } else {
         // ❌ 完全找不到文本
-        console.error(`❌ [严格匹配失败] ${span.pid}`);
+        console.error(`❌ [匹配失败] ${span.pid}`);
         console.error(`期望文本 (${expectedText.length}字符): "${expectedText}"`);
-        console.error(`严格规范化期望 (${strictExpected.length}字符): "${strictExpected}"`);
-        console.error(`严格规范化容器 (${strictContainerText.length}字符): "${strictContainerText.substring(0, 200)}..."`);
-        console.error(`📋 规范化完整文本 (${containerText.length}字符): "${containerText}"`);
+        console.error(`规范化期望 (${strictExpected.length}字符): "${strictExpected}"`);
+        console.error(`规范化容器 (${strictContainerText.length}字符): "${strictContainerText.substring(0, 200)}..."`);
+
+        // 字符级别对比：找出第一个不匹配的字符
+        console.error(`🔍 字符级别对比:`);
+        const minLen = Math.min(strictExpected.length, strictContainerText.length);
+        for (let i = 0; i < minLen; i++) {
+          if (strictExpected[i] !== strictContainerText[i]) {
+            console.error(`  第 ${i} 个字符不匹配:`);
+            console.error(`    期望: "${strictExpected[i]}" (charCode=${strictExpected.charCodeAt(i)})`);
+            console.error(`    容器: "${strictContainerText[i]}" (charCode=${strictContainerText.charCodeAt(i)})`);
+            console.error(`    期望上下文: "...${strictExpected.substring(Math.max(0, i-10), i+10)}..."`);
+            console.error(`    容器上下文: "...${strictContainerText.substring(Math.max(0, i-10), i+10)}..."`);
+            break;
+          }
+        }
+        if (strictExpected.length !== strictContainerText.length && minLen === Math.min(strictExpected.length, strictContainerText.length)) {
+          console.error(`  前 ${minLen} 个字符都匹配，但长度不同`);
+          console.error(`  期望长度: ${strictExpected.length}, 容器长度: ${strictContainerText.length}`);
+        }
 
         // 跳过此项，不进行高亮
         return;
@@ -1873,7 +1922,7 @@
         highlightByPrefix,
         clearHighlight,
         loadRiskList,
-        normalizeText,
+        strictNormalizeText,
         getTextByDOMOrder
       });
     }
