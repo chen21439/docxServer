@@ -8,6 +8,22 @@
   const DEBUG_LOAD_RISK_LIST = false; // 设为 true 显示加载风险列表时的详细日志
   const DEBUG_CLICK_RISK_ITEM = true; // 设为 true 显示点击风险项时的详细调试日志（容器匹配、文本分析等）
 
+  // ============================================================================
+  // 工具函数：从段落/span ID 中提取单元格 ID（支持嵌套表格）
+  // ============================================================================
+  // 示例：
+  //   - "t005-r011-c006-p001" -> "t005-r011-c006"
+  //   - "t005-r001-c001-t001-r011-c004-p001" -> "t005-r001-c001-t001-r011-c004"
+  //   - "t001-r002-c003-t004-r005-c006-t007-r008-c009" -> "t001-r002-c003-t004-r005-c006-t007-r008-c009"
+  function toCell(id) {
+    const parts = id.toLowerCase().split("-");
+    let cut = -1;
+    for (let i = 0; i < parts.length; i++) {
+      if (/^c\d+$/i.test(parts[i])) cut = i;
+    }
+    return cut >= 0 ? parts.slice(0, cut + 1).join("-") : id;
+  }
+
   // 高亮指定范围的文本（支持嵌套标签，只使用规范化模式）
   function highlightText(elementId, start, end) {
     const timestamp = new Date().toLocaleString("zh-CN", {
@@ -447,8 +463,10 @@
     let containerId = "";
 
     if (targetTag === "TD") {
-      // 表格内：提取单元格ID (例如 t005-r011-c006-p001 -> t005-r011-c006)
-      containerId = pidParts.slice(0, 3).join("-");
+      // 表格内：提取单元格ID (支持嵌套表格)
+      // 例如: t005-r011-c006-p001 -> t005-r011-c006
+      //       t005-r001-c001-t001-r011-c004-p001 -> t005-r001-c001-t001-r011-c004
+      containerId = toCell(pid);
       container = document.getElementById(containerId);
     } else {
       // 表格外：提取段落ID (例如 p-00097-r-001 -> p-00097)
