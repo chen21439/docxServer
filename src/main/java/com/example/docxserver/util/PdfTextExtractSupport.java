@@ -17,6 +17,57 @@ import java.util.*;
  * 3. 从单元格中提取文本内容
  * 4. 支持按顺序读取表格数据（与toXML()方法保持一致）
  *
+ * 核心实现思路（与ParagraphMapper.extractTablesFromElement保持完全一致）：
+ *
+ * 一、PDF结构树遍历策略
+ * 1. 前提条件：
+ *    - PDF必须是Tagged PDF（PDF/A-4或带结构标签）
+ *    - 包含完整的结构树：Table -> TR -> TD -> P/Span
+ *    - 从DOCX转换而来，结构完整无丢失
+ *
+ * 2. 遍历顺序（深度优先）：
+ *    - 从StructureTreeRoot开始
+ *    - 递归查找所有Table元素
+ *    - 对每个Table，按顺序遍历TR（行）
+ *    - 对每个TR，按顺序遍历TD（单元格）
+ *    - 保证遍历顺序与文档显示顺序一致
+ *
+ * 二、ID生成规则（严格按顺序生成，确保与toXML()完全一致）
+ * 1. 表格ID：t001, t002, ... (全局递增，按遍历顺序)
+ * 2. 行ID：t001-r001, t001-r002, ... (表格内递增)
+ * 3. 单元格ID：t001-r007-c001-p001 (行内递增，固定-p001后缀)
+ * 4. 索引从1开始，使用%03d格式化为3位数字
+ *
+ * 三、文本提取策略（MCID按页分桶方法）
+ * 1. 优先级顺序：
+ *    a. 优先使用/ActualText属性（如果存在）
+ *    b. 否则收集MCID，使用MCIDTextExtractor提取
+ *    c. 最后fallback到递归提取子元素的ActualText
+ *
+ * 2. MCID收集与提取（关键技术）：
+ *    - 问题：同一个MCID可能在多页出现，直接提取会混淆
+ *    - 解决方案：按页分桶
+ *      a. 递归收集该TD后代的所有MCID（深度优先）
+ *      b. 将MCID按所属页面分组：Map<PDPage, Set<Integer>>
+ *      c. 对每一页单独提取：MCIDTextExtractor(mcids).processPage(page)
+ *      d. 拼接所有页的文本，保持文档顺序
+ *
+ * 3. 关键点：
+ *    - MCID收集范围严格限制在该TD的后代（不包含兄弟/父节点）
+ *    - 按文档页序遍历（for i=0 to doc.getNumberOfPages()-1）
+ *    - 每页只提取该TD在该页的MCID对应的文本
+ *
+ * 四、与toXML()方法的对应关系
+ * 1. extractTextByIds() ≈ toXML()的批量优化版本
+ * 2. extractTablesWithIds() ≈ extractTablesFromElement()的目标ID过滤版本
+ * 3. extractTextFromCell() ≈ extractTextFromElement()的独立版本
+ * 4. ID生成逻辑完全相同，确保一致性
+ *
+ * 五、使用场景
+ * 1. testFindTextByIdInPdf()：批量测试ID定位和文本提取
+ * 2. 未来功能：根据ID修改PDF文字格式
+ * 3. 验证功能：对比_pdf.txt文件中的文本
+ *
  * @author Claude
  */
 public class PdfTextExtractSupport {

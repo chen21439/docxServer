@@ -61,6 +61,29 @@ public class ParagraphMapper {
     /**
      * 测试从PDF中根据ID查找文本
      * 从JSON文件的dataList中读取spanList.pid进行测试
+     *
+     * 核心思路：
+     * 1. 数据源：从JSON文件中读取所有pid（段落ID）和pidText（预期文本）
+     *    - JSON格式：dataList[].spanList[].{pid, pidText}
+     *    - pid格式：t001-r007-c001-p001（表格-行-列-段落）
+     *    - pidText：该ID对应的实际文本内容（作为验证基准）
+     *
+     * 2. 文本提取：调用PdfTextExtractSupport.extractTextByIds()批量提取
+     *    - 使用MCID（Marked Content ID）方式从Tagged PDF提取
+     *    - 复用toXML()方法的核心逻辑，确保顺序和ID生成规则一致
+     *    - 按页分桶收集MCID，避免跨页混用
+     *
+     * 3. 结果对比：将PDF实际提取的文本与JSON中的pidText进行对比
+     *    - 归一化对比：去除空白后比较前50个字符
+     *    - 统计指标：提取率（成功提取的ID数/总ID数）、匹配率（内容匹配的ID数/总ID数）
+     *
+     * 4. 输出：显示前20个详细对比结果 + 全部统计信息
+     *    - 状态标记：✓匹配、△找到但不匹配、×未找到
+     *    - 统计数据：测试总数、成功提取数、内容匹配数、提取率、匹配率
+     *
+     * @param pdfPath PDF文件路径（必须是Tagged PDF）
+     * @param docxTxtPath DOCX txt文件路径（未使用，仅保留接口兼容性）
+     * @throws IOException 文件读取异常
      */
     private static void testFindTextByIdInPdf(String pdfPath, String docxTxtPath) throws IOException {
         // 1. 构建JSON文件路径（从PDF路径推导）
@@ -952,7 +975,38 @@ public class ParagraphMapper {
     }
 
     /**
-     * 从结构元素中递归提取表格（测试版本：只提取第一个表格）
+     * 从结构元素中递归提取表格
+     *
+     * 核心思路（与PdfTextExtractSupport保持一致的实现）：
+     * 1. 结构树遍历：深度优先遍历PDF结构树，查找所有Table元素
+     *    - 遇到Table元素时开始提取
+     *    - 限制：只提取前25个表格（避免处理时间过长）
+     *
+     * 2. ID生成规则（严格按照顺序）：
+     *    - 表格ID：t001, t002, ... (按遍历顺序递增)
+     *    - 行ID：t001-r001, t001-r002, ... (在表格内按顺序)
+     *    - 单元格ID：t001-r001-c001-p001 (行内按列顺序，固定-p001后缀)
+     *    - 索引从1开始，格式化为3位数字（%03d）
+     *
+     * 3. 表格结构提取：
+     *    - Table -> TR (行) -> TD (单元格) 的层级结构
+     *    - 对每个TD调用extractTextFromElement()提取文本
+     *    - 使用MCID按页分桶的方法确保文本提取精确
+     *
+     * 4. 输出格式：
+     *    - XML格式：<table id="..."><tr id="..."><td><p id="...">文本</p></td></tr></table>
+     *    - HTML转义所有文本内容（&, <, >, ", '）
+     *    - 输出到_pdf_YYYYMMDD_HHMMSS.txt文件
+     *
+     * 5. 性能优化：
+     *    - 表格计数限制：提取25个表格后立即返回（3处检查点）
+     *    - 递归剪枝：达到限制后不再继续遍历子元素
+     *
+     * @param element 当前结构元素（可能是Table或其他类型）
+     * @param output 输出缓冲区（用于构建XML）
+     * @param tableCounter 表格计数器（全局共享，用于生成表格ID）
+     * @param doc PDF文档对象（传递给extractTextFromElement用于MCID提取）
+     * @throws IOException 文件读取或文本提取异常
      */
     private static void extractTablesFromElement(
             org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
