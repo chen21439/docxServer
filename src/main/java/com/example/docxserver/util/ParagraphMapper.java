@@ -34,7 +34,7 @@ import java.util.*;
 public class ParagraphMapper {
 
     public static void main(String[] args) throws Exception {
-        String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\a.pdf";
+        String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217.pdf";
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
 
 //        // 步骤0-1: 从PDF独立提取表格结构到XML格式TXT（不依赖DOCX）
@@ -1415,17 +1415,18 @@ public class ParagraphMapper {
     }
 
     /**
-     * 从结构元素中提取文本（使用PDFTextStripper - 带PDDocument参数版本）
+     * 从结构元素中提取文本（使用MCID按页分桶的方法）
      *
-     * 主要思路：
-     * 1. 优先使用 /ActualText 属性（如果存在）
-     * 2. 如果没有ActualText，递归提取所有子元素的文本
-     * 3. 对于P标签元素，使用PDFTextStripper从所在页面提取文本
+     * 核心思路：
+     * 1. 优先使用 /ActualText 属性
+     * 2. 递归收集该TD后代的所有MCID，**按页分桶**存储
+     * 3. 对每一页，用MCIDTextExtractor只提取该页该TD的MCID对应的文本
+     * 4. 拼接所有页的文本
      *
-     * 为什么不用MCID方法：
-     * - PDFBox 3.0中MCID文本提取复杂且不可靠
-     * - 需要解析页面内容流，开销大
-     * - 本方法使用PDFTextStripper提取单页文本作为替代方案
+     * 关键点：
+     * - MCID的收集范围**严格限制在该TD的后代**，不包含整表/整页
+     * - 按页分桶，避免跨页混用MCID
+     * - 每页单独提取，避免把其他页的同号MCID内容也吸进来
      */
     private static String extractTextFromElement(
             org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
@@ -1437,57 +1438,133 @@ public class ParagraphMapper {
             return actualText;
         }
 
-        // 2. 尝试递归提取子元素的文本
-        StringBuilder text = new StringBuilder();
+        // 2. 收集该TD后代的MCID，按页分桶
+        Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> mcidsByPage = collectMcidsByPage(element);
+
+        if (mcidsByPage.isEmpty()) {
+            // 没有MCID，尝试递归提取子元素的ActualText
+            return extractTextFromChildrenActualText(element);
+        }
+
+        // 3. 按页提取文本
+        StringBuilder result = new StringBuilder();
 
         try {
-            // 获取所有Kids
-            for (Object kid : element.getKids()) {
-                if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
-                    // 递归处理子结构元素
-                    org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
-                        (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+            // 按文档页序遍历（确保文本顺序正确）
+            for (int i = 0; i < doc.getNumberOfPages(); i++) {
+                org.apache.pdfbox.pdmodel.PDPage page = doc.getPage(i);
+                Set<Integer> mcids = mcidsByPage.get(page);
 
-                    String childText = extractTextFromElement(childElement, doc);
+                if (mcids != null && !mcids.isEmpty()) {
+                    System.out.println("      [调试] 页" + (i+1) + "的MCID集合: " + mcids + " (共" + mcids.size() + "个)");
+
+                    // 使用MCIDTextExtractor提取该页该TD的文本
+                    MCIDTextExtractor extractor = new MCIDTextExtractor(mcids);
+                    extractor.processPage(page);
+                    String pageText = extractor.getText().trim();
+
+                    if (!pageText.isEmpty()) {
+                        if (result.length() > 0) {
+                            result.append(" ");
+                        }
+                        result.append(pageText);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("      [错误] MCID文本提取失败: " + e.getMessage());
+            e.printStackTrace();
+            return "";
+        }
+
+        return result.toString().trim();
+    }
+
+    /**
+     * 收集该结构元素后代的所有MCID，按页分桶
+     *
+     * 关键：**只递归该元素的后代**，不包含兄弟节点或父节点
+     */
+    private static Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> collectMcidsByPage(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element) throws IOException {
+
+        Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> result = new HashMap<>();
+        collectMcidsRecursive(element, result);
+        return result;
+    }
+
+    /**
+     * 递归收集MCID（深度优先遍历）
+     */
+    private static void collectMcidsRecursive(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
+            Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> mcidsByPage) throws IOException {
+
+        for (Object kid : element.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                // 递归处理子结构元素
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+                collectMcidsRecursive(childElement, mcidsByPage);
+
+            } else if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent) {
+                // PDMarkedContent包含MCID信息
+                org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent mc =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent) kid;
+
+                Integer mcid = mc.getMCID();
+                // PDFBox 3.0中PDMarkedContent没有getPage()方法，需要从父元素获取
+                org.apache.pdfbox.pdmodel.PDPage page = element.getPage();
+
+                if (mcid != null && page != null) {
+                    mcidsByPage.computeIfAbsent(page, k -> new HashSet<>()).add(mcid);
+                }
+
+            } else if (kid instanceof Integer) {
+                // 直接的MCID整数（需要从element获取page）
+                Integer mcid = (Integer) kid;
+                org.apache.pdfbox.pdmodel.PDPage page = element.getPage();
+
+                if (page != null) {
+                    mcidsByPage.computeIfAbsent(page, k -> new HashSet<>()).add(mcid);
+                }
+            }
+        }
+    }
+
+    /**
+     * 从子元素递归提取ActualText（fallback方法）
+     */
+    private static String extractTextFromChildrenActualText(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element) throws IOException {
+
+        StringBuilder text = new StringBuilder();
+
+        for (Object kid : element.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                String childActualText = childElement.getActualText();
+                if (childActualText != null && !childActualText.isEmpty()) {
+                    if (text.length() > 0) {
+                        text.append(" ");
+                    }
+                    text.append(childActualText);
+                } else {
+                    // 递归
+                    String childText = extractTextFromChildrenActualText(childElement);
                     if (!childText.isEmpty()) {
                         if (text.length() > 0) {
                             text.append(" ");
                         }
                         text.append(childText);
                     }
-                } else if (kid instanceof Integer) {
-                    // 这是一个MCID，需要从页面内容流中提取
-                    // 为了简化，暂时跳过（直接使用PDFTextStripper会提取整个页面）
                 }
             }
-
-            // 3. 如果没有找到子元素的文本，尝试使用PDFTextStripper
-            if (text.length() == 0 && doc != null) {
-                org.apache.pdfbox.pdmodel.PDPage page = element.getPage();
-                if (page != null) {
-                    // 使用PDFTextStripper提取单页文本
-                    PDFTextStripper stripper = new PDFTextStripper();
-                    stripper.setSortByPosition(true);
-
-                    // 获取页面索引
-                    int pageIndex = doc.getPages().indexOf(page);
-                    if (pageIndex >= 0) {
-                        // 只提取当前页面
-                        stripper.setStartPage(pageIndex + 1);
-                        stripper.setEndPage(pageIndex + 1);
-
-                        String pageText = stripper.getText(doc);
-                        return pageText.trim();
-                    }
-                }
-            }
-
-            return text.toString().trim();
-
-        } catch (Exception e) {
-            System.err.println("提取文本失败: " + e.getMessage());
-            return "";
         }
+
+        return text.toString().trim();
     }
 
     /**
