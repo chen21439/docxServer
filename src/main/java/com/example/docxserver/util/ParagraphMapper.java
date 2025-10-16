@@ -34,7 +34,7 @@ import java.util.*;
 public class ParagraphMapper {
 
     public static void main(String[] args) throws Exception {
-        String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217.pdf";
+        String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\a.pdf";
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
 
 //        // 步骤0-1: 从PDF独立提取表格结构到XML格式TXT（不依赖DOCX）
@@ -865,13 +865,13 @@ public class ParagraphMapper {
 
             System.out.println("开始从PDF结构树提取表格...");
 
-            // 遍历结构树，提取所有表格
+            // 遍历结构树，提取所有表格（传入doc参数）
             Counter tableCounter = new Counter();
             for (Object kid : structTreeRoot.getKids()) {
                 if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
                     org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element =
                         (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
-                    extractTablesFromElement(element, output, tableCounter);
+                    extractTablesFromElement(element, output, tableCounter, doc);
                 }
             }
 
@@ -884,19 +884,29 @@ public class ParagraphMapper {
     }
 
     /**
-     * 从结构元素中递归提取表格
+     * 从结构元素中递归提取表格（测试版本：只提取第一个表格）
      */
     private static void extractTablesFromElement(
             org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
             StringBuilder output,
-            Counter tableCounter) throws IOException {
+            Counter tableCounter,
+            PDDocument doc) throws IOException {
 
         String structType = element.getStructureType();
 
         // 如果是Table元素
         if ("Table".equalsIgnoreCase(structType)) {
             int tableIndex = tableCounter.tableIndex++;
+
+            // 只处理第一个表格
+            if (tableIndex > 0) {
+                System.out.println("跳过表格 " + (tableIndex + 1) + "（只提取第一个表格）");
+                return;
+            }
+
             String tableId = "t" + String.format("%03d", tableIndex + 1);
+            System.out.println("\n=== 开始提取第一个表格 ===");
+            System.out.println("表格ID: " + tableId);
 
             output.append("<table id=\"").append(tableId).append("\">\n");
 
@@ -909,6 +919,7 @@ public class ParagraphMapper {
 
                     if ("TR".equalsIgnoreCase(rowElement.getStructureType())) {
                         String rowId = tableId + "-r" + String.format("%03d", rowIndex + 1);
+                        System.out.println("  处理行: " + rowId);
                         output.append("  <tr id=\"").append(rowId).append("\">\n");
 
                         // 提取行内的单元格
@@ -921,8 +932,10 @@ public class ParagraphMapper {
                                 if ("TD".equalsIgnoreCase(cellElement.getStructureType())) {
                                     String cellId = rowId + "-c" + String.format("%03d", colIndex + 1) + "-p001";
 
-                                    // 提取单元格文本
-                                    String cellText = extractTextFromElement(cellElement);
+                                    // 提取单元格文本（传入doc参数）
+                                    System.out.println("    提取单元格: " + cellId);
+                                    String cellText = extractTextFromElement(cellElement, doc);
+                                    System.out.println("      文本内容: " + truncate(cellText, 50));
 
                                     output.append("    <td>\n");
                                     output.append("      <p id=\"").append(cellId).append("\">")
@@ -942,15 +955,22 @@ public class ParagraphMapper {
             }
 
             output.append("</table>\n");
-            return;  // 找到表格后不再递归
+            System.out.println("=== 第一个表格提取完成 ===");
+            System.out.println("共提取 " + rowIndex + " 行");
+            return;  // 找到第一个表格后直接返回
         }
 
-        // 递归处理子元素
+        // 递归处理子元素（查找第一个表格）
         for (Object kid : element.getKids()) {
             if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
                 org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
                     (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
-                extractTablesFromElement(childElement, output, tableCounter);
+                extractTablesFromElement(childElement, output, tableCounter, doc);
+
+                // 如果已经提取了第一个表格，就不再继续
+                if (tableCounter.tableIndex > 0) {
+                    return;
+                }
             }
         }
     }
@@ -1395,8 +1415,87 @@ public class ParagraphMapper {
     }
 
     /**
-     * 从结构元素中提取文本（基于MCID）
+     * 从结构元素中提取文本（使用PDFTextStripper - 带PDDocument参数版本）
+     *
+     * 主要思路：
+     * 1. 优先使用 /ActualText 属性（如果存在）
+     * 2. 如果没有ActualText，递归提取所有子元素的文本
+     * 3. 对于P标签元素，使用PDFTextStripper从所在页面提取文本
+     *
+     * 为什么不用MCID方法：
+     * - PDFBox 3.0中MCID文本提取复杂且不可靠
+     * - 需要解析页面内容流，开销大
+     * - 本方法使用PDFTextStripper提取单页文本作为替代方案
      */
+    private static String extractTextFromElement(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
+            PDDocument doc) throws IOException {
+
+        // 1. 优先使用 /ActualText
+        String actualText = element.getActualText();
+        if (actualText != null && !actualText.isEmpty()) {
+            return actualText;
+        }
+
+        // 2. 尝试递归提取子元素的文本
+        StringBuilder text = new StringBuilder();
+
+        try {
+            // 获取所有Kids
+            for (Object kid : element.getKids()) {
+                if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                    // 递归处理子结构元素
+                    org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                        (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                    String childText = extractTextFromElement(childElement, doc);
+                    if (!childText.isEmpty()) {
+                        if (text.length() > 0) {
+                            text.append(" ");
+                        }
+                        text.append(childText);
+                    }
+                } else if (kid instanceof Integer) {
+                    // 这是一个MCID，需要从页面内容流中提取
+                    // 为了简化，暂时跳过（直接使用PDFTextStripper会提取整个页面）
+                }
+            }
+
+            // 3. 如果没有找到子元素的文本，尝试使用PDFTextStripper
+            if (text.length() == 0 && doc != null) {
+                org.apache.pdfbox.pdmodel.PDPage page = element.getPage();
+                if (page != null) {
+                    // 使用PDFTextStripper提取单页文本
+                    PDFTextStripper stripper = new PDFTextStripper();
+                    stripper.setSortByPosition(true);
+
+                    // 获取页面索引
+                    int pageIndex = doc.getPages().indexOf(page);
+                    if (pageIndex >= 0) {
+                        // 只提取当前页面
+                        stripper.setStartPage(pageIndex + 1);
+                        stripper.setEndPage(pageIndex + 1);
+
+                        String pageText = stripper.getText(doc);
+                        return pageText.trim();
+                    }
+                }
+            }
+
+            return text.toString().trim();
+
+        } catch (Exception e) {
+            System.err.println("提取文本失败: " + e.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * 从结构元素中提取文本（不带PDDocument参数版本，已废弃）
+     *
+     * @deprecated 使用 {@link #extractTextFromElement(PDStructureElement, PDDocument)} 替代
+     */
+    @Deprecated
     private static String extractTextFromElement(
             org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element) throws IOException {
 
@@ -1406,63 +1505,30 @@ public class ParagraphMapper {
             return actualText;
         }
 
-        // 2. 通过 COSObject 获取 MCID
-        Set<Integer> mcids = new HashSet<>();
-        org.apache.pdfbox.pdmodel.PDPage page = null;
+        // 2. 尝试递归提取子元素的文本
+        StringBuilder text = new StringBuilder();
 
         try {
-            // 获取page
-            page = element.getPage();
-            if (page == null) {
-                return "";
-            }
+            // 获取所有Kids
+            for (Object kid : element.getKids()) {
+                if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                    // 递归处理子结构元素
+                    org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                        (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
 
-            // 从 COSObject 中获取 /K (Kids) 数组或单个值
-            org.apache.pdfbox.cos.COSBase kidsBase = element.getCOSObject().getDictionaryObject(org.apache.pdfbox.cos.COSName.K);
-
-            if (kidsBase == null) {
-                return "";
-            }
-
-            // K 可能是单个整数(MCID)、单个字典或数组
-            if (kidsBase instanceof org.apache.pdfbox.cos.COSInteger) {
-                // 单个MCID
-                mcids.add(((org.apache.pdfbox.cos.COSInteger) kidsBase).intValue());
-            } else if (kidsBase instanceof org.apache.pdfbox.cos.COSArray) {
-                // MCID数组
-                org.apache.pdfbox.cos.COSArray kidsArray = (org.apache.pdfbox.cos.COSArray) kidsBase;
-                for (org.apache.pdfbox.cos.COSBase kid : kidsArray) {
-                    if (kid instanceof org.apache.pdfbox.cos.COSInteger) {
-                        mcids.add(((org.apache.pdfbox.cos.COSInteger) kid).intValue());
-                    } else if (kid instanceof org.apache.pdfbox.cos.COSDictionary) {
-                        // 标记内容引用字典
-                        org.apache.pdfbox.cos.COSDictionary kidDict = (org.apache.pdfbox.cos.COSDictionary) kid;
-                        org.apache.pdfbox.cos.COSBase mcidObj = kidDict.getDictionaryObject(org.apache.pdfbox.cos.COSName.MCID);
-                        if (mcidObj instanceof org.apache.pdfbox.cos.COSInteger) {
-                            mcids.add(((org.apache.pdfbox.cos.COSInteger) mcidObj).intValue());
+                    String childText = extractTextFromElement(childElement);
+                    if (!childText.isEmpty()) {
+                        if (text.length() > 0) {
+                            text.append(" ");
                         }
+                        text.append(childText);
                     }
                 }
-            } else if (kidsBase instanceof org.apache.pdfbox.cos.COSDictionary) {
-                // 单个字典
-                org.apache.pdfbox.cos.COSDictionary kidDict = (org.apache.pdfbox.cos.COSDictionary) kidsBase;
-                org.apache.pdfbox.cos.COSBase mcidObj = kidDict.getDictionaryObject(org.apache.pdfbox.cos.COSName.MCID);
-                if (mcidObj instanceof org.apache.pdfbox.cos.COSInteger) {
-                    mcids.add(((org.apache.pdfbox.cos.COSInteger) mcidObj).intValue());
-                }
             }
 
-            if (mcids.isEmpty()) {
-                return "";
-            }
-
-            // 3. 使用MCIDTextExtractor按MCID提取文本
-            MCIDTextExtractor extractor = new MCIDTextExtractor(mcids);
-            extractor.processPage(page);
-            return extractor.getText();
+            return text.toString().trim();
 
         } catch (Exception e) {
-            // 发生异常时返回空字符串
             System.err.println("提取文本失败: " + e.getMessage());
             return "";
         }
