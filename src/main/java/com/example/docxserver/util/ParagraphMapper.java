@@ -48,6 +48,11 @@ public class ParagraphMapper {
         System.out.println("=== 测试通过ID在PDF中查找文本 ===");
         testFindTextByIdInPdf(pdfPath, docxTxtPath);
         System.out.println();
+
+        // 步骤0-4: 使用PDFTextStripper提取PDF全文到txt
+        System.out.println("=== 使用PDFTextStripper提取PDF全文 ===");
+        extractPdfTextWithStripper(pdfPath);
+        System.out.println();
     }
 
     /**
@@ -1508,6 +1513,42 @@ public class ParagraphMapper {
             sb.append(str);
         }
         return sb.toString();
+    }
+
+    /**
+     * 使用PDFTextStripper提取PDF全文并写入txt文件
+     *
+     * 主要思路：
+     * 1. 使用PDFTextStripper直接提取PDF中的所有文本
+     * 2. 不做任何处理，保持原始格式
+     * 3. 输出到 _pdf_txt_stripper.txt 文件
+     *
+     * @param pdfPath PDF文件路径
+     * @throws IOException 文件读写异常
+     */
+    public static void extractPdfTextWithStripper(String pdfPath) throws IOException {
+        File pdfFile = new File(pdfPath);
+        String pdfDir = pdfFile.getParent();
+        String pdfName = pdfFile.getName().replaceFirst("[.][^.]+$", "");
+
+        // 生成输出文件路径
+        String outputPath = pdfDir + File.separator + pdfName + "_pdf_txt_stripper.txt";
+
+        // 打开PDF并提取文本
+        try (PDDocument doc = Loader.loadPDF(pdfFile)) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            stripper.setSortByPosition(true);  // 按位置排序
+
+            // 提取所有页面的文本
+            String text = stripper.getText(doc);
+
+            // 写入文件
+            Files.write(Paths.get(outputPath), text.getBytes(StandardCharsets.UTF_8));
+
+            System.out.println("PDF文本已提取到: " + outputPath);
+            System.out.println("提取的文本长度: " + text.length() + " 字符");
+            System.out.println("PDF总页数: " + doc.getNumberOfPages());
+        }
     }
 
 }
