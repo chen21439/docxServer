@@ -20,6 +20,12 @@ import java.util.*;
 
 /**
  * 段落映射器：建立 DOCX 段落（从TXT提取）到 PDF 段落的映射关系
+ *
+ * 重要前提：
+ * - PDF 是由 DOCX 转换而来，内容完全一致，信息无丢失
+ * - PDF 为 PDF/A-4 或 Tagged 版本，保留了完整的结构标签（table、tr、td、p）
+ * - DOCX 和 PDF 的表格结构完全对应，相同ID的单元格内容相同
+ * - 因此不需要复杂的文本归一化匹配，直接通过ID即可匹配
  */
 public class ParagraphMapper {
 
@@ -27,32 +33,15 @@ public class ParagraphMapper {
         String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217.pdf";
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
 
-        // 步骤0-1: 将PDF表格结构写入HTML格式的txt文件（包含ID）
-        System.out.println("=== 提取PDF表格结构到HTML格式TXT ===");
+        // 步骤0-1: 将PDF表格结构写入XML格式的txt文件（包含ID）
+        System.out.println("=== 提取PDF表格结构到XML格式TXT ===");
         writePdfStructureToHtml(pdfPath);
         System.out.println();
 
-        // 步骤0-2: 将PDF表格数据写入txt文件（匹配结果）
-        System.out.println("=== 提取PDF表格数据到TXT（匹配结果）===");
-        writePdfTablesToTxt(pdfPath, docxTxtPath);
+        // 步骤0-2: 使用新的ID匹配方法，生成匹配结果
+        System.out.println("=== 使用ID直接匹配，生成匹配结果 ===");
+        writePdfTablesToTxtById(pdfPath, docxTxtPath);
         System.out.println();
-
-        // 步骤1: 读取 TXT 文件中的 DOCX 段落
-        System.out.println("=== 读取 DOCX 段落（从TXT文件）===");
-        List<DocxParagraph> docxParagraphs = parseDocxParagraphsFromTxt(docxTxtPath);
-        System.out.println("从 TXT 文件读取到 " + docxParagraphs.size() + " 个 DOCX 段落");
-
-        // 步骤2: 从 PDF 提取段落
-        System.out.println("\n=== 从 PDF 提取段落 ===");
-        List<String> pdfParagraphs = extractParagraphsFromPdf(pdfPath);
-        System.out.println("从 PDF 提取到 " + pdfParagraphs.size() + " 个段落");
-
-        // 步骤3: 建立映射关系
-        System.out.println("\n=== 建立段落映射关系 ===\n");
-        Map<String, List<Integer>> mapping = buildParagraphMapping(docxParagraphs, pdfParagraphs);
-
-        // 步骤4: 输出映射结果
-        printMappingResult(docxParagraphs, pdfParagraphs, mapping);
     }
 
     /**
@@ -310,7 +299,62 @@ public class ParagraphMapper {
     }
 
     /**
-     * 建立 DOCX 段落到 PDF 段落的映射
+     * 建立 DOCX 段落到 PDF 段落的映射（方案A：直接ID匹配）
+     *
+     * 主要思路：
+     * 1. 从 _pdf.txt 文件中读取PDF段落（带ID）
+     * 2. 直接通过ID匹配：docx的 t001-r007-c001-p001 对应 pdf的 t001-r007-c001-p001
+     * 3. 构建 Map<ID, PDF段落文本>
+     * 4. 返回映射关系
+     *
+     * 优点：简单、准确、不会错位
+     * 前提：_pdf.txt 必须已经生成（包含完整的表格结构和ID）
+     *
+     * @param docxParagraphs DOCX 段落列表
+     * @param pdfTxtPath PDF txt 文件路径（_pdf.txt）
+     * @return 映射关系 Map<DOCX段落ID, PDF段落文本>
+     * @throws IOException 文件读取异常
+     */
+    public static Map<String, String> buildParagraphMappingById(
+            List<DocxParagraph> docxParagraphs,
+            String pdfTxtPath) throws IOException {
+
+        Map<String, String> mapping = new LinkedHashMap<>();
+
+        // 1. 从 _pdf.txt 读取 PDF 段落（带ID）
+        String pdfContent = new String(Files.readAllBytes(Paths.get(pdfTxtPath)), StandardCharsets.UTF_8);
+        Document pdfDoc = Jsoup.parse(pdfContent);
+
+        // 2. 提取所有 p 标签，建立 ID -> 文本 映射
+        Map<String, String> pdfMap = new HashMap<>();
+        Elements pdfPs = pdfDoc.select("p[id]");
+        for (Element p : pdfPs) {
+            String id = p.attr("id");
+            String text = p.text().trim();
+            if (!id.isEmpty()) {
+                pdfMap.put(id, text);
+            }
+        }
+
+        // 3. 遍历 DOCX 段落，通过 ID 查找对应的 PDF 文本
+        for (DocxParagraph docxPara : docxParagraphs) {
+            String docxId = docxPara.id;
+            if (docxId.isEmpty()) continue;
+
+            String pdfText = pdfMap.get(docxId);
+            if (pdfText != null) {
+                mapping.put(docxId, pdfText);
+            } else {
+                // 未找到匹配，记录为空
+                mapping.put(docxId, "");
+            }
+        }
+
+        return mapping;
+    }
+
+    /**
+     * 建立 DOCX 段落到 PDF 段落的映射（旧方法：顺序文本匹配）
      *
      * 主要思路：
      * 1. 映射规则：1 个 DOCX 段落对应 1 到多个 PDF 段落
@@ -504,7 +548,100 @@ public class ParagraphMapper {
     }
 
     /**
-     * 将PDF表格数据写入到txt文件（用于调试匹配率）
+     * 将PDF表格数据写入到txt文件（方案A：使用ID直接匹配）
+     *
+     * 主要思路：
+     * 1. 从 DOCX txt 文件中解析表格结构，提取单元格ID
+     * 2. 从 _pdf.txt 文件中读取PDF段落（带ID）
+     * 3. 直接通过ID匹配（不需要文本归一化）
+     * 4. 输出映射结果到 _tables.txt 文件，方便调试和排查匹配率
+     *
+     * 输出格式：
+     * - DOCX ID: t001-r006-c002-p001
+     * - PDF内容: [匹配到的PDF段落内容]
+     * - 如果未匹配：显示 [未匹配到PDF内容]
+     *
+     * 前提：_pdf.txt 必须已经生成（通过 writePdfStructureToHtml 方法）
+     *
+     * @param pdfPath PDF文件路径（必须是PDF/A-4或Tagged版本）
+     * @param docxTxtPath 对应的 DOCX txt 文件路径（包含表格ID）
+     * @throws IOException 文件读写异常
+     */
+    public static void writePdfTablesToTxtById(String pdfPath, String docxTxtPath) throws IOException {
+        // 1. 从DOCX txt解析表格段落（获取ID和文本）
+        List<DocxParagraph> docxParagraphs = parseDocxParagraphsFromTxt(docxTxtPath);
+
+        // 2. 生成 _pdf.txt 路径
+        File pdfFile = new File(pdfPath);
+        String pdfDir = pdfFile.getParent();
+        String pdfName = pdfFile.getName().replaceFirst("[.][^.]+$", ""); // 去除扩展名
+        String pdfTxtPath = pdfDir + File.separator + pdfName + "_pdf.txt";
+
+        // 3. 使用ID直接匹配（从 _pdf.txt 读取）
+        Map<String, String> mapping = buildParagraphMappingById(docxParagraphs, pdfTxtPath);
+
+        // 4. 生成输出文件
+        String outputPath = pdfDir + File.separator + pdfName + "_tables.txt";
+
+        StringBuilder output = new StringBuilder();
+        output.append("=== PDF表格数据提取（ID直接匹配）===\n");
+        output.append("PDF文件: ").append(pdfFile.getName()).append("\n");
+        output.append("提取时间: ").append(new java.util.Date()).append("\n");
+        output.append("匹配方法: 直接ID匹配（无需文本归一化）\n\n");
+
+        // 5. 只输出表格单元格的映射
+        int tableCount = 0;
+        int matchedCount = 0;
+        int unmatchedCount = 0;
+        String currentTable = "";
+
+        for (DocxParagraph docxPara : docxParagraphs) {
+            if (!docxPara.isTableCell()) continue;  // 跳过非表格段落
+
+            String cellId = docxPara.id;
+            if (cellId.isEmpty()) continue;
+
+            // 检测是否是新表格（提取 t001 部分）
+            int rIndex = cellId.indexOf("-r");
+            if (rIndex == -1) continue;
+
+            String tableId = cellId.substring(0, rIndex);  // 提取 t001
+            if (!tableId.equals(currentTable)) {
+                currentTable = tableId;
+                tableCount++;
+                output.append("\n【表格 ").append(tableId).append("】\n\n");
+            }
+
+            // 获取对应的PDF段落
+            String pdfText = mapping.get(cellId);
+            if (pdfText != null && !pdfText.isEmpty()) {
+                output.append(cellId).append(": ").append(pdfText).append("\n");
+                matchedCount++;
+            } else {
+                output.append(cellId).append(": [未匹配到PDF内容]\n");
+                unmatchedCount++;
+            }
+        }
+
+        output.append("\n=== 统计信息 ===\n");
+        output.append("表格总数: ").append(tableCount).append("\n");
+        long totalTableCells = docxParagraphs.stream().filter(p -> p.isTableCell()).count();
+        output.append("DOCX表格单元格总数: ").append(totalTableCells).append("\n");
+        output.append("成功匹配: ").append(matchedCount).append("\n");
+        output.append("未匹配: ").append(unmatchedCount).append("\n");
+        output.append("匹配率: ").append(String.format("%.2f%%",
+            totalTableCells > 0 ? (matchedCount * 100.0 / totalTableCells) : 0)).append("\n");
+
+        // 写入文件（使用 Files.write 确保 UTF-8 编码）
+        Files.write(Paths.get(outputPath), output.toString().getBytes(StandardCharsets.UTF_8));
+
+        System.out.println("表格数据已写入到: " + outputPath);
+        System.out.println("提取了 " + tableCount + " 个表格，匹配率: " +
+            String.format("%.2f%%", totalTableCells > 0 ? (matchedCount * 100.0 / totalTableCells) : 0));
+    }
+
+    /**
+     * 将PDF表格数据写入到txt文件（旧方法：顺序文本匹配）
      *
      * 主要思路：
      * 1. 从HTML文件（TXT格式）中解析DOCX表格结构，提取单元格ID
