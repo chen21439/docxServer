@@ -1,18 +1,16 @@
 package com.example.docxserver.util;
 
+import com.example.docxserver.pdf.util.*;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
-import org.apache.pdfbox.text.TextPosition;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -27,6 +25,11 @@ import java.util.*;
  * - PDF 为 PDF/A-4 或 Tagged 版本，保留了完整的结构标签（table、tr、td、p）
  * - DOCX 和 PDF 的表格结构完全对应，相同ID的单元格内容相同
  * - 因此不需要复杂的文本归一化匹配，直接通过ID即可匹配
+ *
+ * 协调类职责：
+ * - 提供测试入口main()
+ * - 协调各个工具类完成任务
+ * - 输出结果到文件
  */
 public class ParagraphMapper {
 
@@ -45,14 +48,14 @@ public class ParagraphMapper {
 //        System.out.println();
 
         // 步骤0-3: 测试通过ID在PDF中查找文本
-        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
-        testFindTextByIdInPdf(pdfPath, docxTxtPath);
-        System.out.println();
+//        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
+//        testFindTextByIdInPdf(pdfPath, docxTxtPath);
+//        System.out.println();
 
         // 步骤0-4: 使用PDFTextStripper提取PDF全文到txt
-        System.out.println("=== 使用PDFTextStripper提取PDF全文 ===");
-        extractPdfTextWithStripper(pdfPath);
-        System.out.println();
+//        System.out.println("=== 使用PDFTextStripper提取PDF全文 ===");
+//        extractPdfTextWithStripper(pdfPath);
+//        System.out.println();
     }
 
     /**
@@ -1392,17 +1395,77 @@ public class ParagraphMapper {
     }
 
     /**
-     * 从结构元素中提取文本
+     * 从结构元素中提取文本（基于MCID）
      */
     private static String extractTextFromElement(
             org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element) throws IOException {
 
-        StringBuilder text = new StringBuilder();
+        // 1. 优先使用 /ActualText
+        String actualText = element.getActualText();
+        if (actualText != null && !actualText.isEmpty()) {
+            return actualText;
+        }
 
-        // 递归提取所有文本内容
-        extractTextRecursive(element, text);
+        // 2. 通过 COSObject 获取 MCID
+        Set<Integer> mcids = new HashSet<>();
+        org.apache.pdfbox.pdmodel.PDPage page = null;
 
-        return text.toString().trim();
+        try {
+            // 获取page
+            page = element.getPage();
+            if (page == null) {
+                return "";
+            }
+
+            // 从 COSObject 中获取 /K (Kids) 数组或单个值
+            org.apache.pdfbox.cos.COSBase kidsBase = element.getCOSObject().getDictionaryObject(org.apache.pdfbox.cos.COSName.K);
+
+            if (kidsBase == null) {
+                return "";
+            }
+
+            // K 可能是单个整数(MCID)、单个字典或数组
+            if (kidsBase instanceof org.apache.pdfbox.cos.COSInteger) {
+                // 单个MCID
+                mcids.add(((org.apache.pdfbox.cos.COSInteger) kidsBase).intValue());
+            } else if (kidsBase instanceof org.apache.pdfbox.cos.COSArray) {
+                // MCID数组
+                org.apache.pdfbox.cos.COSArray kidsArray = (org.apache.pdfbox.cos.COSArray) kidsBase;
+                for (org.apache.pdfbox.cos.COSBase kid : kidsArray) {
+                    if (kid instanceof org.apache.pdfbox.cos.COSInteger) {
+                        mcids.add(((org.apache.pdfbox.cos.COSInteger) kid).intValue());
+                    } else if (kid instanceof org.apache.pdfbox.cos.COSDictionary) {
+                        // 标记内容引用字典
+                        org.apache.pdfbox.cos.COSDictionary kidDict = (org.apache.pdfbox.cos.COSDictionary) kid;
+                        org.apache.pdfbox.cos.COSBase mcidObj = kidDict.getDictionaryObject(org.apache.pdfbox.cos.COSName.MCID);
+                        if (mcidObj instanceof org.apache.pdfbox.cos.COSInteger) {
+                            mcids.add(((org.apache.pdfbox.cos.COSInteger) mcidObj).intValue());
+                        }
+                    }
+                }
+            } else if (kidsBase instanceof org.apache.pdfbox.cos.COSDictionary) {
+                // 单个字典
+                org.apache.pdfbox.cos.COSDictionary kidDict = (org.apache.pdfbox.cos.COSDictionary) kidsBase;
+                org.apache.pdfbox.cos.COSBase mcidObj = kidDict.getDictionaryObject(org.apache.pdfbox.cos.COSName.MCID);
+                if (mcidObj instanceof org.apache.pdfbox.cos.COSInteger) {
+                    mcids.add(((org.apache.pdfbox.cos.COSInteger) mcidObj).intValue());
+                }
+            }
+
+            if (mcids.isEmpty()) {
+                return "";
+            }
+
+            // 3. 使用MCIDTextExtractor按MCID提取文本
+            MCIDTextExtractor extractor = new MCIDTextExtractor(mcids);
+            extractor.processPage(page);
+            return extractor.getText();
+
+        } catch (Exception e) {
+            // 发生异常时返回空字符串
+            System.err.println("提取文本失败: " + e.getMessage());
+            return "";
+        }
     }
 
     /**
