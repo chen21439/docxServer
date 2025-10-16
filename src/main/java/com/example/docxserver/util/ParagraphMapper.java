@@ -77,20 +77,21 @@ public class ParagraphMapper {
 
         System.out.println("随机选择了 " + testIds.size() + " 个ID进行测试:\n");
 
-        // 3. 批量查找
-        Map<String, String> results = findTextByIdInPdf(pdfPath, testIds);
+        // 3. 使用新的 PdfStructureTreeNavigator 批量查找
+        Map<String, String> results = PdfStructureTreeNavigator.findTextByIdInPdf(pdfPath, testIds);
 
-        // 4. 输出结果
+        // 4. 输出详细结果
+        System.out.println("\n=== 详细结果 ===");
         for (String id : testIds) {
             String text = results.get(id);
             System.out.println("ID: " + id);
-            System.out.println("  文本: " + (text != null ? text : "[未找到]"));
+            System.out.println("  文本: " + (text != null && !text.isEmpty() ? text : "[未找到]"));
             System.out.println();
         }
 
         // 5. 统计
         long foundCount = results.values().stream().filter(v -> v != null && !v.isEmpty()).count();
-        System.out.println("=== 统计 ===");
+        System.out.println("=== 最终统计 ===");
         System.out.println("测试总数: " + testIds.size());
         System.out.println("成功找到: " + foundCount);
         System.out.println("未找到: " + (testIds.size() - foundCount));
