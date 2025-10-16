@@ -10,6 +10,7 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
@@ -24,11 +25,21 @@ public class ParagraphMapper {
 
     public static void main(String[] args) throws Exception {
         String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217.pdf";
-        String txtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217.txt";
+        String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
+
+        // 步骤0-1: 将PDF表格结构写入HTML格式的txt文件（包含ID）
+        System.out.println("=== 提取PDF表格结构到HTML格式TXT ===");
+        writePdfStructureToHtml(pdfPath);
+        System.out.println();
+
+        // 步骤0-2: 将PDF表格数据写入txt文件（匹配结果）
+        System.out.println("=== 提取PDF表格数据到TXT（匹配结果）===");
+        writePdfTablesToTxt(pdfPath, docxTxtPath);
+        System.out.println();
 
         // 步骤1: 读取 TXT 文件中的 DOCX 段落
         System.out.println("=== 读取 DOCX 段落（从TXT文件）===");
-        List<DocxParagraph> docxParagraphs = parseDocxParagraphsFromTxt(txtPath);
+        List<DocxParagraph> docxParagraphs = parseDocxParagraphsFromTxt(docxTxtPath);
         System.out.println("从 TXT 文件读取到 " + docxParagraphs.size() + " 个 DOCX 段落");
 
         // 步骤2: 从 PDF 提取段落
@@ -120,20 +131,9 @@ public class ParagraphMapper {
 
         // 2. 提取表格单元格（table td 内的 p 标签，按 td 合并）
         Elements tables = doc.select("table");
-        System.out.println("\n=== 表格提取详情 ===");
-        System.out.println("总共找到 " + tables.size() + " 个表格\n");
-
-        // 选择要打印的表格索引
-        Set<Integer> tablesToPrint = new HashSet<>(Arrays.asList(8, 9, 10)); // 第9、10、11个表格（索引从0开始）
 
         for (int tableIndex = 0; tableIndex < tables.size(); tableIndex++) {
             Element table = tables.get(tableIndex);
-            String tableId = table.attr("id");
-
-            if (tablesToPrint.contains(tableIndex)) {
-                System.out.println("【表格 " + (tableIndex + 1) + "】 ID: " + tableId);
-            }
-
             Elements rows = table.select("tr");
 
             for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
@@ -149,7 +149,6 @@ public class ParagraphMapper {
 
                     StringBuilder cellText = new StringBuilder();
                     String cellId = "";
-                    List<String> pTexts = new ArrayList<>();
 
                     for (int i = 0; i < cellPs.size(); i++) {
                         Element p = cellPs.get(i);
@@ -162,7 +161,6 @@ public class ParagraphMapper {
                         }
 
                         if (!pText.isEmpty()) {
-                            pTexts.add(pText);
                             if (cellText.length() > 0) {
                                 cellText.append(" "); // 多个段落之间用空格分隔
                             }
@@ -170,28 +168,10 @@ public class ParagraphMapper {
                         }
                     }
 
-                    // 打印选中表格的单元格详情
-                    if (tablesToPrint.contains(tableIndex) && cellText.length() > 0) {
-                        System.out.println("  行" + (rowIndex + 1) + " 列" + (cellIndex + 1) + " - Cell ID: " + cellId);
-                        if (pTexts.size() > 1) {
-                            System.out.println("    包含 " + pTexts.size() + " 个 <p> 标签:");
-                            for (int i = 0; i < pTexts.size(); i++) {
-                                System.out.println("      P" + (i + 1) + ": " + truncate(pTexts.get(i), 60));
-                            }
-                            System.out.println("    合并后: " + truncate(cellText.toString(), 80));
-                        } else {
-                            System.out.println("    内容: " + truncate(cellText.toString(), 80));
-                        }
-                    }
-
                     if (cellText.length() > 0) {
                         paragraphs.add(new DocxParagraph(cellId, cellText.toString(), ParagraphType.TABLE_CELL));
                     }
                 }
-            }
-
-            if (tablesToPrint.contains(tableIndex)) {
-                System.out.println();
             }
         }
 
@@ -206,6 +186,7 @@ public class ParagraphMapper {
      * 2. 使用 PDFTextStripper 按位置排序（setSortByPosition(true)）
      * 3. 通过换行符分割段落（PDF 内部已经有段落标记）
      * 4. 读取顺序与 DOCX 的导出顺序一致，便于映射
+     * 5. 同时标记哪些段落属于表格，用于调试
      *
      * @param pdfPath PDF 文件路径
      * @return PDF 段落文本列表
@@ -250,7 +231,82 @@ public class ParagraphMapper {
             }
         }
 
+        // 调试：打印段落，用于识别表格内容
+        printPdfTableDebugInfo(paragraphs);
+
         return paragraphs;
+    }
+
+    /**
+     * 打印 PDF 表格调试信息
+     *
+     * 思路：
+     * 1. 由于 PDF 按顺序读取，表格内容也是按顺序的
+     * 2. 通过段落内容的特征（短文本、重复模式）来推测表格边界
+     * 3. 打印第 9、10、11 个推测的表格内的所有段落
+     */
+    private static void printPdfTableDebugInfo(List<String> paragraphs) {
+        System.out.println("\n=== PDF 段落提取详情 ===");
+        System.out.println("总共提取到 " + paragraphs.size() + " 个段落\n");
+
+        // 简单启发式：识别可能是表格的段落序列
+        // 表格特征：连续的短段落（长度 < 50）
+        List<TableGroup> tables = new ArrayList<>();
+        List<Integer> currentTableIndices = new ArrayList<>();
+        int consecutiveShortCount = 0;
+
+        for (int i = 0; i < paragraphs.size(); i++) {
+            String para = paragraphs.get(i);
+            boolean isShort = para.length() < 50;
+
+            if (isShort) {
+                consecutiveShortCount++;
+                currentTableIndices.add(i);
+            } else {
+                // 连续出现 4 个以上短段落，认为是表格
+                if (consecutiveShortCount >= 4) {
+                    tables.add(new TableGroup(new ArrayList<>(currentTableIndices)));
+                }
+                consecutiveShortCount = 0;
+                currentTableIndices.clear();
+            }
+        }
+
+        // 处理最后一个表格
+        if (consecutiveShortCount >= 4) {
+            tables.add(new TableGroup(new ArrayList<>(currentTableIndices)));
+        }
+
+        System.out.println("识别到 " + tables.size() + " 个可能的表格区域");
+        System.out.println("显示第 9、10、11 个表格的内容:\n");
+
+        // 打印第 9、10、11 个表格
+        Set<Integer> tablesToPrint = new HashSet<>(Arrays.asList(8, 9, 10));
+        for (int tableIdx = 0; tableIdx < tables.size(); tableIdx++) {
+            if (tablesToPrint.contains(tableIdx)) {
+                TableGroup table = tables.get(tableIdx);
+                System.out.println("【PDF 表格 " + (tableIdx + 1) + "】");
+                System.out.println("  段落索引范围: " + table.indices.get(0) + " - " +
+                                 table.indices.get(table.indices.size() - 1));
+                System.out.println("  包含 " + table.indices.size() + " 个段落:");
+
+                for (int idx : table.indices) {
+                    System.out.println("    [" + (idx + 1) + "] " + truncate(paragraphs.get(idx), 100));
+                }
+                System.out.println();
+            }
+        }
+    }
+
+    /**
+     * 表格段落组
+     */
+    static class TableGroup {
+        List<Integer> indices;  // 段落索引列表
+
+        TableGroup(List<Integer> indices) {
+            this.indices = indices;
+        }
     }
 
     /**
@@ -445,6 +501,234 @@ public class ParagraphMapper {
         System.out.println("  已映射 PDF 段落数: " + totalMapped);
         System.out.println("  未映射 PDF 段落数: " + (pdfParagraphs.size() - totalMapped));
         System.out.println("  PDF 覆盖率: " + String.format("%.2f%%", (totalMapped * 100.0 / pdfParagraphs.size())));
+    }
+
+    /**
+     * 将PDF表格数据写入到txt文件（用于调试匹配率）
+     *
+     * 主要思路：
+     * 1. 从HTML文件（TXT格式）中解析DOCX表格结构，提取单元格ID
+     * 2. 从PDF中按顺序提取段落（PDF/A-4或Tagged版本保留了完整的表格结构）
+     * 3. 建立DOCX表格单元格到PDF段落的映射关系
+     * 4. 输出映射结果到txt文件，方便调试和排查匹配率
+     *
+     * 输出格式：
+     * - DOCX ID: t001-r006-c002-p001
+     * - PDF内容: [匹配到的PDF段落内容]
+     * - 如果未匹配：显示 [未匹配到PDF内容]
+     *
+     * @param pdfPath PDF文件路径（必须是PDF/A-4或Tagged版本）
+     * @param htmlPath 对应的HTML文件路径（从DOCX转换的HTML，包含表格ID）
+     * @throws IOException 文件读写异常
+     */
+    public static void writePdfTablesToTxt(String pdfPath, String htmlPath) throws IOException {
+        // 1. 从HTML解析DOCX表格段落（获取ID和文本）
+        List<DocxParagraph> docxParagraphs = parseDocxParagraphsFromTxt(htmlPath);
+
+        // 2. 从PDF提取段落（按顺序）
+        List<String> pdfParagraphs = extractParagraphsFromPdf(pdfPath);
+
+        // 3. 建立映射关系（DOCX ID -> PDF 段落索引列表）
+        Map<String, List<Integer>> mapping = buildParagraphMapping(docxParagraphs, pdfParagraphs);
+
+        // 4. 生成输出文件
+        File pdfFile = new File(pdfPath);
+        String pdfDir = pdfFile.getParent();
+        String pdfName = pdfFile.getName().replaceFirst("[.][^.]+$", ""); // 去除扩展名
+        String outputPath = pdfDir + File.separator + pdfName + "_tables.txt";
+
+        StringBuilder output = new StringBuilder();
+        output.append("=== PDF表格数据提取（用于调试匹配率）===\n");
+        output.append("PDF文件: ").append(pdfFile.getName()).append("\n");
+        output.append("提取时间: ").append(new java.util.Date()).append("\n\n");
+
+        // 5. 只输出表格单元格的映射
+        int tableCount = 0;
+        int matchedCount = 0;
+        int unmatchedCount = 0;
+        String currentTable = "";
+
+        for (DocxParagraph docxPara : docxParagraphs) {
+            if (!docxPara.isTableCell()) continue;  // 跳过非表格段落
+
+            String cellId = docxPara.id;
+            if (cellId.isEmpty()) continue;
+
+            // 检测是否是新表格
+            String tableId = cellId.substring(0, cellId.indexOf("-r"));  // 提取 t001
+            if (!tableId.equals(currentTable)) {
+                currentTable = tableId;
+                tableCount++;
+                output.append("\n【表格 ").append(tableId).append("】\n\n");
+            }
+
+            // 获取对应的PDF段落
+            List<Integer> pdfIndices = mapping.get(cellId);
+            if (pdfIndices != null && !pdfIndices.isEmpty()) {
+                // 合并多个PDF段落
+                StringBuilder pdfText = new StringBuilder();
+                for (int idx : pdfIndices) {
+                    if (idx < pdfParagraphs.size()) {
+                        if (pdfText.length() > 0) {
+                            pdfText.append(" ");
+                        }
+                        pdfText.append(pdfParagraphs.get(idx));
+                    }
+                }
+
+                output.append(cellId).append(": ").append(pdfText.toString()).append("\n");
+                matchedCount++;
+            } else {
+                // 未找到匹配的PDF段落
+                output.append(cellId).append(": [未匹配到PDF内容]\n");
+                unmatchedCount++;
+            }
+        }
+
+        output.append("\n=== 统计信息 ===\n");
+        output.append("表格总数: ").append(tableCount).append("\n");
+        long totalTableCells = docxParagraphs.stream().filter(p -> p.isTableCell()).count();
+        output.append("DOCX表格单元格总数: ").append(totalTableCells).append("\n");
+        output.append("成功匹配: ").append(matchedCount).append("\n");
+        output.append("未匹配: ").append(unmatchedCount).append("\n");
+        output.append("匹配率: ").append(String.format("%.2f%%",
+            totalTableCells > 0 ? (matchedCount * 100.0 / totalTableCells) : 0)).append("\n");
+
+        // 写入文件（使用 Files.write 确保 UTF-8 编码）
+        Files.write(Paths.get(outputPath), output.toString().getBytes(StandardCharsets.UTF_8));
+
+        System.out.println("表格数据已写入到: " + outputPath);
+        System.out.println("提取了 " + tableCount + " 个表格，匹配率: " +
+            String.format("%.2f%%", totalTableCells > 0 ? (matchedCount * 100.0 / totalTableCells) : 0));
+    }
+
+    /**
+     * 将PDF表格结构写入XML格式的txt文件（包含table、tr、td、p标签和ID）
+     *
+     * 主要思路：
+     * 1. 读取 DOCX 的 txt 文件，获取表格结构（table、tr、td）
+     * 2. 从PDF提取段落（按顺序）
+     * 3. 根据DOCX的表格结构，将PDF段落按照相同的结构组织
+     * 4. 为每个段落生成ID（格式：t001-r007-c001-p001）
+     * 5. 输出简洁的XML格式到 _pdf.txt 文件（只有table/tr/td/p标签，不包括html/body）
+     *
+     * @param pdfPath PDF文件路径（必须是PDF/A-4或Tagged版本）
+     * @throws IOException 文件读写异常
+     */
+    public static void writePdfStructureToHtml(String pdfPath) throws IOException {
+        // 1. 找到对应的 DOCX txt 文件
+        File pdfFile = new File(pdfPath);
+        String pdfDir = pdfFile.getParent();
+        String pdfName = pdfFile.getName().replaceFirst("[.][^.]+$", ""); // 去除扩展名
+        String docxTxtPath = pdfDir + File.separator + pdfName + "_docx.txt";
+        String outputPath = pdfDir + File.separator + pdfName + "_pdf.txt";
+
+        // 2. 从DOCX txt解析表格结构
+        List<DocxParagraph> docxParagraphs = parseDocxParagraphsFromTxt(docxTxtPath);
+
+        // 3. 从PDF提取段落
+        List<String> pdfParagraphs = extractParagraphsFromPdf(pdfPath);
+
+        // 4. 建立映射关系
+        Map<String, List<Integer>> mapping = buildParagraphMapping(docxParagraphs, pdfParagraphs);
+
+        // 5. 读取DOCX的HTML结构，用PDF内容替换
+        String docxContent = new String(Files.readAllBytes(Paths.get(docxTxtPath)), StandardCharsets.UTF_8);
+        Document doc = Jsoup.parse(docxContent);
+
+        // 6. 遍历所有表格，替换为PDF内容
+        Elements tables = doc.select("table");
+        for (Element table : tables) {
+            Elements rows = table.select("tr");
+            for (Element row : rows) {
+                Elements cells = row.select("td");
+                for (Element cell : cells) {
+                    Elements cellPs = cell.select("p");
+                    if (cellPs.isEmpty()) continue;
+
+                    // 获取第一个p的id
+                    Element firstP = cellPs.get(0);
+                    String cellId = firstP.attr("id");
+
+                    if (cellId.isEmpty()) continue;
+
+                    // 获取对应的PDF段落
+                    List<Integer> pdfIndices = mapping.get(cellId);
+                    if (pdfIndices != null && !pdfIndices.isEmpty()) {
+                        // 合并多个PDF段落
+                        StringBuilder pdfText = new StringBuilder();
+                        for (int idx : pdfIndices) {
+                            if (idx < pdfParagraphs.size()) {
+                                if (pdfText.length() > 0) {
+                                    pdfText.append(" ");
+                                }
+                                pdfText.append(pdfParagraphs.get(idx));
+                            }
+                        }
+
+                        // 替换单元格内容（只保留第一个p，设置PDF内容）
+                        cell.empty();
+                        cell.append("<p id=\"" + cellId + "\">" + escapeHtml(pdfText.toString()) + "</p>");
+                    }
+                }
+            }
+        }
+
+        // 7. 只输出表格结构（不包括<!DOCTYPE>、<html>、<head>、<body>标签）
+        StringBuilder output = new StringBuilder();
+        for (Element table : tables) {
+            output.append(table.outerHtml()).append("\n");
+        }
+
+        // 写入文件
+        Files.write(Paths.get(outputPath), output.toString().getBytes(StandardCharsets.UTF_8));
+
+        System.out.println("PDF表格结构已写入到: " + outputPath);
+        System.out.println("使用DOCX结构，填充PDF内容，共 " + tables.size() + " 个表格");
+    }
+
+    /**
+     * 识别PDF段落中的表格（启发式方法）
+     */
+    private static List<TableGroup> identifyTables(List<String> paragraphs) {
+        List<TableGroup> tables = new ArrayList<>();
+        List<Integer> currentTableIndices = new ArrayList<>();
+        int consecutiveShortCount = 0;
+
+        for (int i = 0; i < paragraphs.size(); i++) {
+            String para = paragraphs.get(i);
+            boolean isShort = para.length() < 50;
+
+            if (isShort) {
+                consecutiveShortCount++;
+                currentTableIndices.add(i);
+            } else {
+                // 连续出现 4 个以上短段落，认为是表格
+                if (consecutiveShortCount >= 4) {
+                    tables.add(new TableGroup(new ArrayList<>(currentTableIndices)));
+                }
+                consecutiveShortCount = 0;
+                currentTableIndices.clear();
+            }
+        }
+
+        // 处理最后一个表格
+        if (consecutiveShortCount >= 4) {
+            tables.add(new TableGroup(new ArrayList<>(currentTableIndices)));
+        }
+
+        return tables;
+    }
+
+    /**
+     * HTML转义
+     */
+    private static String escapeHtml(String text) {
+        return text.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace("\"", "&quot;")
+                   .replace("'", "&#39;");
     }
 
     /**
