@@ -33,15 +33,68 @@ public class ParagraphMapper {
         String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217.pdf";
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
 
-        // 步骤0-1: 将PDF表格结构写入XML格式的txt文件（包含ID）
-        System.out.println("=== 提取PDF表格结构到XML格式TXT ===");
-        writePdfStructureToHtml(pdfPath);
-        System.out.println();
+//        // 步骤0-1: 将PDF表格结构写入XML格式的txt文件（包含ID）
+//        System.out.println("=== 提取PDF表格结构到XML格式TXT ===");
+//        writePdfStructureToHtml(pdfPath);
+//        System.out.println();
+//
+//        // 步骤0-2: 使用新的ID匹配方法，生成匹配结果
+//        System.out.println("=== 使用ID直接匹配，生成匹配结果 ===");
+//        writePdfTablesToTxtById(pdfPath, docxTxtPath);
+//        System.out.println();
 
-        // 步骤0-2: 使用新的ID匹配方法，生成匹配结果
-        System.out.println("=== 使用ID直接匹配，生成匹配结果 ===");
-        writePdfTablesToTxtById(pdfPath, docxTxtPath);
+        // 步骤0-3: 测试通过ID在PDF中查找文本
+        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
+        testFindTextByIdInPdf(pdfPath, docxTxtPath);
         System.out.println();
+    }
+
+    /**
+     * 测试从PDF中根据ID查找文本
+     * 从docx.txt中随机选择一些表格单元格ID进行测试
+     */
+    private static void testFindTextByIdInPdf(String pdfPath, String docxTxtPath) throws IOException {
+        // 1. 从docx.txt读取所有表格单元格ID
+        List<DocxParagraph> docxParagraphs = parseDocxParagraphsFromTxt(docxTxtPath);
+        List<String> tableCellIds = new ArrayList<>();
+        for (DocxParagraph para : docxParagraphs) {
+            if (para.isTableCell() && !para.id.isEmpty()) {
+                tableCellIds.add(para.id);
+            }
+        }
+
+        System.out.println("从docx.txt中读取到 " + tableCellIds.size() + " 个表格单元格ID");
+
+        // 2. 随机选择10个ID进行测试
+        List<String> testIds = new ArrayList<>();
+        Random random = new Random();
+        int testCount = Math.min(10, tableCellIds.size());
+
+        for (int i = 0; i < testCount; i++) {
+            int randomIndex = random.nextInt(tableCellIds.size());
+            testIds.add(tableCellIds.get(randomIndex));
+        }
+
+        System.out.println("随机选择了 " + testIds.size() + " 个ID进行测试:\n");
+
+        // 3. 批量查找
+        Map<String, String> results = findTextByIdInPdf(pdfPath, testIds);
+
+        // 4. 输出结果
+        for (String id : testIds) {
+            String text = results.get(id);
+            System.out.println("ID: " + id);
+            System.out.println("  文本: " + (text != null ? text : "[未找到]"));
+            System.out.println();
+        }
+
+        // 5. 统计
+        long foundCount = results.values().stream().filter(v -> v != null && !v.isEmpty()).count();
+        System.out.println("=== 统计 ===");
+        System.out.println("测试总数: " + testIds.size());
+        System.out.println("成功找到: " + foundCount);
+        System.out.println("未找到: " + (testIds.size() - foundCount));
+        System.out.println("成功率: " + String.format("%.2f%%", foundCount * 100.0 / testIds.size()));
     }
 
     /**
@@ -858,6 +911,500 @@ public class ParagraphMapper {
     }
 
     /**
+     * 批量根据ID在PDF中查找对应的文本（使用PDFBox结构树）
+     *
+     * 主要思路：
+     * 1. 对ID列表按 table → row → col 顺序排序，保证遍历效率
+     * 2. 解析每个ID：t001-r007-c001-p001 -> table=1, row=7, col=1, para=1
+     * 3. 使用PDFBox读取Tagged PDF的结构树（Structure Tree）
+     * 4. 按排序后的顺序遍历，依次查找每个ID对应的单元格
+     * 5. 提取文本内容并返回Map<ID, 文本>
+     * 6. 后续可在此基础上修改格式
+     *
+     * 前提：PDF是PDF/A-4版本的Tagged PDF，保留了完整的结构标签
+     *
+     * @param pdfPath PDF文件路径
+     * @param cellIds 单元格ID列表（格式：t001-r007-c001-p001）
+     * @return Map<ID, 文本内容>，未找到的ID对应null
+     * @throws IOException 文件读取异常
+     */
+    public static Map<String, String> findTextByIdInPdf(String pdfPath, List<String> cellIds) throws IOException {
+        Map<String, String> results = new LinkedHashMap<>();
+
+        // 1. 对ID按table、row、col排序（保证遍历效率）
+        List<CellIdWithLocation> sortedIds = new ArrayList<>();
+        for (String cellId : cellIds) {
+            CellLocation location = parseCellId(cellId);
+            if (location != null) {
+                sortedIds.add(new CellIdWithLocation(cellId, location));
+            } else {
+                results.put(cellId, null);  // 无效ID
+            }
+        }
+
+        // 按table、row、col排序
+        Collections.sort(sortedIds, new Comparator<CellIdWithLocation>() {
+            @Override
+            public int compare(CellIdWithLocation a, CellIdWithLocation b) {
+                if (a.location.tableIndex != b.location.tableIndex) {
+                    return Integer.compare(a.location.tableIndex, b.location.tableIndex);
+                }
+                if (a.location.rowIndex != b.location.rowIndex) {
+                    return Integer.compare(a.location.rowIndex, b.location.rowIndex);
+                }
+                return Integer.compare(a.location.colIndex, b.location.colIndex);
+            }
+        });
+
+        System.out.println("\n=== 批量查找PDF文本 ===");
+        System.out.println("待查找ID数量: " + cellIds.size());
+        System.out.println("有效ID数量: " + sortedIds.size());
+
+        // 2. 打开PDF文档
+        File pdfFile = new File(pdfPath);
+        try (PDDocument doc = Loader.loadPDF(pdfFile)) {
+
+            // 3. 获取结构树根节点
+            if (doc.getDocumentCatalog() == null || doc.getDocumentCatalog().getStructureTreeRoot() == null) {
+                System.err.println("该PDF没有结构树（不是Tagged PDF）");
+                return results;
+            }
+
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot structTreeRoot =
+                doc.getDocumentCatalog().getStructureTreeRoot();
+
+            System.out.println("成功读取结构树根节点");
+            System.out.println("开始批量查找...\n");
+
+            // 4. 批量查找（按排序顺序遍历）
+            int foundCount = 0;
+            for (CellIdWithLocation item : sortedIds) {
+                String cellId = item.cellId;
+                CellLocation location = item.location;
+
+                String foundText = findTextInStructTreeByLocation(structTreeRoot, location);
+                results.put(cellId, foundText);
+
+                if (foundText != null && !foundText.isEmpty()) {
+                    foundCount++;
+                }
+            }
+
+            System.out.println("\n=== 查找完成 ===");
+            System.out.println("成功找到: " + foundCount + " / " + sortedIds.size());
+        }
+
+        return results;
+    }
+
+    /**
+     * 根据位置在结构树中查找文本（不输出调试信息）
+     */
+    private static String findTextInStructTreeByLocation(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot root,
+            CellLocation targetLocation) throws IOException {
+
+        Counter counter = new Counter();
+
+        // 获取所有子元素
+        for (Object kid : root.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                String result = findTextInElementSilent(element, targetLocation, counter, 0);
+                if (result != null) {
+                    return result;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 在结构元素中递归查找（静默模式，不输出调试信息）
+     */
+    private static String findTextInElementSilent(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
+            CellLocation targetLocation,
+            Counter counter,
+            int depth) throws IOException {
+
+        String structType = element.getStructureType();
+
+        // 如果是Table元素
+        if ("Table".equalsIgnoreCase(structType)) {
+            if (counter.tableIndex == targetLocation.tableIndex) {
+                // 找到目标表格，继续在其中查找行
+                return findRowInTableSilent(element, targetLocation, 0);
+            }
+            counter.tableIndex++;
+        }
+
+        // 递归处理子元素
+        for (Object kid : element.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                String result = findTextInElementSilent(childElement, targetLocation, counter, depth + 1);
+                if (result != null) {
+                    return result;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 在表格中查找行（静默模式）
+     */
+    private static String findRowInTableSilent(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement tableElement,
+            CellLocation targetLocation,
+            int currentRowIndex) throws IOException {
+
+        for (Object kid : tableElement.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                String structType = element.getStructureType();
+
+                // 如果是TR（表格行）
+                if ("TR".equalsIgnoreCase(structType)) {
+                    if (currentRowIndex == targetLocation.rowIndex) {
+                        // 找到目标行
+                        return findCellInRowSilent(element, targetLocation, 0);
+                    }
+                    currentRowIndex++;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 在行中查找单元格（静默模式）
+     */
+    private static String findCellInRowSilent(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement rowElement,
+            CellLocation targetLocation,
+            int currentColIndex) throws IOException {
+
+        for (Object kid : rowElement.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                String structType = element.getStructureType();
+
+                // 如果是TD（表格单元格）
+                if ("TD".equalsIgnoreCase(structType)) {
+                    if (currentColIndex == targetLocation.colIndex) {
+                        // 找到目标单元格
+                        return extractTextFromElement(element);
+                    }
+                    currentColIndex++;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * ID和位置的组合类（用于排序）
+     */
+    static class CellIdWithLocation {
+        String cellId;
+        CellLocation location;
+
+        CellIdWithLocation(String cellId, CellLocation location) {
+            this.cellId = cellId;
+            this.location = location;
+        }
+    }
+
+    /**
+     * 根据ID在PDF中查找对应的文本（单个查找，带调试输出）
+     *
+     * @param pdfPath PDF文件路径
+     * @param cellId 单元格ID（格式：t001-r007-c001-p001）
+     * @return 对应的文本内容，如果未找到返回null
+     * @throws IOException 文件读取异常
+     * @deprecated 使用批量版本 {@link #findTextByIdInPdf(String, List)} 替代
+     */
+    @Deprecated
+    public static String findTextByIdInPdfSingle(String pdfPath, String cellId) throws IOException {
+        // 1. 解析ID，提取table、row、col、para索引
+        CellLocation location = parseCellId(cellId);
+        if (location == null) {
+            System.err.println("无效的ID格式: " + cellId);
+            return null;
+        }
+
+        System.out.println("\n=== 查找PDF文本 ===");
+        System.out.println("目标ID: " + cellId);
+        System.out.println("  表格索引: " + location.tableIndex + " (第" + (location.tableIndex + 1) + "个表格)");
+        System.out.println("  行索引: " + location.rowIndex + " (第" + (location.rowIndex + 1) + "行)");
+        System.out.println("  列索引: " + location.colIndex + " (第" + (location.colIndex + 1) + "列)");
+        System.out.println("  段落索引: " + location.paraIndex);
+
+        // 2. 打开PDF文档
+        File pdfFile = new File(pdfPath);
+        try (PDDocument doc = Loader.loadPDF(pdfFile)) {
+
+            // 3. 获取文档目录（Document Catalog）
+            if (doc.getDocumentCatalog() == null) {
+                System.err.println("无法获取文档目录");
+                return null;
+            }
+
+            // 4. 获取结构树根节点
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot structTreeRoot =
+                doc.getDocumentCatalog().getStructureTreeRoot();
+
+            if (structTreeRoot == null) {
+                System.err.println("该PDF没有结构树（不是Tagged PDF）");
+                return null;
+            }
+
+            System.out.println("成功读取结构树根节点");
+
+            // 5. 遍历结构树，查找表格
+            int tableCount = 0;
+            String foundText = findTextInStructTree(structTreeRoot, location, new Counter());
+
+            if (foundText != null) {
+                System.out.println("\n找到文本: " + foundText);
+                return foundText;
+            } else {
+                System.err.println("\n未找到对应的文本");
+                return null;
+            }
+        }
+    }
+
+    /**
+     * 在结构树中递归查找文本
+     */
+    private static String findTextInStructTree(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot root,
+            CellLocation targetLocation,
+            Counter counter) throws IOException {
+
+        // 获取所有子元素
+        for (Object kid : root.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                String result = findTextInElement(element, targetLocation, counter, 0);
+                if (result != null) {
+                    return result;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 在结构元素中递归查找
+     */
+    private static String findTextInElement(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
+            CellLocation targetLocation,
+            Counter counter,
+            int depth) throws IOException {
+
+        String structType = element.getStructureType();
+        String indent = repeatString("  ", depth);
+
+        // 调试输出
+        if (depth < 3) {  // 只打印前3层
+            System.out.println(indent + "- " + structType);
+        }
+
+        // 如果是Table元素
+        if ("Table".equalsIgnoreCase(structType)) {
+            if (counter.tableIndex == targetLocation.tableIndex) {
+                // 找到目标表格，继续在其中查找行
+                System.out.println(indent + "  ✓ 找到目标表格 (索引=" + counter.tableIndex + ")");
+                return findRowInTable(element, targetLocation, 0, depth + 1);
+            }
+            counter.tableIndex++;
+        }
+
+        // 递归处理子元素
+        for (Object kid : element.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                String result = findTextInElement(childElement, targetLocation, counter, depth + 1);
+                if (result != null) {
+                    return result;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 在表格中查找行
+     */
+    private static String findRowInTable(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement tableElement,
+            CellLocation targetLocation,
+            int currentRowIndex,
+            int depth) throws IOException {
+
+        String indent = repeatString("  ", depth);
+
+        for (Object kid : tableElement.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                String structType = element.getStructureType();
+
+                // 如果是TR（表格行）
+                if ("TR".equalsIgnoreCase(structType)) {
+                    if (currentRowIndex == targetLocation.rowIndex) {
+                        // 找到目标行
+                        System.out.println(indent + "✓ 找到目标行 (索引=" + currentRowIndex + ")");
+                        return findCellInRow(element, targetLocation, 0, depth + 1);
+                    }
+                    currentRowIndex++;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 在行中查找单元格
+     */
+    private static String findCellInRow(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement rowElement,
+            CellLocation targetLocation,
+            int currentColIndex,
+            int depth) throws IOException {
+
+        String indent = repeatString("  ", depth);
+
+        for (Object kid : rowElement.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                String structType = element.getStructureType();
+
+                // 如果是TD（表格单元格）
+                if ("TD".equalsIgnoreCase(structType)) {
+                    if (currentColIndex == targetLocation.colIndex) {
+                        // 找到目标单元格
+                        System.out.println(indent + "✓ 找到目标单元格 (索引=" + currentColIndex + ")");
+                        return extractTextFromElement(element);
+                    }
+                    currentColIndex++;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 从结构元素中提取文本
+     */
+    private static String extractTextFromElement(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element) throws IOException {
+
+        StringBuilder text = new StringBuilder();
+
+        // 递归提取所有文本内容
+        extractTextRecursive(element, text);
+
+        return text.toString().trim();
+    }
+
+    /**
+     * 递归提取文本
+     */
+    private static void extractTextRecursive(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
+            StringBuilder text) throws IOException {
+
+        for (Object kid : element.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+                extractTextRecursive(childElement, text);
+            } else if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent) {
+                // 处理标记内容
+                org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent mc =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent) kid;
+
+                // 从标记内容中提取文本
+                // 这里需要通过页面内容流来获取实际文本
+                // 暂时使用简化方法
+                text.append(mc.toString()).append(" ");
+            }
+        }
+    }
+
+    /**
+     * 计数器类（用于遍历时计数）
+     */
+    static class Counter {
+        int tableIndex = 0;
+    }
+
+    /**
+     * 解析单元格ID
+     *
+     * @param cellId 格式：t001-r007-c001-p001
+     * @return CellLocation对象，解析失败返回null
+     */
+    private static CellLocation parseCellId(String cellId) {
+        try {
+            // 示例：t001-r007-c001-p001
+            String[] parts = cellId.split("-");
+            if (parts.length != 4) {
+                return null;
+            }
+
+            int tableIndex = Integer.parseInt(parts[0].substring(1)) - 1; // t001 -> 0
+            int rowIndex = Integer.parseInt(parts[1].substring(1)) - 1;   // r007 -> 6
+            int colIndex = Integer.parseInt(parts[2].substring(1)) - 1;   // c001 -> 0
+            int paraIndex = Integer.parseInt(parts[3].substring(1)) - 1;  // p001 -> 0
+
+            return new CellLocation(tableIndex, rowIndex, colIndex, paraIndex);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 单元格位置信息
+     */
+    static class CellLocation {
+        int tableIndex;  // 表格索引（从0开始）
+        int rowIndex;    // 行索引（从0开始）
+        int colIndex;    // 列索引（从0开始）
+        int paraIndex;   // 段落索引（从0开始）
+
+        CellLocation(int tableIndex, int rowIndex, int colIndex, int paraIndex) {
+            this.tableIndex = tableIndex;
+            this.rowIndex = rowIndex;
+            this.colIndex = colIndex;
+            this.paraIndex = paraIndex;
+        }
+    }
+
+    /**
      * HTML转义
      */
     private static String escapeHtml(String text) {
@@ -876,6 +1423,21 @@ public class ParagraphMapper {
             return text;
         }
         return text.substring(0, maxLength) + "...";
+    }
+
+    /**
+     * 重复字符串（Java 8兼容）
+     * 替代String.repeat()方法（该方法在Java 11+才可用）
+     */
+    private static String repeatString(String str, int count) {
+        if (count <= 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(str.length() * count);
+        for (int i = 0; i < count; i++) {
+            sb.append(str);
+        }
+        return sb.toString();
     }
 
 }
