@@ -1,0 +1,278 @@
+package com.example.docxserver.util;
+
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.*;
+
+/**
+ * PDF文本提取支持类
+ * 提供PDF表格遍历和文本提取的公共方法，复用toXML()方法中的核心逻辑
+ *
+ * 核心功能：
+ * 1. 遍历PDF结构树中的表格、行、单元格
+ * 2. 为每个单元格生成ID（格式：t001-r007-c001-p001）
+ * 3. 从单元格中提取文本内容
+ * 4. 支持按顺序读取表格数据（与toXML()方法保持一致）
+ *
+ * @author Claude
+ */
+public class PdfTextExtractSupport {
+
+    /**
+     * 从PDF中按ID提取文本
+     * 参考toXML()方法的实现逻辑，确保顺序和ID生成规则一致
+     *
+     * @param pdfPath PDF文件路径
+     * @param targetIds 目标ID列表
+     * @return Map<ID, 文本内容>
+     * @throws IOException 文件读取异常
+     */
+    public static Map<String, String> extractTextByIds(String pdfPath, List<String> targetIds) throws IOException {
+        Map<String, String> results = new LinkedHashMap<>();
+
+        // 将目标ID转换为Set，便于快速查找
+        Set<String> targetIdSet = new HashSet<>(targetIds);
+
+        // 打开PDF文档
+        File pdfFile = new File(pdfPath);
+        try (PDDocument doc = Loader.loadPDF(pdfFile)) {
+
+            // 获取结构树根节点
+            if (doc.getDocumentCatalog() == null || doc.getDocumentCatalog().getStructureTreeRoot() == null) {
+                System.err.println("该PDF没有结构树（不是Tagged PDF）");
+                return results;
+            }
+
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot structTreeRoot =
+                doc.getDocumentCatalog().getStructureTreeRoot();
+
+            System.out.println("开始从PDF提取指定ID的文本...");
+
+            // 遍历结构树，提取目标ID的文本
+            TableCounter tableCounter = new TableCounter();
+            for (Object kid : structTreeRoot.getKids()) {
+                if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                    org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element =
+                        (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+                    extractTablesWithIds(element, doc, targetIdSet, results, tableCounter);
+                }
+            }
+
+            System.out.println("提取完成，成功提取 " + results.size() + " / " + targetIds.size() + " 个ID");
+        }
+
+        return results;
+    }
+
+    /**
+     * 从结构元素中递归提取表格（只提取目标ID的文本）
+     * 参考ParagraphMapper.toXML()的实现逻辑
+     */
+    private static void extractTablesWithIds(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
+            PDDocument doc,
+            Set<String> targetIdSet,
+            Map<String, String> results,
+            TableCounter tableCounter) throws IOException {
+
+        String structType = element.getStructureType();
+
+        // 如果是Table元素
+        if ("Table".equalsIgnoreCase(structType)) {
+            int tableIndex = tableCounter.tableIndex++;
+            String tableId = "t" + String.format("%03d", tableIndex + 1);
+
+            // 提取表格内的行
+            int rowIndex = 0;
+            for (Object kid : element.getKids()) {
+                if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                    org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement rowElement =
+                        (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                    if ("TR".equalsIgnoreCase(rowElement.getStructureType())) {
+                        String rowId = tableId + "-r" + String.format("%03d", rowIndex + 1);
+
+                        // 提取行内的单元格
+                        int colIndex = 0;
+                        for (Object cellKid : rowElement.getKids()) {
+                            if (cellKid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement cellElement =
+                                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) cellKid;
+
+                                if ("TD".equalsIgnoreCase(cellElement.getStructureType())) {
+                                    String cellId = rowId + "-c" + String.format("%03d", colIndex + 1) + "-p001";
+
+                                    // 只提取目标ID的文本
+                                    if (targetIdSet.contains(cellId)) {
+                                        String cellText = extractTextFromCell(cellElement, doc);
+                                        results.put(cellId, cellText);
+                                    }
+
+                                    colIndex++;
+                                }
+                            }
+                        }
+                        rowIndex++;
+                    }
+                }
+            }
+        }
+
+        // 递归处理子元素（继续查找更多表格）
+        for (Object kid : element.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+                extractTablesWithIds(childElement, doc, targetIdSet, results, tableCounter);
+            }
+        }
+    }
+
+    /**
+     * 从单元格中提取文本
+     * 参考ParagraphMapper.extractTextFromElement()的实现逻辑
+     * 使用MCID方式提取文本（与toXML()保持一致）
+     */
+    private static String extractTextFromCell(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement cellElement,
+            PDDocument doc) throws IOException {
+
+        // 1. 优先使用 /ActualText
+        String actualText = cellElement.getActualText();
+        if (actualText != null && !actualText.isEmpty()) {
+            return actualText;
+        }
+
+        // 2. 收集该TD后代的MCID，按页分桶
+        Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> mcidsByPage = collectMcidsByPage(cellElement);
+
+        if (mcidsByPage.isEmpty()) {
+            // 没有MCID，尝试递归提取子元素的ActualText
+            return extractTextFromChildrenActualText(cellElement);
+        }
+
+        // 3. 按页提取文本
+        StringBuilder result = new StringBuilder();
+
+        try {
+            // 按文档页序遍历（确保文本顺序正确）
+            for (int i = 0; i < doc.getNumberOfPages(); i++) {
+                org.apache.pdfbox.pdmodel.PDPage page = doc.getPage(i);
+                Set<Integer> mcids = mcidsByPage.get(page);
+
+                if (mcids != null && !mcids.isEmpty()) {
+                    // 使用MCIDTextExtractor提取该页该TD的文本
+                    MCIDTextExtractor extractor = new MCIDTextExtractor(mcids);
+                    extractor.processPage(page);
+                    String pageText = extractor.getText().trim();
+
+                    if (!pageText.isEmpty()) {
+                        if (result.length() > 0) {
+                            result.append(" ");
+                        }
+                        result.append(pageText);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("      [错误] MCID文本提取失败: " + e.getMessage());
+            return "";
+        }
+
+        return result.toString().trim();
+    }
+
+    /**
+     * 收集该结构元素后代的所有MCID，按页分桶
+     */
+    private static Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> collectMcidsByPage(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element) throws IOException {
+
+        Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> result = new HashMap<>();
+        collectMcidsRecursive(element, result);
+        return result;
+    }
+
+    /**
+     * 递归收集MCID（深度优先遍历）
+     */
+    private static void collectMcidsRecursive(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
+            Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> mcidsByPage) throws IOException {
+
+        for (Object kid : element.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                // 递归处理子结构元素
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+                collectMcidsRecursive(childElement, mcidsByPage);
+
+            } else if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent) {
+                // PDMarkedContent包含MCID信息
+                org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent mc =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent) kid;
+
+                Integer mcid = mc.getMCID();
+                org.apache.pdfbox.pdmodel.PDPage page = element.getPage();
+
+                if (mcid != null && page != null) {
+                    mcidsByPage.computeIfAbsent(page, k -> new HashSet<>()).add(mcid);
+                }
+
+            } else if (kid instanceof Integer) {
+                // 直接的MCID整数
+                Integer mcid = (Integer) kid;
+                org.apache.pdfbox.pdmodel.PDPage page = element.getPage();
+
+                if (page != null) {
+                    mcidsByPage.computeIfAbsent(page, k -> new HashSet<>()).add(mcid);
+                }
+            }
+        }
+    }
+
+    /**
+     * 从子元素递归提取ActualText（fallback方法）
+     */
+    private static String extractTextFromChildrenActualText(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element) throws IOException {
+
+        StringBuilder text = new StringBuilder();
+
+        for (Object kid : element.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                String childActualText = childElement.getActualText();
+                if (childActualText != null && !childActualText.isEmpty()) {
+                    if (text.length() > 0) {
+                        text.append(" ");
+                    }
+                    text.append(childActualText);
+                } else {
+                    // 递归
+                    String childText = extractTextFromChildrenActualText(childElement);
+                    if (!childText.isEmpty()) {
+                        if (text.length() > 0) {
+                            text.append(" ");
+                        }
+                        text.append(childText);
+                    }
+                }
+            }
+        }
+
+        return text.toString().trim();
+    }
+
+    /**
+     * 表格计数器类
+     */
+    public static class TableCounter {
+        public int tableIndex = 0;
+    }
+}

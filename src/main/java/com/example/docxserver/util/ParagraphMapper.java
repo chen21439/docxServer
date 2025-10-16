@@ -34,7 +34,7 @@ import java.util.*;
 public class ParagraphMapper {
 
     public static void main(String[] args) throws Exception {
-        String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217.pdf";
+        String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_A2b.pdf";
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
 
 //        // 步骤0-1: 从PDF独立提取表格结构到XML格式TXT（不依赖DOCX）
@@ -48,9 +48,9 @@ public class ParagraphMapper {
 //        System.out.println();
 
         // 步骤0-3: 测试通过ID在PDF中查找文本
-//        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
-//        testFindTextByIdInPdf(pdfPath, docxTxtPath);
-//        System.out.println();
+        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
+        testFindTextByIdInPdf(pdfPath, docxTxtPath);
+        System.out.println();
 
         // 步骤0-4: 使用PDFTextStripper提取PDF全文到txt
 //        System.out.println("=== 使用PDFTextStripper提取PDF全文 ===");
@@ -60,60 +60,110 @@ public class ParagraphMapper {
 
     /**
      * 测试从PDF中根据ID查找文本
-     * 从docx.txt中随机选择一些表格单元格ID进行测试
+     * 从JSON文件的dataList中读取spanList.pid进行测试
      */
     private static void testFindTextByIdInPdf(String pdfPath, String docxTxtPath) throws IOException {
-        // 1. 从docx.txt读取所有表格单元格ID
-        List<DocxParagraph> docxParagraphs = parseDocxParagraphsFromTxt(docxTxtPath);
-        Map<String, String> docxMap = new HashMap<>();  // ID -> DOCX文本
-        List<String> tableCellIds = new ArrayList<>();
+        // 1. 构建JSON文件路径（从PDF路径推导）
+        File pdfFile = new File(pdfPath);
+        String pdfDir = pdfFile.getParent();
+        String pdfName = pdfFile.getName().replaceFirst("[.][^.]+$", "");
+        // 移除可能的后缀（如_A2b）
+        String baseFileName = pdfName.replaceAll("_[A-Za-z0-9]+$", "");
+        String jsonPath = pdfDir + File.separator + baseFileName + ".json";
 
-        for (DocxParagraph para : docxParagraphs) {
-            if (para.isTableCell() && !para.id.isEmpty()) {
-                tableCellIds.add(para.id);
-                docxMap.put(para.id, para.text);
-            }
-        }
+        System.out.println("JSON文件路径: " + jsonPath);
 
-        System.out.println("从docx.txt中读取到 " + tableCellIds.size() + " 个表格单元格ID");
-
-        // 2. 随机选择10个ID进行测试
+        // 2. 从JSON文件读取所有pid
         List<String> testIds = new ArrayList<>();
-        Random random = new Random();
-        int testCount = Math.min(10, tableCellIds.size());
+        Map<String, String> expectedTexts = new HashMap<>();  // ID -> 预期文本
 
-        for (int i = 0; i < testCount; i++) {
-            int randomIndex = random.nextInt(tableCellIds.size());
-            testIds.add(tableCellIds.get(randomIndex));
+        try {
+            String jsonContent = new String(Files.readAllBytes(Paths.get(jsonPath)), StandardCharsets.UTF_8);
+            // 简单解析JSON（使用字符串匹配，避免引入额外依赖）
+            // 查找所有 "pid": "xxx" 和对应的 "pidText": "yyy"
+            int pos = 0;
+            while ((pos = jsonContent.indexOf("\"pid\":", pos)) != -1) {
+                // 提取pid值
+                int pidStart = jsonContent.indexOf("\"", pos + 6) + 1;
+                int pidEnd = jsonContent.indexOf("\"", pidStart);
+                String pid = jsonContent.substring(pidStart, pidEnd);
+
+                // 查找对应的pidText值（在同一个span对象内）
+                int pidTextPos = jsonContent.indexOf("\"pidText\":", pidEnd);
+                int nextPidPos = jsonContent.indexOf("\"pid\":", pidEnd + 1);
+
+                // 确保pidText在当前pid和下一个pid之间
+                if (pidTextPos != -1 && (nextPidPos == -1 || pidTextPos < nextPidPos)) {
+                    int textStart = jsonContent.indexOf("\"", pidTextPos + 10) + 1;
+                    int textEnd = jsonContent.indexOf("\"", textStart);
+                    String text = jsonContent.substring(textStart, textEnd);
+
+                    // 反转义JSON字符串
+                    text = text.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"");
+
+                    testIds.add(pid);
+                    expectedTexts.put(pid, text);
+                }
+
+                pos = pidEnd;
+            }
+
+            System.out.println("从JSON文件中读取到 " + testIds.size() + " 个pid");
+
+        } catch (Exception e) {
+            System.err.println("读取JSON文件失败: " + e.getMessage());
+            e.printStackTrace();
+            return;
         }
 
-        System.out.println("随机选择了 " + testIds.size() + " 个ID进行测试:\n");
-
-        // 3. 使用新的 PdfStructureTreeNavigator 批量查找
-        Map<String, String> pdfResults = PdfStructureTreeNavigator.findTextByIdInPdf(pdfPath, testIds);
+        // 3. 使用新的 PdfTextExtractSupport 批量提取
+        System.out.println("\n开始从PDF中提取文本...\n");
+        Map<String, String> pdfResults = PdfTextExtractSupport.extractTextByIds(pdfPath, testIds);
 
         // 4. 输出详细对比结果
-        System.out.println("\n=== 详细对比结果 ===");
+        System.out.println("\n=== 详细对比结果（前20个） ===");
         int matchCount = 0;
-        for (String id : testIds) {
-            String docxText = docxMap.get(id);
+        int foundCount = 0;
+
+        // 显示前20个结果
+        int displayCount = Math.min(20, testIds.size());
+        for (int i = 0; i < displayCount; i++) {
+            String id = testIds.get(i);
+            String expectedText = expectedTexts.get(id);
             String pdfText = pdfResults.get(id);
 
             boolean found = (pdfText != null && !pdfText.isEmpty());
+            if (found) foundCount++;
 
             System.out.println("【" + id + "】");
-            System.out.println("  DOCX期望: " + truncate(docxText, 80));
-            System.out.println("  PDF读取:  " + (found ? truncate(pdfText, 80) : "[未找到]"));
-
-            // 简单判断是否匹配（去除空白后对比前50个字符）
+            System.out.println("  JSON预期(pidText): " + truncate(expectedText, 100));
             if (found) {
-                String docxNorm = normalizeText(docxText).substring(0, Math.min(50, normalizeText(docxText).length()));
-                String pdfNorm = normalizeText(pdfText).substring(0, Math.min(50, normalizeText(pdfText).length()));
-                if (docxNorm.equals(pdfNorm)) {
-                    System.out.println("  状态: ✓ 匹配");
-                    matchCount++;
+                System.out.println("  PDF实际提取:       " + truncate(pdfText, 100));
+            } else {
+                System.out.println("  PDF实际提取:       [未找到]");
+            }
+
+            // 简单判断是否匹配（去除空白后对比）
+            if (found) {
+                String expectedNorm = normalizeText(expectedText);
+                String pdfNorm = normalizeText(pdfText);
+
+                // 对比前50个字符或全部（取较短的）
+                int compareLen = Math.min(50, Math.min(expectedNorm.length(), pdfNorm.length()));
+                if (compareLen > 0) {
+                    String expectedSub = expectedNorm.substring(0, compareLen);
+                    String pdfSub = pdfNorm.substring(0, compareLen);
+
+                    if (expectedSub.equals(pdfSub)) {
+                        System.out.println("  状态: ✓ 匹配");
+                        matchCount++;
+                    } else {
+                        System.out.println("  状态: △ 找到但内容不匹配");
+                        System.out.println("    预期(归一化): " + truncate(expectedSub, 80));
+                        System.out.println("    实际(归一化): " + truncate(pdfSub, 80));
+                    }
                 } else {
-                    System.out.println("  状态: △ 找到但内容不匹配");
+                    System.out.println("  状态: △ 文本为空");
                 }
             } else {
                 System.out.println("  状态: × 未找到");
@@ -121,14 +171,32 @@ public class ParagraphMapper {
             System.out.println();
         }
 
+        System.out.println("(仅显示前" + displayCount + "个，共" + testIds.size() + "个)");
+
+        // 统计全部结果
+        for (String id : testIds) {
+            String pdfText = pdfResults.get(id);
+            if (pdfText != null && !pdfText.isEmpty()) {
+                String expectedNorm = normalizeText(expectedTexts.get(id));
+                String pdfNorm = normalizeText(pdfText);
+                int compareLen = Math.min(50, Math.min(expectedNorm.length(), pdfNorm.length()));
+                if (compareLen > 0) {
+                    String expectedSub = expectedNorm.substring(0, compareLen);
+                    String pdfSub = pdfNorm.substring(0, compareLen);
+                    if (expectedSub.equals(pdfSub)) {
+                        matchCount++;
+                    }
+                }
+            }
+        }
+
         // 5. 统计
-        long foundCount = pdfResults.values().stream().filter(v -> v != null && !v.isEmpty()).count();
         System.out.println("\n=== 最终统计 ===");
         System.out.println("测试总数: " + testIds.size());
-        System.out.println("成功找到: " + foundCount);
+        System.out.println("成功提取: " + pdfResults.size());
         System.out.println("内容匹配: " + matchCount);
-        System.out.println("未找到: " + (testIds.size() - foundCount));
-        System.out.println("查找率: " + String.format("%.2f%%", foundCount * 100.0 / testIds.size()));
+        System.out.println("未找到: " + (testIds.size() - pdfResults.size()));
+        System.out.println("提取率: " + String.format("%.2f%%", pdfResults.size() * 100.0 / testIds.size()));
         System.out.println("匹配率: " + String.format("%.2f%%", matchCount * 100.0 / testIds.size()));
     }
 
@@ -898,9 +966,9 @@ public class ParagraphMapper {
         if ("Table".equalsIgnoreCase(structType)) {
             int tableIndex = tableCounter.tableIndex++;
 
-            // 只处理前10个表格
-            if (tableIndex >= 10) {
-                System.out.println("跳过表格 " + (tableIndex + 1) + "（只提取前10个表格）");
+            // 只处理前25个表格
+            if (tableIndex >= 25) {
+                System.out.println("跳过表格 " + (tableIndex + 1) + "（只提取前25个表格）");
                 return;
             }
 
@@ -958,8 +1026,8 @@ public class ParagraphMapper {
             System.out.println("=== 表格 " + (tableIndex + 1) + " 提取完成 ===");
             System.out.println("共提取 " + rowIndex + " 行");
 
-            // 如果已经提取了10个表格,就停止
-            if (tableCounter.tableIndex >= 10) {
+            // 如果已经提取了25个表格,就停止
+            if (tableCounter.tableIndex >= 25) {
                 return;
             }
         }
@@ -971,8 +1039,8 @@ public class ParagraphMapper {
                     (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
                 extractTablesFromElement(childElement, output, tableCounter, doc);
 
-                // 如果已经提取了10个表格，就不再继续
-                if (tableCounter.tableIndex >= 10) {
+                // 如果已经提取了25个表格，就不再继续
+                if (tableCounter.tableIndex >= 25) {
                     return;
                 }
             }
