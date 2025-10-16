@@ -898,14 +898,14 @@ public class ParagraphMapper {
         if ("Table".equalsIgnoreCase(structType)) {
             int tableIndex = tableCounter.tableIndex++;
 
-            // 只处理第一个表格
-            if (tableIndex > 0) {
-                System.out.println("跳过表格 " + (tableIndex + 1) + "（只提取第一个表格）");
+            // 只处理前10个表格
+            if (tableIndex >= 10) {
+                System.out.println("跳过表格 " + (tableIndex + 1) + "（只提取前10个表格）");
                 return;
             }
 
             String tableId = "t" + String.format("%03d", tableIndex + 1);
-            System.out.println("\n=== 开始提取第一个表格 ===");
+            System.out.println("\n=== 开始提取表格 " + (tableIndex + 1) + " ===");
             System.out.println("表格ID: " + tableId);
 
             output.append("<table id=\"").append(tableId).append("\">\n");
@@ -955,20 +955,24 @@ public class ParagraphMapper {
             }
 
             output.append("</table>\n");
-            System.out.println("=== 第一个表格提取完成 ===");
+            System.out.println("=== 表格 " + (tableIndex + 1) + " 提取完成 ===");
             System.out.println("共提取 " + rowIndex + " 行");
-            return;  // 找到第一个表格后直接返回
+
+            // 如果已经提取了10个表格,就停止
+            if (tableCounter.tableIndex >= 10) {
+                return;
+            }
         }
 
-        // 递归处理子元素（查找第一个表格）
+        // 递归处理子元素（继续查找更多表格）
         for (Object kid : element.getKids()) {
             if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
                 org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
                     (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
                 extractTablesFromElement(childElement, output, tableCounter, doc);
 
-                // 如果已经提取了第一个表格，就不再继续
-                if (tableCounter.tableIndex > 0) {
+                // 如果已经提取了10个表格，就不再继续
+                if (tableCounter.tableIndex >= 10) {
                     return;
                 }
             }
