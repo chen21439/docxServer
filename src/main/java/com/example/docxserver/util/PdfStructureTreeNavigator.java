@@ -17,16 +17,39 @@ import java.io.StringWriter;
 import java.util.*;
 
 /**
- * PDF结构树导航器：通过PDF结构树定位和提取文本
+ * PDF结构树导航器：通过PDF结构树定位和修改段落格式
  *
- * 核心功能：
- * 1. 根据ID（如 t001-r007-c001-p001）在PDF结构树中定位到具体单元格
- * 2. 提取该单元格的文本内容
+ * ============================================
+ * 【项目最终目的】
+ * ============================================
+ * 根据ID修改PDF中对应段落的文字格式（颜色、字体、大小等）
+ *
+ * - 输入：PDF文件路径 + 段落ID（如 t001-r007-c001-p001） + 格式参数
+ * - 核心功能：定位PDF中对应的文本段落，修改其格式（字体颜色、大小、样式等）
+ * - 输出：修改后的PDF文件
+ *
+ * ============================================
+ * 【当前功能（辅助验证）】
+ * ============================================
+ * 1. 根据ID在PDF结构树中定位到具体单元格（90%成功率）
+ * 2. 提取该单元格的文本内容（当前有问题：提取整页文本，而非单元格文本）
  * 3. 支持批量查找，按table→row→col排序优化效率
  *
- * 前提：
+ * ============================================
+ * 【当前问题】
+ * ============================================
+ * - extractTextFromElement() 方法提取的是整页文本，而非单元格级别的精确文本
+ * - 原因：PDFBox 3.0 没有直接的MCID文本提取API
+ * - 解决方案：
+ *   方案A：从已生成的 _pdf.txt 文件读取（简单，100%准确）
+ *   方案B：改进MCID文本提取逻辑（复杂，需要解析内容流）
+ *
+ * ============================================
+ * 【前提条件】
+ * ============================================
  * - PDF是PDF/A-4版本的Tagged PDF
  * - 保留了完整的结构标签（Table、TR、TD、P等）
+ * - ID格式：t001-r007-c001-p001（表格001、行007、列001、段落001）
  *
  * @author Claude
  */
@@ -35,13 +58,39 @@ public class PdfStructureTreeNavigator {
     /**
      * 批量根据ID在PDF中查找对应的文本（使用PDFBox结构树）
      *
-     * 主要思路：
+     * ============================================
+     * 【注意：这是辅助验证方法，不是最终目标】
+     * ============================================
+     * 最终目标：根据ID修改PDF段落格式，而非仅提取文本
+     * 此方法用于验证通过结构树定位段落的逻辑是否正确
+     *
+     * ============================================
+     * 【当前问题】
+     * ============================================
+     * - 定位成功率：80-90%
+     * - 文本匹配率：0%（原因：extractTextFromElement提取整页文本，而非单元格文本）
+     * - 与已生成的 _pdf.txt 文件对比：
+     *   _pdf.txt 中相同ID的文本是正确的（100%匹配）
+     *   但此方法从内存中提取的文本是错误的（整页文本）
+     *
+     * ============================================
+     * 【实现思路】
+     * ============================================
      * 1. 对ID列表按 table → row → col 顺序排序，保证遍历效率
      * 2. 解析每个ID：t001-r007-c001-p001 -> table=1, row=7, col=1, para=1
      * 3. 使用PDFBox读取Tagged PDF的结构树（Structure Tree）
      * 4. 按排序后的顺序遍历，依次查找每个ID对应的单元格
-     * 5. 通过内容流（Content Stream）提取实际文本内容
+     * 5. 通过 extractTextFromElement() 提取文本（当前有问题）
      * 6. 返回 Map<ID, 文本>
+     *
+     * ============================================
+     * 【后续扩展为修改格式的方法】
+     * ============================================
+     * 在能够精确定位到单元格后，需要添加：
+     * 1. 获取单元格的 MCID
+     * 2. 定位到内容流中对应的文本渲染操作符
+     * 3. 修改字体、颜色、大小等参数
+     * 4. 保存修改后的PDF
      *
      * @param pdfPath PDF文件路径
      * @param cellIds 单元格ID列表（格式：t001-r007-c001-p001）
@@ -326,9 +375,12 @@ public class PdfStructureTreeNavigator {
     /**
      * 从页面中提取指定MCID对应的文本
      *
-     * 说明：
-     * 由于PDFBox 3.0没有直接的MCID文本提取API，
-     * 这里采用简化策略：解析内容流，收集所有文本
+     * 实现方案B：解析PDF内容流，通过MCID精确提取文本
+     *
+     * 原理：
+     * 1. PDF内容流中使用 /P <</MCID n>> BDC ... EMC 标记内容
+     * 2. 创建自定义的PDFTextStripper,跟踪当前MCID
+     * 3. 只收集目标MCID范围内的文本
      *
      * @param doc PDF文档
      * @param page 页面
@@ -338,28 +390,171 @@ public class PdfStructureTreeNavigator {
      */
     private static String extractTextByMCIDs(PDDocument doc, PDPage page, List<Integer> mcids) throws IOException {
         try {
-            final StringBuilder text = new StringBuilder();
             final Set<Integer> targetMCIDs = new HashSet<Integer>(mcids);
+            final StringBuilder result = new StringBuilder();
 
-            // 使用PDFTextStripper提取文本
-            // 注意：这里暂时提取整个页面的文本
-            // PDFBox 3.0不支持直接通过MCID过滤
+            // 使用自定义的TextStripper来跟踪MCID
             PDFTextStripper stripper = new PDFTextStripper() {
+                private int currentMCID = -1;
+                private boolean insideTargetMCID = false;
+
+                @Override
+                protected void processTextPosition(TextPosition text) {
+                    // 如果当前在目标MCID内，收集文本
+                    if (insideTargetMCID) {
+                        result.append(text.getUnicode());
+                    }
+                }
+
                 @Override
                 protected void writeString(String string, List<TextPosition> textPositions) throws IOException {
-                    text.append(string);
+                    // 重写此方法以便能够访问TextPosition
+                    for (TextPosition text : textPositions) {
+                        processTextPosition(text);
+                    }
                 }
             };
 
+            // 设置页面范围
             int pageIndex = doc.getPages().indexOf(page);
             stripper.setStartPage(pageIndex + 1);
             stripper.setEndPage(pageIndex + 1);
-            stripper.getText(doc);
 
-            return text.toString();
+            // 使用MCIDTextExtractor来解析内容流并跟踪MCID
+            MCIDTextExtractor extractor = new MCIDTextExtractor(targetMCIDs);
+            extractor.processPage(page);
+
+            return extractor.getText();
 
         } catch (Exception e) {
+            e.printStackTrace();
             return "";
+        }
+    }
+
+    /**
+     * MCID文本提取器
+     * 通过解析PDF内容流来精确提取指定MCID对应的文本
+     *
+     * 原理：
+     * 1. 继承PDFStreamEngine来解析内容流
+     * 2. 跟踪BDC(BeginMarkedContent)/EMC(EndMarkedContent)操作符
+     * 3. 当遇到 /P <</MCID n>> BDC 时,记录当前MCID
+     * 4. 在对应MCID范围内提取文本
+     */
+    private static class MCIDTextExtractor extends PDFStreamEngine {
+        private final Set<Integer> targetMCIDs;
+        private final StringBuilder text;
+        private final Stack<Integer> mcidStack;
+        private PDDocument document;
+
+        public MCIDTextExtractor(Set<Integer> targetMCIDs) {
+            this.targetMCIDs = targetMCIDs;
+            this.text = new StringBuilder();
+            this.mcidStack = new Stack<Integer>();
+        }
+
+        /**
+         * 处理页面内容流
+         */
+        public void processPageContent(PDPage page) throws IOException {
+            try {
+                // 处理页面内容流 - 调用父类方法解析内容
+                super.processPage(page);
+            } catch (Exception e) {
+                // 解析内容流失败,忽略
+                System.err.println("解析内容流失败: " + e.getMessage());
+            }
+        }
+
+        @Override
+        protected void processOperator(Operator operator, List<COSBase> operands) throws IOException {
+            String operatorName = operator.getName();
+
+            // 处理 BDC (Begin Marked Content with properties)
+            if (OperatorName.BEGIN_MARKED_CONTENT_SEQ.equals(operatorName)) {
+                if (operands.size() >= 2) {
+                    COSBase tagBase = operands.get(0);
+                    COSBase propsBase = operands.get(1);
+
+                    // 检查是否有MCID属性
+                    if (propsBase instanceof org.apache.pdfbox.cos.COSDictionary) {
+                        org.apache.pdfbox.cos.COSDictionary props = (org.apache.pdfbox.cos.COSDictionary) propsBase;
+                        org.apache.pdfbox.cos.COSBase mcidBase = props.getDictionaryObject(COSName.MCID);
+
+                        if (mcidBase instanceof org.apache.pdfbox.cos.COSNumber) {
+                            int mcid = ((org.apache.pdfbox.cos.COSNumber) mcidBase).intValue();
+                            mcidStack.push(mcid);
+                        }
+                    }
+                }
+            }
+            // 处理 EMC (End Marked Content)
+            else if (OperatorName.END_MARKED_CONTENT.equals(operatorName)) {
+                if (!mcidStack.isEmpty()) {
+                    mcidStack.pop();
+                }
+            }
+            // 处理文本显示操作符
+            else if (isTextOperator(operatorName)) {
+                // 如果当前在目标MCID内,收集文本
+                if (!mcidStack.isEmpty() && targetMCIDs.contains(mcidStack.peek())) {
+                    String textContent = extractTextFromOperator(operator, operands);
+                    if (textContent != null) {
+                        text.append(textContent);
+                    }
+                }
+            }
+
+            super.processOperator(operator, operands);
+        }
+
+        /**
+         * 判断是否是文本显示操作符
+         */
+        private boolean isTextOperator(String operatorName) {
+            return OperatorName.SHOW_TEXT.equals(operatorName) ||
+                   OperatorName.SHOW_TEXT_ADJUSTED.equals(operatorName) ||
+                   OperatorName.SHOW_TEXT_LINE.equals(operatorName) ||
+                   OperatorName.SHOW_TEXT_LINE_AND_SPACE.equals(operatorName);
+        }
+
+        /**
+         * 从文本操作符中提取文本
+         */
+        private String extractTextFromOperator(Operator operator, List<COSBase> operands) {
+            if (operands.isEmpty()) {
+                return null;
+            }
+
+            try {
+                COSBase base = operands.get(0);
+                if (base instanceof org.apache.pdfbox.cos.COSString) {
+                    // Tj, ', " 操作符
+                    byte[] bytes = ((org.apache.pdfbox.cos.COSString) base).getBytes();
+                    return new String(bytes, "UTF-8");
+                } else if (base instanceof org.apache.pdfbox.cos.COSArray) {
+                    // TJ 操作符 (array of strings and numbers)
+                    StringBuilder sb = new StringBuilder();
+                    org.apache.pdfbox.cos.COSArray array = (org.apache.pdfbox.cos.COSArray) base;
+                    for (int i = 0; i < array.size(); i++) {
+                        COSBase element = array.getObject(i);
+                        if (element instanceof org.apache.pdfbox.cos.COSString) {
+                            byte[] bytes = ((org.apache.pdfbox.cos.COSString) element).getBytes();
+                            sb.append(new String(bytes, "UTF-8"));
+                        }
+                    }
+                    return sb.toString();
+                }
+            } catch (Exception e) {
+                // 忽略错误
+            }
+
+            return null;
+        }
+
+        public String getText() {
+            return text.toString().trim();
         }
     }
 

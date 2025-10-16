@@ -34,9 +34,9 @@ public class ParagraphMapper {
         String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217.pdf";
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
 
-//        // 步骤0-1: 将PDF表格结构写入XML格式的txt文件（包含ID）
-        System.out.println("=== 提取PDF表格结构到XML格式TXT ===");
-        writePdfStructureToHtml(pdfPath);
+//        // 步骤0-1: 从PDF独立提取表格结构到XML格式TXT（不依赖DOCX）
+        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT ===");
+        toXML(pdfPath);
         System.out.println();
 //
 //        // 步骤0-2: 使用新的ID匹配方法，生成匹配结果
@@ -820,92 +820,131 @@ public class ParagraphMapper {
     }
 
     /**
-     * 将PDF表格结构写入XML格式的txt文件（包含table、tr、td、p标签和ID）
+     * 从PDF独立提取表格结构并输出为XML格式（不依赖DOCX）
      *
      * 主要思路：
-     * 1. 读取 DOCX 的 txt 文件，获取表格结构（table、tr、td）
-     * 2. 从PDF提取段落（按顺序）
-     * 3. 根据DOCX的表格结构，将PDF段落按照相同的结构组织
-     * 4. 为每个段落生成ID（格式：t001-r007-c001-p001）
-     * 5. 输出简洁的XML格式到 _pdf.txt 文件（只有table/tr/td/p标签，不包括html/body）
+     * 1. 使用PDFBox读取Tagged PDF的结构树（Structure Tree）
+     * 2. 遍历结构树中的Table、TR、TD元素
+     * 3. 从每个TD单元格中提取文本内容
+     * 4. 为每个单元格生成ID（格式：t001-r007-c001-p001）
+     * 5. 输出XML格式到 _pdf_YYYYMMDD_HHMMSS.txt 文件
      *
-     * @param pdfPath PDF文件路径（必须是PDF/A-4或Tagged版本）
+     * @param pdfPath PDF文件路径（必须是PDF/A-4或Tagged PDF）
      * @throws IOException 文件读写异常
      */
-    public static void writePdfStructureToHtml(String pdfPath) throws IOException {
-        // 1. 找到对应的 DOCX txt 文件
+    public static void toXML(String pdfPath) throws IOException {
         File pdfFile = new File(pdfPath);
         String pdfDir = pdfFile.getParent();
-        String pdfName = pdfFile.getName().replaceFirst("[.][^.]+$", ""); // 去除扩展名
-        String docxTxtPath = pdfDir + File.separator + pdfName + "_docx.txt";
+        String pdfName = pdfFile.getName().replaceFirst("[.][^.]+$", "");
 
         // 生成带时间戳的输出文件名
         SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
         String timestamp = sdf.format(new Date());
         String outputPath = pdfDir + File.separator + pdfName + "_pdf_" + timestamp + ".txt";
 
-        // 2. 从DOCX txt解析表格结构
-        List<DocxParagraph> docxParagraphs = parseDocxParagraphsFromTxt(docxTxtPath);
+        StringBuilder output = new StringBuilder();
 
-        // 3. 从PDF提取段落
-        List<String> pdfParagraphs = extractParagraphsFromPdf(pdfPath);
+        // 打开PDF文档
+        try (PDDocument doc = Loader.loadPDF(pdfFile)) {
+            // 获取结构树根节点
+            if (doc.getDocumentCatalog() == null || doc.getDocumentCatalog().getStructureTreeRoot() == null) {
+                System.err.println("该PDF没有结构树（不是Tagged PDF）");
+                return;
+            }
 
-        // 4. 建立映射关系
-        Map<String, List<Integer>> mapping = buildParagraphMapping(docxParagraphs, pdfParagraphs);
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot structTreeRoot =
+                doc.getDocumentCatalog().getStructureTreeRoot();
 
-        // 5. 读取DOCX的HTML结构，用PDF内容替换
-        String docxContent = new String(Files.readAllBytes(Paths.get(docxTxtPath)), StandardCharsets.UTF_8);
-        Document doc = Jsoup.parse(docxContent);
+            System.out.println("开始从PDF结构树提取表格...");
 
-        // 6. 遍历所有表格，替换为PDF内容
-        Elements tables = doc.select("table");
-        for (Element table : tables) {
-            Elements rows = table.select("tr");
-            for (Element row : rows) {
-                Elements cells = row.select("td");
-                for (Element cell : cells) {
-                    Elements cellPs = cell.select("p");
-                    if (cellPs.isEmpty()) continue;
-
-                    // 获取第一个p的id
-                    Element firstP = cellPs.get(0);
-                    String cellId = firstP.attr("id");
-
-                    if (cellId.isEmpty()) continue;
-
-                    // 获取对应的PDF段落
-                    List<Integer> pdfIndices = mapping.get(cellId);
-                    if (pdfIndices != null && !pdfIndices.isEmpty()) {
-                        // 合并多个PDF段落
-                        StringBuilder pdfText = new StringBuilder();
-                        for (int idx : pdfIndices) {
-                            if (idx < pdfParagraphs.size()) {
-                                if (pdfText.length() > 0) {
-                                    pdfText.append(" ");
-                                }
-                                pdfText.append(pdfParagraphs.get(idx));
-                            }
-                        }
-
-                        // 替换单元格内容（只保留第一个p，设置PDF内容）
-                        cell.empty();
-                        cell.append("<p id=\"" + cellId + "\">" + escapeHtml(pdfText.toString()) + "</p>");
-                    }
+            // 遍历结构树，提取所有表格
+            Counter tableCounter = new Counter();
+            for (Object kid : structTreeRoot.getKids()) {
+                if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                    org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element =
+                        (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+                    extractTablesFromElement(element, output, tableCounter);
                 }
             }
-        }
 
-        // 7. 只输出表格结构（不包括<!DOCTYPE>、<html>、<head>、<body>标签）
-        StringBuilder output = new StringBuilder();
-        for (Element table : tables) {
-            output.append(table.outerHtml()).append("\n");
+            System.out.println("共提取 " + tableCounter.tableIndex + " 个表格");
         }
 
         // 写入文件
         Files.write(Paths.get(outputPath), output.toString().getBytes(StandardCharsets.UTF_8));
-
         System.out.println("PDF表格结构已写入到: " + outputPath);
-        System.out.println("使用DOCX结构，填充PDF内容，共 " + tables.size() + " 个表格");
+    }
+
+    /**
+     * 从结构元素中递归提取表格
+     */
+    private static void extractTablesFromElement(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
+            StringBuilder output,
+            Counter tableCounter) throws IOException {
+
+        String structType = element.getStructureType();
+
+        // 如果是Table元素
+        if ("Table".equalsIgnoreCase(structType)) {
+            int tableIndex = tableCounter.tableIndex++;
+            String tableId = "t" + String.format("%03d", tableIndex + 1);
+
+            output.append("<table id=\"").append(tableId).append("\">\n");
+
+            // 提取表格内的行
+            int rowIndex = 0;
+            for (Object kid : element.getKids()) {
+                if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                    org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement rowElement =
+                        (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+
+                    if ("TR".equalsIgnoreCase(rowElement.getStructureType())) {
+                        String rowId = tableId + "-r" + String.format("%03d", rowIndex + 1);
+                        output.append("  <tr id=\"").append(rowId).append("\">\n");
+
+                        // 提取行内的单元格
+                        int colIndex = 0;
+                        for (Object cellKid : rowElement.getKids()) {
+                            if (cellKid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement cellElement =
+                                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) cellKid;
+
+                                if ("TD".equalsIgnoreCase(cellElement.getStructureType())) {
+                                    String cellId = rowId + "-c" + String.format("%03d", colIndex + 1) + "-p001";
+
+                                    // 提取单元格文本
+                                    String cellText = extractTextFromElement(cellElement);
+
+                                    output.append("    <td>\n");
+                                    output.append("      <p id=\"").append(cellId).append("\">")
+                                          .append(escapeHtml(cellText))
+                                          .append("</p>\n");
+                                    output.append("    </td>\n");
+
+                                    colIndex++;
+                                }
+                            }
+                        }
+
+                        output.append("  </tr>\n");
+                        rowIndex++;
+                    }
+                }
+            }
+
+            output.append("</table>\n");
+            return;  // 找到表格后不再递归
+        }
+
+        // 递归处理子元素
+        for (Object kid : element.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+                extractTablesFromElement(childElement, output, tableCounter);
+            }
+        }
     }
 
     /**
