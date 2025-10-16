@@ -48,9 +48,9 @@ public class ParagraphMapper {
 //        System.out.println();
 
         // 步骤0-3: 测试通过ID在PDF中查找文本
-        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
-        testFindTextByIdInPdf(pdfPath, docxTxtPath);
-        System.out.println();
+//        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
+//        testFindTextByIdInPdf(pdfPath, docxTxtPath);
+//        System.out.println();
 
         // 步骤0-4: 使用PDFTextStripper提取PDF全文到txt
 //        System.out.println("=== 使用PDFTextStripper提取PDF全文 ===");
@@ -1054,9 +1054,9 @@ public class ParagraphMapper {
                                 if ("TD".equalsIgnoreCase(cellElement.getStructureType())) {
                                     String cellId = rowId + "-c" + String.format("%03d", colIndex + 1) + "-p001";
 
-                                    // 提取单元格文本（传入doc参数）
+                                    // 提取单元格文本（传入doc参数和cellId用于调试）
                                     System.out.println("    提取单元格: " + cellId);
-                                    String cellText = extractTextFromElement(cellElement, doc);
+                                    String cellText = extractTextFromElement(cellElement, doc, cellId);
                                     System.out.println("      文本内容: " + truncate(cellText, 50));
 
                                     output.append("    <td>\n");
@@ -1541,22 +1541,12 @@ public class ParagraphMapper {
     }
 
     /**
-     * 从结构元素中提取文本（使用MCID按页分桶的方法）
-     *
-     * 核心思路：
-     * 1. 优先使用 /ActualText 属性
-     * 2. 递归收集该TD后代的所有MCID，**按页分桶**存储
-     * 3. 对每一页，用MCIDTextExtractor只提取该页该TD的MCID对应的文本
-     * 4. 拼接所有页的文本
-     *
-     * 关键点：
-     * - MCID的收集范围**严格限制在该TD的后代**，不包含整表/整页
-     * - 按页分桶，避免跨页混用MCID
-     * - 每页单独提取，避免把其他页的同号MCID内容也吸进来
+     * 从结构元素中提取文本（使用MCID按页分桶的方法，带cellId用于调试）
      */
     private static String extractTextFromElement(
             org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
-            PDDocument doc) throws IOException {
+            PDDocument doc,
+            String cellId) throws IOException {
 
         // 1. 优先使用 /ActualText
         String actualText = element.getActualText();
@@ -1586,6 +1576,7 @@ public class ParagraphMapper {
 
                     // 使用MCIDTextExtractor提取该页该TD的文本
                     MCIDTextExtractor extractor = new MCIDTextExtractor(mcids);
+                    extractor.setDebugPrefix(cellId);  // 设置调试前缀
                     extractor.processPage(page);
                     String pageText = extractor.getText().trim();
 
@@ -1604,6 +1595,26 @@ public class ParagraphMapper {
         }
 
         return result.toString().trim();
+    }
+
+    /**
+     * 从结构元素中提取文本（使用MCID按页分桶的方法）
+     *
+     * 核心思路：
+     * 1. 优先使用 /ActualText 属性
+     * 2. 递归收集该TD后代的所有MCID，**按页分桶**存储
+     * 3. 对每一页，用MCIDTextExtractor只提取该页该TD的MCID对应的文本
+     * 4. 拼接所有页的文本
+     *
+     * 关键点：
+     * - MCID的收集范围**严格限制在该TD的后代**，不包含整表/整页
+     * - 按页分桶，避免跨页混用MCID
+     * - 每页单独提取，避免把其他页的同号MCID内容也吸进来
+     */
+    private static String extractTextFromElement(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
+            PDDocument doc) throws IOException {
+        return extractTextFromElement(element, doc, "");
     }
 
     /**
