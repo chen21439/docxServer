@@ -16,6 +16,7 @@ import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
 import java.util.*;
 
 /**
@@ -34,9 +35,9 @@ public class ParagraphMapper {
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
 
 //        // 步骤0-1: 将PDF表格结构写入XML格式的txt文件（包含ID）
-//        System.out.println("=== 提取PDF表格结构到XML格式TXT ===");
-//        writePdfStructureToHtml(pdfPath);
-//        System.out.println();
+        System.out.println("=== 提取PDF表格结构到XML格式TXT ===");
+        writePdfStructureToHtml(pdfPath);
+        System.out.println();
 //
 //        // 步骤0-2: 使用新的ID匹配方法，生成匹配结果
 //        System.out.println("=== 使用ID直接匹配，生成匹配结果 ===");
@@ -56,10 +57,13 @@ public class ParagraphMapper {
     private static void testFindTextByIdInPdf(String pdfPath, String docxTxtPath) throws IOException {
         // 1. 从docx.txt读取所有表格单元格ID
         List<DocxParagraph> docxParagraphs = parseDocxParagraphsFromTxt(docxTxtPath);
+        Map<String, String> docxMap = new HashMap<>();  // ID -> DOCX文本
         List<String> tableCellIds = new ArrayList<>();
+
         for (DocxParagraph para : docxParagraphs) {
             if (para.isTableCell() && !para.id.isEmpty()) {
                 tableCellIds.add(para.id);
+                docxMap.put(para.id, para.text);
             }
         }
 
@@ -78,24 +82,46 @@ public class ParagraphMapper {
         System.out.println("随机选择了 " + testIds.size() + " 个ID进行测试:\n");
 
         // 3. 使用新的 PdfStructureTreeNavigator 批量查找
-        Map<String, String> results = PdfStructureTreeNavigator.findTextByIdInPdf(pdfPath, testIds);
+        Map<String, String> pdfResults = PdfStructureTreeNavigator.findTextByIdInPdf(pdfPath, testIds);
 
-        // 4. 输出详细结果
-        System.out.println("\n=== 详细结果 ===");
+        // 4. 输出详细对比结果
+        System.out.println("\n=== 详细对比结果 ===");
+        int matchCount = 0;
         for (String id : testIds) {
-            String text = results.get(id);
-            System.out.println("ID: " + id);
-            System.out.println("  文本: " + (text != null && !text.isEmpty() ? text : "[未找到]"));
+            String docxText = docxMap.get(id);
+            String pdfText = pdfResults.get(id);
+
+            boolean found = (pdfText != null && !pdfText.isEmpty());
+
+            System.out.println("【" + id + "】");
+            System.out.println("  DOCX期望: " + truncate(docxText, 80));
+            System.out.println("  PDF读取:  " + (found ? truncate(pdfText, 80) : "[未找到]"));
+
+            // 简单判断是否匹配（去除空白后对比前50个字符）
+            if (found) {
+                String docxNorm = normalizeText(docxText).substring(0, Math.min(50, normalizeText(docxText).length()));
+                String pdfNorm = normalizeText(pdfText).substring(0, Math.min(50, normalizeText(pdfText).length()));
+                if (docxNorm.equals(pdfNorm)) {
+                    System.out.println("  状态: ✓ 匹配");
+                    matchCount++;
+                } else {
+                    System.out.println("  状态: △ 找到但内容不匹配");
+                }
+            } else {
+                System.out.println("  状态: × 未找到");
+            }
             System.out.println();
         }
 
         // 5. 统计
-        long foundCount = results.values().stream().filter(v -> v != null && !v.isEmpty()).count();
-        System.out.println("=== 最终统计 ===");
+        long foundCount = pdfResults.values().stream().filter(v -> v != null && !v.isEmpty()).count();
+        System.out.println("\n=== 最终统计 ===");
         System.out.println("测试总数: " + testIds.size());
         System.out.println("成功找到: " + foundCount);
+        System.out.println("内容匹配: " + matchCount);
         System.out.println("未找到: " + (testIds.size() - foundCount));
-        System.out.println("成功率: " + String.format("%.2f%%", foundCount * 100.0 / testIds.size()));
+        System.out.println("查找率: " + String.format("%.2f%%", foundCount * 100.0 / testIds.size()));
+        System.out.println("匹配率: " + String.format("%.2f%%", matchCount * 100.0 / testIds.size()));
     }
 
     /**
@@ -812,7 +838,11 @@ public class ParagraphMapper {
         String pdfDir = pdfFile.getParent();
         String pdfName = pdfFile.getName().replaceFirst("[.][^.]+$", ""); // 去除扩展名
         String docxTxtPath = pdfDir + File.separator + pdfName + "_docx.txt";
-        String outputPath = pdfDir + File.separator + pdfName + "_pdf.txt";
+
+        // 生成带时间戳的输出文件名
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
+        String timestamp = sdf.format(new Date());
+        String outputPath = pdfDir + File.separator + pdfName + "_pdf_" + timestamp + ".txt";
 
         // 2. 从DOCX txt解析表格结构
         List<DocxParagraph> docxParagraphs = parseDocxParagraphsFromTxt(docxTxtPath);
