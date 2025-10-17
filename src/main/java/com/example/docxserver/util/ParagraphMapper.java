@@ -38,9 +38,9 @@ public class ParagraphMapper {
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
 
 //        // 步骤0-1: 从PDF独立提取表格结构到XML格式TXT（不依赖DOCX）
-        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT ===");
-        toXML(pdfPath);
-        System.out.println();
+//        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT ===");
+//        toXML(pdfPath);
+//        System.out.println();
 //
 //        // 步骤0-2: 使用新的ID匹配方法，生成匹配结果
 //        System.out.println("=== 使用ID直接匹配，生成匹配结果 ===");
@@ -48,9 +48,9 @@ public class ParagraphMapper {
 //        System.out.println();
 
         // 步骤0-3: 测试通过ID在PDF中查找文本
-//        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
-//        testFindTextByIdInPdf(pdfPath, docxTxtPath);
-//        System.out.println();
+        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
+        testFindTextByIdInPdf(pdfPath, docxTxtPath);
+        System.out.println();
 
         // 步骤0-4: 使用PDFTextStripper提取PDF全文到txt
 //        System.out.println("=== 使用PDFTextStripper提取PDF全文 ===");
@@ -608,10 +608,41 @@ public class ParagraphMapper {
 
     /**
      * 归一化文本：去除空白、标点等
+     *
+     * 增强版本：
+     * 1. 去除换行符：\r\n、\r、\n
+     * 2. 去除Unicode行分隔符：\u2028 (行分隔符)、\u2029 (段落分隔符)
+     * 3. 去除零宽字符和不可见空白：
+     *    - \u200B (零宽空格 Zero Width Space)
+     *    - \u200C (零宽非连字符 Zero Width Non-Joiner)
+     *    - \u200D (零宽连字符 Zero Width Joiner)
+     *    - \uFEFF (零宽非断空格 Zero Width No-Break Space / BOM)
+     * 4. 去除其他所有空白字符（用\s+匹配）
+     * 5. 去除标点符号
+     * 6. 转换为小写
      */
     private static String normalizeText(String text) {
-        return text.replaceAll("\\s+", "")
+        if (text == null) {
+            return "";
+        }
+
+        return text
+                // 去除换行符和Unicode行分隔符
+                .replace("\r\n", "")
+                .replace("\r", "")
+                .replace("\n", "")
+                .replace("\u2028", "")  // Line Separator
+                .replace("\u2029", "")  // Paragraph Separator
+                // 去除零宽字符
+                .replace("\u200B", "")  // Zero Width Space
+                .replace("\u200C", "")  // Zero Width Non-Joiner
+                .replace("\u200D", "")  // Zero Width Joiner
+                .replace("\uFEFF", "")  // Zero Width No-Break Space (BOM)
+                // 去除所有空白字符
+                .replaceAll("\\s+", "")
+                // 去除标点符号
                 .replaceAll("[\\p{Punct}]", "")
+                // 转换为小写
                 .toLowerCase();
     }
 

@@ -121,6 +121,10 @@ public class PdfTextExtractSupport {
     /**
      * 从结构元素中递归提取表格（只提取目标ID的文本）
      * 参考ParagraphMapper.toXML()的实现逻辑
+     *
+     * 增强策略：先在TR级别收集所有单元格的文本
+     * 1. 优先：如果cellID完全匹配，直接使用该TD的文本
+     * 2. 降级：如果cellID没有匹配，尝试用目标文本与TR的所有TD文本进行归一化匹配
      */
     private static void extractTablesWithIds(
             org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
@@ -146,7 +150,8 @@ public class PdfTextExtractSupport {
                     if ("TR".equalsIgnoreCase(rowElement.getStructureType())) {
                         String rowId = tableId + "-r" + String.format("%03d", rowIndex + 1);
 
-                        // 提取行内的单元格
+                        // 先收集该行所有单元格的ID和文本（用于后续降级匹配）
+                        Map<String, String> rowCellTexts = new LinkedHashMap<>();
                         int colIndex = 0;
                         for (Object cellKid : rowElement.getKids()) {
                             if (cellKid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
@@ -155,17 +160,43 @@ public class PdfTextExtractSupport {
 
                                 if ("TD".equalsIgnoreCase(cellElement.getStructureType())) {
                                     String cellId = rowId + "-c" + String.format("%03d", colIndex + 1) + "-p001";
-
-                                    // 只提取目标ID的文本
-                                    if (targetIdSet.contains(cellId)) {
-                                        String cellText = extractTextFromCell(cellElement, doc);
-                                        results.put(cellId, cellText);
-                                    }
-
+                                    String cellText = extractTextFromCell(cellElement, doc);
+                                    rowCellTexts.put(cellId, cellText);
                                     colIndex++;
                                 }
                             }
                         }
+
+                        // 遍历目标ID，优先精确匹配，否则降级到TR级别匹配
+                        for (String targetId : targetIdSet) {
+                            if (results.containsKey(targetId)) {
+                                // 该ID已经找到，跳过
+                                continue;
+                            }
+
+                            // 检查该targetId是否属于当前行（通过rowId前缀判断）
+                            if (!targetId.startsWith(rowId + "-c")) {
+                                continue;
+                            }
+
+                            // 策略1: 精确匹配cellID
+                            if (rowCellTexts.containsKey(targetId)) {
+                                results.put(targetId, rowCellTexts.get(targetId));
+                            } else {
+                                // 策略2: 降级到TR级别匹配（使用整行所有单元格的文本）
+                                StringBuilder rowText = new StringBuilder();
+                                for (String cellText : rowCellTexts.values()) {
+                                    if (cellText != null && !cellText.trim().isEmpty()) {
+                                        if (rowText.length() > 0) {
+                                            rowText.append(" ");
+                                        }
+                                        rowText.append(cellText);
+                                    }
+                                }
+                                results.put(targetId, rowText.toString());
+                            }
+                        }
+
                         rowIndex++;
                     }
                 }
