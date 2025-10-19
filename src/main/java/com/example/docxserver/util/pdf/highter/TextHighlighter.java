@@ -44,7 +44,43 @@ public class TextHighlighter {
     }
 
     /**
-     * 根据字符范围构建 QuadPoints
+     * 根据字符范围构建 QuadPoints（行业最佳实践：全 DirAdj 坐标系 + HeightDir）
+     *
+     * <h3>核心原理</h3>
+     * <ol>
+     *   <li><b>完全使用 DirAdj 坐标系</b>：避免混用 fontDescriptor（不含缩放）导致高度失真
+     *     <ul>
+     *       <li>XDirAdj/YDirAdj/WidthDirAdj/HeightDir 已包含文本矩阵缩放</li>
+     *       <li>DirAdj 坐标系：Y 轴向下递增（小 Y 是顶部，大 Y 是底部）</li>
+     *     </ul>
+     *   </li>
+     *   <li><b>高度计算</b>：直接使用 getHeightDir()，不再用 ascent/descent
+     *     <ul>
+     *       <li>yTop = YDirAdj - HeightDir（顶部：向上偏移）</li>
+     *       <li>yBottom = YDirAdj（底部：基线位置）</li>
+     *     </ul>
+     *   </li>
+     *   <li><b>动态 padding</b>（基于中位高度）：
+     *     <ul>
+     *       <li>顶部：max(6% × 中位高度, 0.6pt)</li>
+     *       <li>底部：max(8% × 中位高度, 0.6pt)</li>
+     *       <li>横向：max(4% × 宽度, 0.4pt)</li>
+     *     </ul>
+     *   </li>
+     *   <li><b>坐标转换</b>：最后统一转换到 PDF 用户空间（Y 轴向上递增）
+     *     <ul>
+     *       <li>top = pageHeight - topDir（期望 top &gt; bottom）</li>
+     *       <li>bottom = pageHeight - botDir</li>
+     *     </ul>
+     *   </li>
+     * </ol>
+     *
+     * <h3>关键约束</h3>
+     * <ul>
+     *   <li>DirAdj 坐标系：topDir &lt; botDir（Y 向下增）</li>
+     *   <li>用户空间：top &gt; bottom（Y 向上增）</li>
+     *   <li>最终高度 ≈ 中位高度 × 1.14（1 + 0.06 + 0.08）</li>
+     * </ul>
      *
      * @param pageIndex 页面索引
      * @param pdPage PDF页面对象（用于获取页面高度）
@@ -71,7 +107,7 @@ public class TextHighlighter {
         // 2) 行分组（y 阈值/基线角度）
         List<List<TextPosition>> lines = groupByLine(hits);
 
-        // 3) 行内合并片段（使用 DirAdj 坐标系，避免混用导致高度偏小）
+        // 3) 行内合并片段（全程 DirAdj 坐标系，使用 HeightDir，避免混用导致失真）
         List<float[]> quads = new ArrayList<>();
         for (List<TextPosition> line : lines) {
             List<List<TextPosition>> segments = mergeByGap(line); // 按 gapX 合并
@@ -81,43 +117,78 @@ public class TextHighlighter {
                 float topDir = INF, botDir = -INF;
                 TextPosition firstTp = seg.get(0);
 
-                for (TextPosition tp : seg) {
-                    float xL = tp.getXDirAdj();
-                    float xR = tp.getXDirAdj() + tp.getWidthDirAdj();
-                    float yT = tp.getYDirAdj();  // 顶部（DirAdj 坐标系 Y 向下增）
-                    float yB = tp.getYDirAdj() - tp.getHeightDir();  // 底部（减去高度）
+                // 收集高度用于计算中位数（用于 padding）
+                List<Float> heights = new ArrayList<>();
 
-                    leftDir = Math.min(leftDir, xL);
-                    rightDir = Math.max(rightDir, xR);
-                    topDir = Math.min(topDir, yT);    // DirAdj 中小 Y 是顶部
-                    botDir = Math.max(botDir, yB);    // DirAdj 中大 Y 是底部
+                for (TextPosition tp : seg) {
+                    // DirAdj 坐标系（已含文本矩阵缩放）
+                    float xL_dir = tp.getXDirAdj();
+                    float xR_dir = tp.getXDirAdj() + tp.getWidthDirAdj();
+
+                    // DirAdj 坐标中，Y 是"自上向下增加"
+                    float yBottom_dir = tp.getYDirAdj();                        // 底部
+                    float yTop_dir = tp.getYDirAdj() - tp.getHeightDir();       // 顶部（y - height）
+
+                    heights.add(tp.getHeightDir());
+
+                    leftDir = Math.min(leftDir, xL_dir);
+                    rightDir = Math.max(rightDir, xR_dir);
+                    topDir = Math.min(topDir, yTop_dir);      // 顶：取更小的 y
+                    botDir = Math.max(botDir, yBottom_dir);   // 底：取更大的 y
 
                     // 调试：打印第一个字符的详细信息
                     if (tp == firstTp) {
                         System.out.printf("[DEBUG] 第一个字符详细信息:%n");
                         System.out.printf("  字符: '%s'%n", tp.getUnicode());
-                        System.out.printf("  getXDirAdj()=%.2f, getYDirAdj()=%.2f%n", xL, yT);
-                        System.out.printf("  getWidthDirAdj()=%.2f, getHeightDir()=%.2f%n", tp.getWidthDirAdj(), tp.getHeightDir());
-                        System.out.printf("  计算: xL=%.2f, xR=%.2f, yT=%.2f, yB=%.2f%n", xL, xR, yT, yB);
-                        System.out.printf("  高度(DirAdj): %.2f%n", yT - yB);
+                        System.out.printf("  XDirAdj=%.2f WDirAdj=%.2f  YDirAdj=%.2f HDir=%.2f%n",
+                            xL_dir, tp.getWidthDirAdj(), tp.getYDirAdj(), tp.getHeightDir());
+                        System.out.printf("  yTopDir=%.2f (YDirAdj-HDir)  yBotDir=%.2f (YDirAdj)%n",
+                            yTop_dir, yBottom_dir);
+                        System.out.printf("  高度(DirAdj): %.2f%n", yBottom_dir - yTop_dir);
                     }
                 }
 
-                // 轻微放大，避免上/下切边（可选，通常 0.5-1.0）
-                float pad = 0.5f;
-                topDir -= pad;
-                botDir += pad;
+                // 计算中位数高度
+                heights.sort(Float::compareTo);
+                float hMed = heights.get(heights.size() / 2);
+
+                // 动态 padding（行业最佳实践：顶部 6%，底部 8%，最小 0.6pt）
+                float padTopDir = Math.max(0.6f, 0.06f * hMed);
+                float padBottomDir = Math.max(0.6f, 0.08f * hMed);
+
+                // DirAdj 里：往"上"是减小数值，往"下"是增大数值
+                topDir -= padTopDir;
+                botDir += padBottomDir;
+
+                // X 向轻微外扩，取 4% 或 0.4pt
+                float padX = Math.max(0.4f, 0.04f * (rightDir - leftDir));
+                leftDir -= padX;
+                rightDir += padX;
 
                 // 转换到 PDF 用户空间（Y 轴翻转：用户空间 Y 从下向上增）
                 float top = pageHeight - topDir;       // 顶部：pageHeight - 小Y
                 float bottom = pageHeight - botDir;    // 底部：pageHeight - 大Y
 
+                // 自检：用户空间里 top 必须 > bottom
+                if (top <= bottom) {
+                    System.err.printf("[WARN] top<=bottom 异常: top=%.2f bottom=%.2f (pageH=%.2f)%n",
+                        top, bottom, pageHeight);
+                    // 交换避免负高
+                    float t = top;
+                    top = bottom;
+                    bottom = t;
+                }
+
                 // 调试输出
-                System.out.printf("[DEBUG] DirAdj坐标: topDir=%.2f, botDir=%.2f, leftDir=%.2f, rightDir=%.2f%n",
-                    topDir, botDir, leftDir, rightDir);
-                System.out.printf("[DEBUG] 用户空间坐标: top=%.2f, bottom=%.2f, left=%.2f, right=%.2f%n",
+                System.out.printf("[DEBUG] 片段聚合(DirAdj): topDir=%.2f botDir=%.2f leftDir=%.2f rightDir=%.2f%n",
+                    topDir + padTopDir, botDir - padBottomDir, leftDir + padX, rightDir - padX);
+                System.out.printf("[DEBUG] Padding: top=%.2f bottom=%.2f horizontal=%.2f (基于中位高度 %.2f)%n",
+                    padTopDir, padBottomDir, padX, hMed);
+                System.out.printf("[DEBUG] DirAdj坐标(加padding后): topDir=%.2f botDir=%.2f (期望 topDir<botDir)%n",
+                    topDir, botDir);
+                System.out.printf("[DEBUG] 用户空间坐标: top=%.2f bottom=%.2f left=%.2f right=%.2f%n",
                     top, bottom, leftDir, rightDir);
-                System.out.printf("[DEBUG] 高亮框高度: %.2f (pageHeight=%.2f)%n", top - bottom, pageHeight);
+                System.out.printf("[DEBUG] 最终高亮框高度: %.2f (期望为正，≈中位高度×1.14)%n", top - bottom);
 
                 // QuadPoints 顺序：TL, TR, BL, BR
                 quads.add(new float[]{
