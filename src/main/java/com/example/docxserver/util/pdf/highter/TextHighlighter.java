@@ -46,18 +46,22 @@ public class TextHighlighter {
     /**
      * 根据字符范围构建 QuadPoints
      *
-     * @param page 页面索引
+     * @param pageIndex 页面索引
+     * @param pdPage PDF页面对象（用于获取页面高度）
      * @param startChar 起始字符索引（包含）
      * @param endChar 结束字符索引（不包含）
      * @return QuadPoints 列表，每个 float[8] 表示一个四边形（TL, TR, BL, BR）
      */
-    public static List<float[]> buildQuadsForRange(PageIndex page, int startChar, int endChar) {
+    public static List<float[]> buildQuadsForRange(PageIndex pageIndex, PDPage pdPage, int startChar, int endChar) {
+        // 获取页面高度（用于 Y 轴转换）
+        float pageHeight = pdPage.getCropBox().getHeight();
+
         // 1) 取出覆盖的 glyph 序列
         List<TextPosition> hits = new ArrayList<>();
-        for (int i = startChar; i < endChar && i < page.charToGlyphIndex.length; i++) {
-            int gi = page.charToGlyphIndex[i];
-            if (gi >= 0 && gi < page.glyphs.size()) {
-                hits.add(page.glyphs.get(gi));
+        for (int i = startChar; i < endChar && i < pageIndex.charToGlyphIndex.length; i++) {
+            int gi = pageIndex.charToGlyphIndex[i];
+            if (gi >= 0 && gi < pageIndex.glyphs.size()) {
+                hits.add(pageIndex.glyphs.get(gi));
             }
         }
         if (hits.isEmpty()) {
@@ -67,25 +71,61 @@ public class TextHighlighter {
         // 2) 行分组（y 阈值/基线角度）
         List<List<TextPosition>> lines = groupByLine(hits);
 
-        // 3) 行内合并片段
+        // 3) 行内合并片段（使用 DirAdj 坐标系，避免混用导致高度偏小）
         List<float[]> quads = new ArrayList<>();
         for (List<TextPosition> line : lines) {
             List<List<TextPosition>> segments = mergeByGap(line); // 按 gapX 合并
             for (List<TextPosition> seg : segments) {
-                // 轴对齐四点
-                float minX = INF, minY = INF, maxX = -INF, maxY = -INF;
+                // 在 DirAdj 坐标系中计算边界框（Y 向下增）
+                float leftDir = INF, rightDir = -INF;
+                float topDir = INF, botDir = -INF;
+                TextPosition firstTp = seg.get(0);
+
                 for (TextPosition tp : seg) {
-                    float x = tp.getXDirAdj();
-                    float y = tp.getYDirAdj();
-                    float w = tp.getWidthDirAdj();
-                    float h = tp.getHeightDir();
-                    minX = Math.min(minX, x);
-                    minY = Math.min(minY, y);
-                    maxX = Math.max(maxX, x + w);
-                    maxY = Math.max(maxY, y + h);
+                    float xL = tp.getXDirAdj();
+                    float xR = tp.getXDirAdj() + tp.getWidthDirAdj();
+                    float yT = tp.getYDirAdj();  // 顶部（DirAdj 坐标系 Y 向下增）
+                    float yB = tp.getYDirAdj() - tp.getHeightDir();  // 底部（减去高度）
+
+                    leftDir = Math.min(leftDir, xL);
+                    rightDir = Math.max(rightDir, xR);
+                    topDir = Math.min(topDir, yT);    // DirAdj 中小 Y 是顶部
+                    botDir = Math.max(botDir, yB);    // DirAdj 中大 Y 是底部
+
+                    // 调试：打印第一个字符的详细信息
+                    if (tp == firstTp) {
+                        System.out.printf("[DEBUG] 第一个字符详细信息:%n");
+                        System.out.printf("  字符: '%s'%n", tp.getUnicode());
+                        System.out.printf("  getXDirAdj()=%.2f, getYDirAdj()=%.2f%n", xL, yT);
+                        System.out.printf("  getWidthDirAdj()=%.2f, getHeightDir()=%.2f%n", tp.getWidthDirAdj(), tp.getHeightDir());
+                        System.out.printf("  计算: xL=%.2f, xR=%.2f, yT=%.2f, yB=%.2f%n", xL, xR, yT, yB);
+                        System.out.printf("  高度(DirAdj): %.2f%n", yT - yB);
+                    }
                 }
+
+                // 轻微放大，避免上/下切边（可选，通常 0.5-1.0）
+                float pad = 0.5f;
+                topDir -= pad;
+                botDir += pad;
+
+                // 转换到 PDF 用户空间（Y 轴翻转：用户空间 Y 从下向上增）
+                float top = pageHeight - topDir;       // 顶部：pageHeight - 小Y
+                float bottom = pageHeight - botDir;    // 底部：pageHeight - 大Y
+
+                // 调试输出
+                System.out.printf("[DEBUG] DirAdj坐标: topDir=%.2f, botDir=%.2f, leftDir=%.2f, rightDir=%.2f%n",
+                    topDir, botDir, leftDir, rightDir);
+                System.out.printf("[DEBUG] 用户空间坐标: top=%.2f, bottom=%.2f, left=%.2f, right=%.2f%n",
+                    top, bottom, leftDir, rightDir);
+                System.out.printf("[DEBUG] 高亮框高度: %.2f (pageHeight=%.2f)%n", top - bottom, pageHeight);
+
                 // QuadPoints 顺序：TL, TR, BL, BR
-                quads.add(new float[]{minX, maxY, maxX, maxY, minX, minY, maxX, minY});
+                quads.add(new float[]{
+                    leftDir, top,        // Top-Left
+                    rightDir, top,       // Top-Right
+                    leftDir, bottom,     // Bottom-Left
+                    rightDir, bottom     // Bottom-Right
+                });
             }
         }
         return quads;
@@ -245,7 +285,7 @@ public class TextHighlighter {
     public static void highlightCharRange(PDDocument doc, PDPage page, PageIndex pageIndex,
                                            int startChar, int endChar,
                                            float[] rgb, float opacity, String note) throws IOException {
-        List<float[]> quads = buildQuadsForRange(pageIndex, startChar, endChar);
+        List<float[]> quads = buildQuadsForRange(pageIndex, page, startChar, endChar);
         if (!quads.isEmpty()) {
             addHighlight(doc, page, quads, rgb, opacity, note);
         }

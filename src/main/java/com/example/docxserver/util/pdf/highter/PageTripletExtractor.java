@@ -127,7 +127,7 @@ public class PageTripletExtractor {
 
 
             // 3) 要高亮的文本（从你打印出来的字符串里挑一个）
-            String needle = "政府采购"; // ← 自己改成你想高亮的子串
+            String needle = "项目名称"; // ← 自己改成你想高亮的子串
 
             // 4) 在 pageText 中找到字符范围（这里只高亮第一处命中）
             int start = p.pageText.indexOf(needle);
@@ -136,19 +136,40 @@ public class PageTripletExtractor {
                 return;
             }
             int end = start + needle.length();
+            System.out.printf("找到文本 '%s' 在字符范围 [%d, %d)%n", needle, start, end);
+
+            // ===== 调试输出：打印相关字形的坐标信息 =====
+            System.out.println("\n=== 坐标调试信息 ===");
+            PDPage pdPage = doc.getPage(0);
+            float pageHeight = pdPage.getCropBox().getHeight();
+            float pageWidth = pdPage.getCropBox().getWidth();
+            System.out.printf("页面尺寸: %.2f x %.2f%n", pageWidth, pageHeight);
+
+            // 打印前3个字符的字形坐标
+            System.out.println("\n高亮文本前3个字符的坐标：");
+            for (int i = start; i < Math.min(start + 3, end); i++) {
+                int gi = p.charToGlyphIndex[i];
+                if (gi >= 0 && gi < p.glyphs.size()) {
+                    TextPosition tp = p.glyphs.get(gi);
+                    System.out.printf("  字符[%d] '%s': xDirAdj=%.2f, yDirAdj=%.2f, width=%.2f, height=%.2f%n",
+                        i, p.pageText.charAt(i),
+                        tp.getXDirAdj(), tp.getYDirAdj(), tp.getWidthDirAdj(), tp.getHeightDir());
+                }
+            }
+            System.out.println();
 
             // 5) 组装 TextHighlighter 需要的 PageIndex（用三件套构造）
             TextHighlighter.PageIndex idx = new TextHighlighter.PageIndex(p.pageText, p.charToGlyphIndex, p.glyphs);
 
-            // 6) 取该页对象，调用高亮（黄色、30% 透明）
-            PDPage pdPage = doc.getPage(0);          // 第1页 → 索引 0
-            float[] yellow = {1f, 1f, 0f};           // 颜色
+            // 6) 调用高亮（黄色、30% 透明）
+            float[] yellow = {0f, 1f, 0f};           // 颜色
             float opacity = 0.30f;                   // 透明度
             TextHighlighter.highlightCharRange(doc, pdPage, idx, start, end, yellow, opacity, "demo");
 
             // 7) 保存输出
-            doc.save("E:\\programFile\\AIProgram\\docxServer\\pdf\\index\\out.pdf");
-            System.out.println("OK -> out.pdf");
+            String outputPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\index\\highlighted_output.pdf";
+            doc.save(outputPath);
+            System.out.println("OK -> " + outputPath);
         }
 
 
