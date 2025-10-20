@@ -225,6 +225,29 @@ public class ParagraphMapper {
         System.out.println("未找到: " + (testIds.size() - pdfResults.size()));
         System.out.println("提取率: " + String.format("%.2f%%", pdfResults.size() * 100.0 / testIds.size()));
         System.out.println("匹配率: " + String.format("%.2f%%", matchCount * 100.0 / testIds.size()));
+
+        // 6. 打印未匹配的ID列表
+        List<String> unmatchedIds = new ArrayList<>();
+        for (String id : testIds) {
+            String pdfText = pdfResults.get(id);
+            if (pdfText == null || pdfText.isEmpty()) {
+                unmatchedIds.add(id);
+            }
+        }
+
+        if (!unmatchedIds.isEmpty()) {
+            System.out.println("\n=== 未匹配的ID列表 (" + unmatchedIds.size() + "个) ===");
+            int printLimit = Math.min(50, unmatchedIds.size());
+            for (int i = 0; i < printLimit; i++) {
+                String id = unmatchedIds.get(i);
+                String expectedText = expectedTexts.get(id);
+                System.out.println("【" + id + "】");
+                System.out.println("  预期文本: " + truncate(expectedText, 100));
+            }
+            if (unmatchedIds.size() > printLimit) {
+                System.out.println("... 还有 " + (unmatchedIds.size() - printLimit) + " 个未显示");
+            }
+        }
     }
 
     /**
