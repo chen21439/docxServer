@@ -1,6 +1,7 @@
-package com.example.docxserver.util;
+package com.example.docxserver.util.taggedPDF;
 
-import com.example.docxserver.pdf.util.*;
+import com.example.docxserver.util.MCIDTextExtractor;
+import com.example.docxserver.util.PdfTextExtractSupport;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
