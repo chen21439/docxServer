@@ -37,7 +37,7 @@ public class ParagraphMapper {
     public static void main(String[] args) throws Exception {
         String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_A2b.pdf";
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
-
+        String taskId = "1978018096320905217";
 //        // 步骤0-1: 从PDF独立提取表格结构到XML格式TXT（不依赖DOCX）
 //        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT ===");
 //        toXML(pdfPath);
@@ -50,7 +50,7 @@ public class ParagraphMapper {
 
         // 步骤0-3: 测试通过ID在PDF中查找文本
         System.out.println("=== 测试通过ID在PDF中查找文本 ===");
-        testFindTextByIdInPdf(pdfPath, docxTxtPath);
+        testFindTextByIdInPdf(taskId);
         System.out.println();
 
         // 步骤0-4: 使用PDFTextStripper提取PDF全文到txt
@@ -82,19 +82,20 @@ public class ParagraphMapper {
      *    - 状态标记：✓匹配、△找到但不匹配、×未找到
      *    - 统计数据：测试总数、成功提取数、内容匹配数、提取率、匹配率
      *
-     * @param pdfPath PDF文件路径（必须是Tagged PDF）
-     * @param docxTxtPath DOCX txt文件路径（未使用，仅保留接口兼容性）
+     * @param taskId 任务ID（如：1978018096320905217）
+     * @param pdfSuffix PDF文件后缀（如：_A2b，可为null或空字符串）
      * @throws IOException 文件读取异常
      */
-    private static void testFindTextByIdInPdf(String pdfPath, String docxTxtPath) throws IOException {
-        // 1. 构建JSON文件路径（从PDF路径推导）
-        File pdfFile = new File(pdfPath);
-        String pdfDir = pdfFile.getParent();
-        String pdfName = pdfFile.getName().replaceFirst("[.][^.]+$", "");
-        // 移除可能的后缀（如_A2b）
-        String baseFileName = pdfName.replaceAll("_[A-Za-z0-9]+$", "");
-        String jsonPath = pdfDir + File.separator + baseFileName + ".json";
+    private static void testFindTextByIdInPdf(String taskId) throws IOException {
+        // 固定目录
+        String pdfDir = "E:\\programFile\\AIProgram\\docxServer\\pdf";
 
+        // 1. 构建文件路径
+        String pdfFileName = taskId + "_A2b.pdf";
+        String pdfPath = pdfDir + File.separator + pdfFileName;
+        String jsonPath = pdfDir + File.separator + taskId + ".json";
+
+        System.out.println("PDF文件路径: " + pdfPath);
         System.out.println("JSON文件路径: " + jsonPath);
 
         // 2. 从JSON文件读取所有pid
@@ -125,14 +126,17 @@ public class ParagraphMapper {
                     // 反转义JSON字符串
                     text = text.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"");
 
-                    testIds.add(pid);
-                    expectedTexts.put(pid, text);
+                    // 去重：只添加尚未存在的pid（spanList中可能有重复项）
+                    if (!expectedTexts.containsKey(pid)) {
+                        testIds.add(pid);
+                        expectedTexts.put(pid, text);
+                    }
                 }
 
                 pos = pidEnd;
             }
 
-            System.out.println("从JSON文件中读取到 " + testIds.size() + " 个pid");
+            System.out.println("从JSON文件中读取到 " + testIds.size() + " 个唯一pid");
 
         } catch (Exception e) {
             System.err.println("读取JSON文件失败: " + e.getMessage());
@@ -146,7 +150,6 @@ public class ParagraphMapper {
 
         // 4. 输出详细对比结果
         System.out.println("\n=== 详细对比结果（前20个） ===");
-        int matchCount = 0;
         int foundCount = 0;
 
         // 显示前20个结果
@@ -180,7 +183,6 @@ public class ParagraphMapper {
 
                     if (expectedSub.equals(pdfSub)) {
                         System.out.println("  状态: ✓ 匹配");
-                        matchCount++;
                     } else {
                         System.out.println("  状态: △ 找到但内容不匹配");
                         System.out.println("    预期(归一化): " + truncate(expectedSub, 80));
@@ -197,7 +199,8 @@ public class ParagraphMapper {
 
         System.out.println("(仅显示前" + displayCount + "个，共" + testIds.size() + "个)");
 
-        // 统计全部结果
+        // 统计全部结果（使用去重后的testIds）
+        int matchCount = 0;
         for (String id : testIds) {
             String pdfText = pdfResults.get(id);
             if (pdfText != null && !pdfText.isEmpty()) {
