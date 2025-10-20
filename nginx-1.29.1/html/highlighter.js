@@ -381,13 +381,15 @@
 
       // 从浏览器 URL 中获取当前 HTML 文件名
       const currentUrl = window.location.pathname;
-      const htmlFileName = currentUrl.substring(currentUrl.lastIndexOf('/') + 1);
+      const htmlFileName = currentUrl.substring(
+        currentUrl.lastIndexOf("/") + 1
+      );
 
       // 提取文件名（去掉 .html 后缀），然后拼接 .json
-      let jsonFileName = 'list1.json'; // 默认值
-      if (htmlFileName && htmlFileName.endsWith('.html')) {
-        const baseFileName = htmlFileName.replace('.html', '');
-        jsonFileName = baseFileName + '.json';
+      let jsonFileName = "list1.json"; // 默认值
+      if (htmlFileName && htmlFileName.endsWith(".html")) {
+        const baseFileName = htmlFileName.replace(".html", "");
+        jsonFileName = baseFileName + ".json";
       }
 
       const jsonUrl = `http://localhost:80/${jsonFileName}`;
@@ -422,10 +424,10 @@
   // textContent 可能提取为 "ABC" 或 "BAC"，取决于浏览器实现
   // 此函数保证按 DOM 树的 childNodes 顺序提取，结果总是 "ABC"
   function getTextByDOMOrder(element) {
-    let result = '';
+    let result = "";
 
     // 按顺序遍历所有子节点
-    element.childNodes.forEach(node => {
+    element.childNodes.forEach((node) => {
       if (node.nodeType === Node.TEXT_NODE) {
         // 文本节点：直接添加文本内容
         result += node.nodeValue;
@@ -443,7 +445,7 @@
   // ============================================================================
   // 移除所有空白字符，用于文本匹配、验证和显示
   function strictNormalizeText(text) {
-    return text.replace(/\s+/g, "");  // 去除所有空白字符（空格、换行、制表符等）
+    return text.replace(/\s+/g, ""); // 去除所有空白字符（空格、换行、制表符等）
   }
 
   // ============================================================================
@@ -480,7 +482,7 @@
         containerId: containerId,
         rawText: "",
         strictText: "",
-        spanTextMap: []
+        spanTextMap: [],
       };
     }
 
@@ -489,7 +491,9 @@
     const strictText = strictNormalizeText(rawText);
 
     // 收集容器内所有span
-    const allSpansInContainer = Array.from(container.querySelectorAll('span[id]'));
+    const allSpansInContainer = Array.from(
+      container.querySelectorAll("span[id]")
+    );
 
     // 构建 spanTextMap
     const spanTextMap = [];
@@ -503,7 +507,7 @@
         currentPosRaw += nodeRawText.length;
         currentPosStrict += nodeStrictText.length;
       } else if (node.nodeType === Node.ELEMENT_NODE) {
-        const isMatchingSpan = allSpansInContainer.some(s => s === node);
+        const isMatchingSpan = allSpansInContainer.some((s) => s === node);
         if (isMatchingSpan) {
           const spanRawText = getTextByDOMOrder(node);
           const spanStrictText = strictNormalizeText(spanRawText);
@@ -514,25 +518,25 @@
             rawStart: currentPosRaw,
             rawEnd: currentPosRaw + spanRawText.length,
             strictStart: currentPosStrict,
-            strictEnd: currentPosStrict + spanStrictText.length
+            strictEnd: currentPosStrict + spanStrictText.length,
           });
           currentPosRaw += spanRawText.length;
           currentPosStrict += spanStrictText.length;
         } else {
-          node.childNodes.forEach(child => traverseAndMap(child));
+          node.childNodes.forEach((child) => traverseAndMap(child));
         }
       }
     }
 
-    container.childNodes.forEach(child => traverseAndMap(child));
+    container.childNodes.forEach((child) => traverseAndMap(child));
 
     return {
       container,
       containerId,
       rawText,
       strictText,
-      text: strictText,  // 保持兼容性
-      spanTextMap
+      text: strictText, // 保持兼容性
+      spanTextMap,
     };
   }
 
@@ -556,7 +560,7 @@
     return {
       matched,
       strictExpected,
-      strictContainer
+      strictContainer,
     };
   }
 
@@ -584,7 +588,11 @@
   //   这样可以避免因为ID错误导致的容器混乱问题
   //
   //   验证逻辑和高亮逻辑都使用此方法，确保一致性
-  function filterSpansByMatchedContainer(matchingSpans, expectedText, targetTag = "P") {
+  function filterSpansByMatchedContainer(
+    matchingSpans,
+    expectedText,
+    targetTag = "P"
+  ) {
     if (!expectedText || matchingSpans.length === 0) {
       return matchingSpans;
     }
@@ -592,9 +600,13 @@
     // 按容器分组：找出所有唯一的容器（P 或 TD）
     const containerMap = new Map(); // key: 容器元素, value: 该容器下的spans
 
-    matchingSpans.forEach(span => {
+    matchingSpans.forEach((span) => {
       let container = span;
-      while (container && container.tagName !== targetTag && container.tagName !== "BODY") {
+      while (
+        container &&
+        container.tagName !== targetTag &&
+        container.tagName !== "BODY"
+      ) {
         container = container.parentElement;
       }
 
@@ -613,7 +625,9 @@
 
     // 如果有多个容器，进行文本匹配过滤
     if (DEBUG_CLICK_RISK_ITEM) {
-      console.log(`⚠️ 检测到 ${containerMap.size} 个${targetTag}容器，进行文本匹配过滤...`);
+      console.log(
+        `⚠️ 检测到 ${containerMap.size} 个${targetTag}容器，进行文本匹配过滤...`
+      );
 
       // 【调试】输出每个容器的详细信息
       let containerIndex = 0;
@@ -623,14 +637,14 @@
           id: container.id,
           tagName: container.tagName,
           spanCount: spans.length,
-          spanIds: spans.map(s => s.id), // 显示所有span ID
-          textPreview: getTextByDOMOrder(container).substring(0, 100)
+          spanIds: spans.map((s) => s.id), // 显示所有span ID
+          textPreview: getTextByDOMOrder(container).substring(0, 100),
         });
       }
 
       // 【调试】输出每个span的父容器路径（只显示前3个）
       console.log(`🔍 检查前3个span的父容器路径:`);
-      matchingSpans.slice(0, 3).forEach(span => {
+      matchingSpans.slice(0, 3).forEach((span) => {
         let path = [];
         let current = span;
         while (current && current !== document.body) {
@@ -641,7 +655,7 @@
           }
           current = current.parentElement;
         }
-        console.log(`  ${span.id} -> ${path.join(' < ')}`);
+        console.log(`  ${span.id} -> ${path.join(" < ")}`);
       });
     }
 
@@ -650,7 +664,10 @@
     for (const [container, spans] of containerMap.entries()) {
       containerIndex++;
       const containerRawText = getTextByDOMOrder(container);
-      const { matched, strictExpected, strictContainer } = checkTextMatch(expectedText, containerRawText);
+      const { matched, strictExpected, strictContainer } = checkTextMatch(
+        expectedText,
+        containerRawText
+      );
 
       if (DEBUG_CLICK_RISK_ITEM) {
         console.log(`🔍 容器 ${containerIndex} 文本匹配结果:`, {
@@ -659,22 +676,33 @@
           expectedLength: strictExpected.length,
           containerLength: strictContainer.length,
           expectedPreview: strictExpected.substring(0, 50),
-          containerPreview: strictContainer.substring(0, 50)
+          containerPreview: strictContainer.substring(0, 50),
         });
 
         // 【调试】如果是容器3，输出更详细的信息
-        if (container.id === 't011-r008-c003') {
+        if (container.id === "t011-r008-c003") {
           console.log(`📋 容器3详细分析:`);
           console.log(`  期望文本（完整）: "${strictExpected}"`);
-          console.log(`  容器文本（前200字符）: "${strictContainer.substring(0, 200)}"`);
-          console.log(`  容器是否包含期望文本: ${strictContainer.includes(strictExpected)}`);
+          console.log(
+            `  容器文本（前200字符）: "${strictContainer.substring(0, 200)}"`
+          );
+          console.log(
+            `  容器是否包含期望文本: ${strictContainer.includes(
+              strictExpected
+            )}`
+          );
 
           // 查找 "GB/T17592" 在容器文本中的位置
           const searchText = "GB/T17592";
           const index = strictContainer.indexOf(searchText);
           if (index >= 0) {
             console.log(`  ✅ 找到 "${searchText}" 在位置 ${index}`);
-            console.log(`  周围文本: "${strictContainer.substring(Math.max(0, index - 20), index + searchText.length + 20)}"`);
+            console.log(
+              `  周围文本: "${strictContainer.substring(
+                Math.max(0, index - 20),
+                index + searchText.length + 20
+              )}"`
+            );
           } else {
             console.log(`  ❌ 未找到 "${searchText}"`);
           }
@@ -683,7 +711,9 @@
 
       if (matched) {
         if (DEBUG_CLICK_RISK_ITEM) {
-          console.log(`✅ 文本匹配成功，选择容器: ${targetTag} (包含 ${spans.length} 个span)`);
+          console.log(
+            `✅ 文本匹配成功，选择容器: ${targetTag} (包含 ${spans.length} 个span)`
+          );
         }
         return spans; // 返回匹配容器下的spans
       }
@@ -705,21 +735,32 @@
     let matchingSpans = [];
 
     // 1. 优先尝试精确匹配
-    matchingSpans = Array.from(allSpans).filter(s => s.id === pid);
+    matchingSpans = Array.from(allSpans).filter((s) => s.id === pid);
     if (matchingSpans.length > 0) {
       return { spans: matchingSpans, method: "精确匹配" };
     }
 
     // 2. 根据格式选择匹配策略
-    if (pidParts.length === 4 && pidParts[0].startsWith("t") && pidParts[3].startsWith("p")) {
+    if (
+      pidParts.length === 4 &&
+      pidParts[0].startsWith("t") &&
+      pidParts[3].startsWith("p")
+    ) {
       // t格式: t005-r015-c005-p001 -> 匹配整个单元格 t005-r015-c005-pXXX-rXXX
       const cellPrefix = pidParts.slice(0, 3).join("-");
-      matchingSpans = Array.from(allSpans).filter(s => {
+      matchingSpans = Array.from(allSpans).filter((s) => {
         if (!s.id.startsWith(cellPrefix + "-")) return false;
         const parts = s.id.split("-");
-        return parts.length >= 5 && parts[3].startsWith("p") && parts[4].startsWith("r");
+        return (
+          parts.length >= 5 &&
+          parts[3].startsWith("p") &&
+          parts[4].startsWith("r")
+        );
       });
-      return { spans: matchingSpans, method: `单元格前缀匹配 ("${cellPrefix}-pXXX-rXXX")` };
+      return {
+        spans: matchingSpans,
+        method: `单元格前缀匹配 ("${cellPrefix}-pXXX-rXXX")`,
+      };
     } else if (pidParts.length >= 2 && pidParts[0].startsWith("p")) {
       // p格式: p-00097 或 p-00097-r-001 -> 匹配该段落下的所有 run
       // 提取段落前缀（去掉最后的 r-XXX 部分，如果存在）
@@ -730,16 +771,21 @@
       }
 
       // 匹配该段落下的所有 run: p-00097-r-XXX
-      matchingSpans = Array.from(allSpans).filter(s => {
+      matchingSpans = Array.from(allSpans).filter((s) => {
         if (!s.id.startsWith(paragraphPrefix + "-")) return false;
         const parts = s.id.split("-");
         // 确保是 p-XXXXX-r-XXX 格式（至少4段）
         return parts.length >= 4 && parts[parts.length - 2] === "r";
       });
-      return { spans: matchingSpans, method: `段落前缀匹配 ("${paragraphPrefix}-r-XXX")` };
+      return {
+        spans: matchingSpans,
+        method: `段落前缀匹配 ("${paragraphPrefix}-r-XXX")`,
+      };
     } else {
       // 其他格式：尝试通用前缀匹配
-      matchingSpans = Array.from(allSpans).filter(s => s.id.startsWith(pid + "-"));
+      matchingSpans = Array.from(allSpans).filter((s) =>
+        s.id.startsWith(pid + "-")
+      );
       return { spans: matchingSpans, method: "通用前缀匹配 (pid + '-')" };
     }
   }
@@ -780,22 +826,40 @@
     //
     if (targetTag === "P") {
       // 表格外段落：多个P容器时，按文本匹配过滤
-      matchingSpans = filterSpansByMatchedContainer(matchingSpans, expectedText, "P");
+      matchingSpans = filterSpansByMatchedContainer(
+        matchingSpans,
+        expectedText,
+        "P"
+      );
     } else if (targetTag === "TD") {
       // 表格内单元格：多个TD容器时，按文本匹配过滤
-      matchingSpans = filterSpansByMatchedContainer(matchingSpans, expectedText, "TD");
+      matchingSpans = filterSpansByMatchedContainer(
+        matchingSpans,
+        expectedText,
+        "TD"
+      );
     }
 
     // ============================================================================
     // 找到容器 (表格内找TD，表格外找P)
     // ============================================================================
     let container = matchingSpans[0];
-    while (container && container.tagName !== targetTag && container.tagName !== "BODY") {
+    while (
+      container &&
+      container.tagName !== targetTag &&
+      container.tagName !== "BODY"
+    ) {
       container = container.parentElement;
     }
 
     if (!container || container.tagName === "BODY") {
-      return { container: null, text: "", rawText: "", strictText: "", spanTextMap: [] };
+      return {
+        container: null,
+        text: "",
+        rawText: "",
+        strictText: "",
+        spanTextMap: [],
+      };
     }
 
     // ============================================================================
@@ -804,12 +868,21 @@
     // 这样可以避免因为ID错误导致的span遗漏问题
     // 例如：容器内有个span的ID是 t005-r012-c005-p010-r003（属于其他单元格）
     //      但它确实在当前容器内，应该被包含在文本提取中
-    const allSpansInContainer = Array.from(container.querySelectorAll('span[id]'));
+    const allSpansInContainer = Array.from(
+      container.querySelectorAll("span[id]")
+    );
 
     if (DEBUG_CLICK_RISK_ITEM && expectedText) {
-      console.log(`🔍 [getContainerAndText] 容器内所有span数量: ${allSpansInContainer.length}`);
-      console.log(`🔍 [getContainerAndText] 传入的matchingSpans数量: ${matchingSpans.length}`);
-      console.log(`🔍 [getContainerAndText] 容器内所有span IDs:`, allSpansInContainer.map(s => s.id));
+      console.log(
+        `🔍 [getContainerAndText] 容器内所有span数量: ${allSpansInContainer.length}`
+      );
+      console.log(
+        `🔍 [getContainerAndText] 传入的matchingSpans数量: ${matchingSpans.length}`
+      );
+      console.log(
+        `🔍 [getContainerAndText] 容器内所有span IDs:`,
+        allSpansInContainer.map((s) => s.id)
+      );
     }
 
     // 使用容器内的所有span，而不是只用传入的matchingSpans
@@ -821,15 +894,21 @@
 
     // 调试日志：显示容器信息
     if (DEBUG_CLICK_RISK_ITEM && expectedText) {
-      console.log(`🔍 [getContainerAndText] pid=${pid}, targetTag=${targetTag}, matchingSpans数量=${matchingSpans.length}`);
-      console.log(`🔍 [getContainerAndText] 容器原始文本长度=${rawText.length}, 前100字符: "${rawText.substring(0, 100)}..."`);
+      console.log(
+        `🔍 [getContainerAndText] pid=${pid}, targetTag=${targetTag}, matchingSpans数量=${matchingSpans.length}`
+      );
+      console.log(
+        `🔍 [getContainerAndText] 容器原始文本长度=${
+          rawText.length
+        }, 前100字符: "${rawText.substring(0, 100)}..."`
+      );
       console.log(`🔍 [getContainerAndText] 期望文本: "${expectedText}"`);
     }
 
     // 记录每个匹配的 span 的文本信息（用于高亮时的精确定位）
     const spanTextMap = [];
-    let currentPosRaw = 0;           // 原始文本位置
-    let currentPosStrict = 0;         // 严格规范化位置
+    let currentPosRaw = 0; // 原始文本位置
+    let currentPosStrict = 0; // 严格规范化位置
 
     // 递归遍历容器的所有子节点，找到匹配的 span 并记录位置
     function traverseAndMap(node) {
@@ -842,7 +921,7 @@
         currentPosStrict += nodeStrictText.length;
       } else if (node.nodeType === Node.ELEMENT_NODE) {
         // 检查是否是我们匹配的 span
-        const isMatchingSpan = matchingSpans.some(s => s === node);
+        const isMatchingSpan = matchingSpans.some((s) => s === node);
 
         if (isMatchingSpan) {
           // 记录这个 span 的信息
@@ -856,7 +935,7 @@
             rawStart: currentPosRaw,
             rawEnd: currentPosRaw + spanRawText.length,
             strictStart: currentPosStrict,
-            strictEnd: currentPosStrict + spanStrictText.length
+            strictEnd: currentPosStrict + spanStrictText.length,
           });
 
           // 更新位置（跳过这个 span 的内容）
@@ -864,23 +943,23 @@
           currentPosStrict += spanStrictText.length;
         } else {
           // 不是匹配的 span，递归处理子节点
-          node.childNodes.forEach(child => traverseAndMap(child));
+          node.childNodes.forEach((child) => traverseAndMap(child));
         }
       }
     }
 
     // 执行遍历和映射
-    container.childNodes.forEach(child => traverseAndMap(child));
+    container.childNodes.forEach((child) => traverseAndMap(child));
 
     // 严格规范化整个容器文本
     const strictText = strictNormalizeText(rawText);
 
     return {
       container,
-      text: strictText,          // 严格规范化文本（用于匹配和显示）
-      strictText: strictText,    // 严格规范化文本（保留兼容性）
-      rawText: rawText,          // 原始文本（包含所有文本节点）
-      spanTextMap: spanTextMap   // 每个匹配span的文本映射信息
+      text: strictText, // 严格规范化文本（用于匹配和显示）
+      strictText: strictText, // 严格规范化文本（保留兼容性）
+      rawText: rawText, // 原始文本（包含所有文本节点）
+      spanTextMap: spanTextMap, // 每个匹配span的文本映射信息
     };
   }
 
@@ -958,7 +1037,7 @@
         positionValid: true,
         textMismatches: [],
         locationMismatches: [],
-        positionMismatches: []
+        positionMismatches: [],
       };
     }
 
@@ -979,13 +1058,17 @@
       const pid = span.pid;
 
       // 使用新的公共方法直接查找容器
-      const { container, strictText: containerText, rawText } = findContainerByPid(pid);
+      const {
+        container,
+        strictText: containerText,
+        rawText,
+      } = findContainerByPid(pid);
 
       if (!container) {
         locationMismatches.push({
           reason: "container_not_found",
           span,
-          pid: pid
+          pid: pid,
         });
         return;
       }
@@ -1016,7 +1099,7 @@
           end: span.end,
           containerLength: containerText.length,
           containerText: containerText,
-          rawTextLength: rawText.length
+          rawTextLength: rawText.length,
         });
       }
     });
@@ -1027,7 +1110,7 @@
       positionValid: positionMismatches.length === 0,
       textMismatches,
       locationMismatches,
-      positionMismatches
+      positionMismatches,
     };
   }
 
@@ -1035,19 +1118,22 @@
   // 复制规范化文本到剪贴板
   // ============================================================================
   function copyToClipboard(text, btnElement) {
-    navigator.clipboard.writeText(text).then(() => {
-      const originalText = btnElement.textContent;
-      btnElement.textContent = '已复制!';
-      btnElement.style.background = '#2196F3';
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        const originalText = btnElement.textContent;
+        btnElement.textContent = "已复制!";
+        btnElement.style.background = "#2196F3";
 
-      setTimeout(() => {
-        btnElement.textContent = originalText;
-        btnElement.style.background = '#4CAF50';
-      }, 1500);
-    }).catch(err => {
-      console.error('复制失败:', err);
-      alert('复制失败，请手动复制');
-    });
+        setTimeout(() => {
+          btnElement.textContent = originalText;
+          btnElement.style.background = "#4CAF50";
+        }, 1500);
+      })
+      .catch((err) => {
+        console.error("复制失败:", err);
+        alert("复制失败，请手动复制");
+      });
   }
 
   // ============================================================================
@@ -1057,10 +1143,10 @@
     try {
       // 使用新的公共方法直接查找容器并获取文本
       const { strictText } = findContainerByPid(span.pid);
-      return strictText || span.text || '';
+      return strictText || span.text || "";
     } catch (error) {
-      console.error('获取规范化文本失败:', error);
-      return span.text || '';
+      console.error("获取规范化文本失败:", error);
+      return span.text || "";
     }
   }
 
@@ -1112,12 +1198,14 @@
     // 排序：将文字没匹配到的放在最上方
     // ============================================================================
     const sortedDataList = [...data.dataList].sort((a, b) => {
-      const validationA = a.spanList && a.spanList.length > 0
-        ? validateRiskItem(a)
-        : { textValid: true };
-      const validationB = b.spanList && b.spanList.length > 0
-        ? validateRiskItem(b)
-        : { textValid: true };
+      const validationA =
+        a.spanList && a.spanList.length > 0
+          ? validateRiskItem(a)
+          : { textValid: true };
+      const validationB =
+        b.spanList && b.spanList.length > 0
+          ? validateRiskItem(b)
+          : { textValid: true };
 
       // 文字不匹配的排在前面
       if (!validationA.textValid && validationB.textValid) return -1;
@@ -1169,7 +1257,7 @@
             positionValid: true,
             textMismatches: [],
             locationMismatches: [],
-            positionMismatches: []
+            positionMismatches: [],
           };
       const hasTextMismatch = !validation.textValid;
       const hasLocationInaccuracy = !validation.locationValid;
@@ -1202,15 +1290,21 @@
 
         // 输出详细日志
         if (DEBUG_LOAD_RISK_LIST) {
-          if (hasTextMismatch || hasLocationInaccuracy || hasPositionInaccuracy) {
+          if (
+            hasTextMismatch ||
+            hasLocationInaccuracy ||
+            hasPositionInaccuracy
+          ) {
             console.group(
-              `${hasTextMismatch ? '❌' : '✅'} [#${index + 1}] ${item.reviewItemName} - ${item.sceneDesc}`
+              `${hasTextMismatch ? "❌" : "✅"} [#${index + 1}] ${
+                item.reviewItemName
+              } - ${item.sceneDesc}`
             );
             console.log(`uniqueId: ${item.uniqueId}`);
 
             // 输出文字匹配情况
             if (hasTextMismatch && validation.textMismatches.length > 0) {
-              console.log('\n📝 文字匹配问题:');
+              console.log("\n📝 文字匹配问题:");
               validation.textMismatches.forEach((m, idx) => {
                 console.log(`  源 ${idx + 1}: ${m.span ? m.span.pid : "N/A"}`);
                 if (m.expected) {
@@ -1222,7 +1316,9 @@
                 // 获取并打印规范化后的完整容器文本
                 if (m.span) {
                   const normalizedText = getNormalizedTextForSpan(m.span);
-                  console.log(`    📋 规范化完整文本 (${normalizedText.length}字符): "${normalizedText}"`);
+                  console.log(
+                    `    📋 规范化完整文本 (${normalizedText.length}字符): "${normalizedText}"`
+                  );
                 }
 
                 console.log(`    ❌ 文本未在容器中找到`);
@@ -1230,8 +1326,11 @@
             }
 
             // 输出定位准确性情况
-            if (hasLocationInaccuracy && validation.locationMismatches.length > 0) {
-              console.log('\n🎯 定位准确性问题:');
+            if (
+              hasLocationInaccuracy &&
+              validation.locationMismatches.length > 0
+            ) {
+              console.log("\n🎯 定位准确性问题:");
               validation.locationMismatches.forEach((m, idx) => {
                 console.log(`  源 ${idx + 1}: ${m.pid}`);
                 console.log(`    ❌ 无法通过 pid 前缀找到元素`);
@@ -1239,17 +1338,24 @@
             }
 
             // 输出位置精确性情况
-            if (hasPositionInaccuracy && validation.positionMismatches.length > 0) {
-              console.log('\n📍 位置精确性问题:');
+            if (
+              hasPositionInaccuracy &&
+              validation.positionMismatches.length > 0
+            ) {
+              console.log("\n📍 位置精确性问题:");
               validation.positionMismatches.forEach((m, idx) => {
-                console.log(`  源 ${idx + 1}: ${m.span.pid} [${m.start}, ${m.end})`);
+                console.log(
+                  `  源 ${idx + 1}: ${m.span.pid} [${m.start}, ${m.end})`
+                );
                 console.log(`    期望: "${m.expected}"`);
                 console.log(`    实际: "${m.actual}"`);
 
                 // 获取并打印规范化后的完整容器文本
                 if (m.span) {
                   const normalizedText = getNormalizedTextForSpan(m.span);
-                  console.log(`    📋 规范化完整文本 (${normalizedText.length}字符): "${normalizedText}"`);
+                  console.log(
+                    `    📋 规范化完整文本 (${normalizedText.length}字符): "${normalizedText}"`
+                  );
                 }
               });
             }
@@ -1257,7 +1363,9 @@
             console.groupEnd();
           } else {
             console.log(
-              `✅ [完全匹配 #${index + 1}] ${item.reviewItemName} - ${item.sceneDesc}`
+              `✅ [完全匹配 #${index + 1}] ${item.reviewItemName} - ${
+                item.sceneDesc
+              }`
             );
           }
         }
@@ -1278,13 +1386,12 @@
         const spanDataMap = new Map();
 
         spanDetailsHtml = Array.from(uniqueSpans.values())
-          .map(
-            (span, idx) => {
-              const copyBtnId = `copy-btn-${item.uniqueId}-${idx}`;
-              // 存储 span 数据供后续使用
-              spanDataMap.set(copyBtnId, span);
+          .map((span, idx) => {
+            const copyBtnId = `copy-btn-${item.uniqueId}-${idx}`;
+            // 存储 span 数据供后续使用
+            spanDataMap.set(copyBtnId, span);
 
-              return `
+            return `
                     <div style="margin-top: 8px; padding: 8px; background: #f9f9f9; border-left: 3px solid #2196F3; border-radius: 2px;">
                         <div style="font-size: 11px; color: #666; margin-bottom: 4px;">
                             <strong>片段 ${idx + 1}:</strong> ${
@@ -1316,8 +1423,7 @@
                         }
                     </div>
                 `;
-            }
-          )
+          })
           .join("");
 
         // 绑定复制按钮的点击事件
@@ -1325,7 +1431,7 @@
           spanDataMap.forEach((span, btnId) => {
             const btn = itemDiv.querySelector(`[data-copy-btn-id="${btnId}"]`);
             if (btn) {
-              btn.addEventListener('click', (e) => {
+              btn.addEventListener("click", (e) => {
                 e.stopPropagation(); // 阻止事件冒泡到父元素的高亮事件
                 const normalizedText = getNormalizedTextForSpan(span);
                 copyToClipboard(normalizedText, btn);
@@ -1351,8 +1457,12 @@
                   return `
                   <div style="font-size: 10px; color: #d32f2f; margin-top: 4px; padding: 4px; background: white; border-radius: 2px; border-left: 2px solid #d32f2f;">
                     <div><strong>源 ${idx + 1}:</strong> ${m.span.pid}</div>
-                    <div style="margin-top: 4px;"><strong>期望文本 (${m.expected.length}字符):</strong></div>
-                    <div style="background: #f9f9f9; padding: 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; max-height: 100px; overflow-y: auto;">"${m.expected}"</div>
+                    <div style="margin-top: 4px;"><strong>期望文本 (${
+                      m.expected.length
+                    }字符):</strong></div>
+                    <div style="background: #f9f9f9; padding: 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; max-height: 100px; overflow-y: auto;">"${
+                      m.expected
+                    }"</div>
                     <div style="margin-top: 4px; color: #d32f2f;">❌ 文本未在容器中找到</div>
                   </div>
                 `;
@@ -1399,13 +1509,27 @@
               .map((m, idx) => {
                 return `
                 <div style="font-size: 10px; color: #1565c0; margin-top: 4px; padding: 4px; background: white; border-radius: 2px; border-left: 2px solid #2196F3;">
-                  <div><strong>源 ${idx + 1}:</strong> ${m.span.pid} [${m.start}, ${m.end})</div>
-                  <div style="margin-top: 4px;"><strong>期望文本 (${m.expected.length}字符):</strong></div>
-                  <div style="background: #f9f9f9; padding: 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; max-height: 80px; overflow-y: auto;">"${m.expected}"</div>
-                  <div style="margin-top: 4px;"><strong>实际提取 (${m.actual.length}字符):</strong></div>
-                  <div style="background: #fff3e0; padding: 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; max-height: 80px; overflow-y: auto;">"${m.actual}"</div>
-                  <div style="margin-top: 4px;"><strong>容器文本 (${m.containerLength}字符):</strong></div>
-                  <div style="background: #f5f5f5; padding: 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; max-height: 100px; overflow-y: auto; font-size: 9px;">"${m.containerText || ''}"</div>
+                  <div><strong>源 ${idx + 1}:</strong> ${m.span.pid} [${
+                  m.start
+                }, ${m.end})</div>
+                  <div style="margin-top: 4px;"><strong>期望文本 (${
+                    m.expected.length
+                  }字符):</strong></div>
+                  <div style="background: #f9f9f9; padding: 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; max-height: 80px; overflow-y: auto;">"${
+                    m.expected
+                  }"</div>
+                  <div style="margin-top: 4px;"><strong>实际提取 (${
+                    m.actual.length
+                  }字符):</strong></div>
+                  <div style="background: #fff3e0; padding: 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; max-height: 80px; overflow-y: auto;">"${
+                    m.actual
+                  }"</div>
+                  <div style="margin-top: 4px;"><strong>容器文本 (${
+                    m.containerLength
+                  }字符):</strong></div>
+                  <div style="background: #f5f5f5; padding: 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; max-height: 100px; overflow-y: auto; font-size: 9px;">"${
+                    m.containerText || ""
+                  }"</div>
                 </div>
               `;
               })
@@ -1463,9 +1587,16 @@
 
     // 输出统计汇总
     const validItems = totalItems - noSpanItems;
-    const textMatchRate = validItems > 0 ? ((textMatchedItems / validItems) * 100).toFixed(2) : 0;
-    const locationAccuracyRate = validItems > 0 ? ((locationAccurateItems / validItems) * 100).toFixed(2) : 0;
-    const positionAccuracyRate = validItems > 0 ? ((positionAccurateItems / validItems) * 100).toFixed(2) : 0;
+    const textMatchRate =
+      validItems > 0 ? ((textMatchedItems / validItems) * 100).toFixed(2) : 0;
+    const locationAccuracyRate =
+      validItems > 0
+        ? ((locationAccurateItems / validItems) * 100).toFixed(2)
+        : 0;
+    const positionAccuracyRate =
+      validItems > 0
+        ? ((positionAccurateItems / validItems) * 100).toFixed(2)
+        : 0;
 
     if (DEBUG_LOAD_RISK_LIST) {
       console.log("=".repeat(80));
@@ -1496,18 +1627,42 @@
           📊 准确率统计 (有效项: ${validItems}/${totalItems})
         </div>
         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-          <div style="flex: 1; min-width: 140px; padding: 6px; background: ${textMatchRate >= 90 ? '#e8f5e9' : textMatchRate >= 70 ? '#fff3cd' : '#ffe0e0'}; border-radius: 4px;">
+          <div style="flex: 1; min-width: 140px; padding: 6px; background: ${
+            textMatchRate >= 90
+              ? "#e8f5e9"
+              : textMatchRate >= 70
+              ? "#fff3cd"
+              : "#ffe0e0"
+          }; border-radius: 4px;">
             <div style="font-size: 11px; color: #666; margin-bottom: 2px;">📝 文字匹配率</div>
-            <div style="font-size: 18px; font-weight: bold; color: ${textMatchRate >= 90 ? '#2e7d32' : textMatchRate >= 70 ? '#f57c00' : '#c62828'};">
+            <div style="font-size: 18px; font-weight: bold; color: ${
+              textMatchRate >= 90
+                ? "#2e7d32"
+                : textMatchRate >= 70
+                ? "#f57c00"
+                : "#c62828"
+            };">
               ${textMatchRate}%
             </div>
             <div style="font-size: 10px; color: #666; margin-top: 2px;">
               ${textMatchedItems}/${validItems} 项
             </div>
           </div>
-          <div style="flex: 1; min-width: 140px; padding: 6px; background: ${locationAccuracyRate >= 90 ? '#e8f5e9' : locationAccuracyRate >= 70 ? '#fff3cd' : '#ffe0e0'}; border-radius: 4px;">
+          <div style="flex: 1; min-width: 140px; padding: 6px; background: ${
+            locationAccuracyRate >= 90
+              ? "#e8f5e9"
+              : locationAccuracyRate >= 70
+              ? "#fff3cd"
+              : "#ffe0e0"
+          }; border-radius: 4px;">
             <div style="font-size: 11px; color: #666; margin-bottom: 2px;">🎯 定位准确率</div>
-            <div style="font-size: 18px; font-weight: bold; color: ${locationAccuracyRate >= 90 ? '#2e7d32' : locationAccuracyRate >= 70 ? '#f57c00' : '#c62828'};">
+            <div style="font-size: 18px; font-weight: bold; color: ${
+              locationAccuracyRate >= 90
+                ? "#2e7d32"
+                : locationAccuracyRate >= 70
+                ? "#f57c00"
+                : "#c62828"
+            };">
               ${locationAccuracyRate}%
             </div>
             <div style="font-size: 10px; color: #666; margin-top: 2px;">
@@ -1517,15 +1672,22 @@
         </div>
       `;
 
-      if (textMismatchedItems > 0 || locationInaccurateItems > 0 || positionInaccurateItems > 0) {
+      if (
+        textMismatchedItems > 0 ||
+        locationInaccurateItems > 0 ||
+        positionInaccurateItems > 0
+      ) {
         const issues = [];
-        if (textMismatchedItems > 0) issues.push(`⚠ ${textMismatchedItems} 项文字不匹配`);
-        if (locationInaccurateItems > 0) issues.push(`🎯 ${locationInaccurateItems} 项定位不准确`);
-        if (positionInaccurateItems > 0) issues.push(`📍 ${positionInaccurateItems} 项位置不精确`);
+        if (textMismatchedItems > 0)
+          issues.push(`⚠ ${textMismatchedItems} 项文字不匹配`);
+        if (locationInaccurateItems > 0)
+          issues.push(`🎯 ${locationInaccurateItems} 项定位不准确`);
+        if (positionInaccurateItems > 0)
+          issues.push(`📍 ${positionInaccurateItems} 项位置不精确`);
 
         accuracyHtml += `
           <div style="margin-top: 8px; font-size: 11px; color: #666;">
-            ${issues.join(' | ')}
+            ${issues.join(" | ")}
           </div>
         `;
       }
@@ -1686,14 +1848,22 @@
       console.log(`[${timestamp}] 原始 pid: "${span.pid}"`);
 
       // 使用新的公共方法直接查找容器
-      const { container, containerId, rawText, strictText: strictContainerText, spanTextMap } = findContainerByPid(span.pid);
+      const {
+        container,
+        containerId,
+        rawText,
+        strictText: strictContainerText,
+        spanTextMap,
+      } = findContainerByPid(span.pid);
 
       if (!container) {
         console.warn(`未找到 ${span.pid} 的容器 (尝试ID: ${containerId})`);
         return;
       }
 
-      console.log(`[${timestamp}] ✅ 找到容器: ${container.tagName}#${container.id}`);
+      console.log(
+        `[${timestamp}] ✅ 找到容器: ${container.tagName}#${container.id}`
+      );
       console.log(`[${timestamp}] 容器内span数量: ${spanTextMap.length}`);
 
       const expectedText = span.text || "";
@@ -1714,16 +1884,25 @@
       console.log(
         `[${timestamp}] 容器文本长度: ${containerText.length} (严格规范化), 原始: ${rawText.length}, 期望文本长度: ${expectedText.length}`
       );
-      console.log(`[${timestamp}] JSON提供范围: [${span.start}, ${span.end}) (已废弃，不再使用)`);
+      console.log(
+        `[${timestamp}] JSON提供范围: [${span.start}, ${span.end}) (已废弃，不再使用)`
+      );
 
       // ============================================================================
       // 策略：使用严格规范化 + 前端计算位置（frontStart/frontEnd）
       // ============================================================================
       // 1. 使用共用方法检查文本匹配
-      const { matched, strictExpected } = checkTextMatch(expectedText, containerText);
+      const { matched, strictExpected } = checkTextMatch(
+        expectedText,
+        containerText
+      );
 
-      console.log(`[${timestamp}] 规范化后 - 容器: ${strictContainerText.length}字符, 期望: ${strictExpected.length}字符`);
-      console.log(`[${timestamp}] 规范化容器文本完整内容: "${strictContainerText}"`);
+      console.log(
+        `[${timestamp}] 规范化后 - 容器: ${strictContainerText.length}字符, 期望: ${strictExpected.length}字符`
+      );
+      console.log(
+        `[${timestamp}] 规范化容器文本完整内容: "${strictContainerText}"`
+      );
       console.log(`[${timestamp}] 规范化期望文本完整内容: "${strictExpected}"`);
 
       // 2. 在规范化的文本中查找位置（frontStart/frontEnd）
@@ -1735,13 +1914,24 @@
         // ✅ 找到了！计算 frontEnd
         const frontEnd = frontStart + strictExpected.length;
 
-        console.log(`[${timestamp}] ✅ 匹配成功: frontStart=${frontStart}, frontEnd=${frontEnd}`);
-        console.log(`[${timestamp}] 规范化后的文本片段: "${strictContainerText.substring(frontStart, frontEnd)}"`);
+        console.log(
+          `[${timestamp}] ✅ 匹配成功: frontStart=${frontStart}, frontEnd=${frontEnd}`
+        );
+        console.log(
+          `[${timestamp}] 规范化后的文本片段: "${strictContainerText.substring(
+            frontStart,
+            frontEnd
+          )}"`
+        );
 
         // 调试：打印 spanTextMap 的规范化位置
-        console.log(`[${timestamp}] spanTextMap 详情 (${spanTextMap.length}个span):`);
+        console.log(
+          `[${timestamp}] spanTextMap 详情 (${spanTextMap.length}个span):`
+        );
         spanTextMap.forEach((info, idx) => {
-          console.log(`  [${idx}] strictStart=${info.strictStart}, strictEnd=${info.strictEnd}, strictText="${info.strictText}"`);
+          console.log(
+            `  [${idx}] strictStart=${info.strictStart}, strictEnd=${info.strictEnd}, strictText="${info.strictText}"`
+          );
         });
 
         // 3. 使用规范化的位置进行高亮
@@ -1750,26 +1940,60 @@
       } else {
         // ❌ 完全找不到文本
         console.error(`❌ [匹配失败] ${span.pid}`);
-        console.error(`期望文本 (${expectedText.length}字符): "${expectedText}"`);
-        console.error(`规范化期望 (${strictExpected.length}字符): "${strictExpected}"`);
-        console.error(`规范化容器 (${strictContainerText.length}字符): "${strictContainerText.substring(0, 200)}..."`);
+        console.error(
+          `期望文本 (${expectedText.length}字符): "${expectedText}"`
+        );
+        console.error(
+          `规范化期望 (${strictExpected.length}字符): "${strictExpected}"`
+        );
+        console.error(
+          `规范化容器 (${
+            strictContainerText.length
+          }字符): "${strictContainerText.substring(0, 200)}..."`
+        );
 
         // 字符级别对比：找出第一个不匹配的字符
         console.error(`🔍 字符级别对比:`);
-        const minLen = Math.min(strictExpected.length, strictContainerText.length);
+        const minLen = Math.min(
+          strictExpected.length,
+          strictContainerText.length
+        );
         for (let i = 0; i < minLen; i++) {
           if (strictExpected[i] !== strictContainerText[i]) {
             console.error(`  第 ${i} 个字符不匹配:`);
-            console.error(`    期望: "${strictExpected[i]}" (charCode=${strictExpected.charCodeAt(i)})`);
-            console.error(`    容器: "${strictContainerText[i]}" (charCode=${strictContainerText.charCodeAt(i)})`);
-            console.error(`    期望上下文: "...${strictExpected.substring(Math.max(0, i-10), i+10)}..."`);
-            console.error(`    容器上下文: "...${strictContainerText.substring(Math.max(0, i-10), i+10)}..."`);
+            console.error(
+              `    期望: "${
+                strictExpected[i]
+              }" (charCode=${strictExpected.charCodeAt(i)})`
+            );
+            console.error(
+              `    容器: "${
+                strictContainerText[i]
+              }" (charCode=${strictContainerText.charCodeAt(i)})`
+            );
+            console.error(
+              `    期望上下文: "...${strictExpected.substring(
+                Math.max(0, i - 10),
+                i + 10
+              )}..."`
+            );
+            console.error(
+              `    容器上下文: "...${strictContainerText.substring(
+                Math.max(0, i - 10),
+                i + 10
+              )}..."`
+            );
             break;
           }
         }
-        if (strictExpected.length !== strictContainerText.length && minLen === Math.min(strictExpected.length, strictContainerText.length)) {
+        if (
+          strictExpected.length !== strictContainerText.length &&
+          minLen === Math.min(strictExpected.length, strictContainerText.length)
+        ) {
           console.error(`  前 ${minLen} 个字符都匹配，但长度不同`);
-          console.error(`  期望长度: ${strictExpected.length}, 容器长度: ${strictContainerText.length}`);
+          console.error(
+            `  期望长度: ${strictExpected.length}, 容器长度: ${strictContainerText.length}`
+          );
         }
 
         // 跳过此项，不进行高亮
@@ -1815,7 +2039,9 @@
         }
       }
 
-      console.log(`[${timestamp}] 位置映射: strict[${searchStart}, ${searchEnd}) -> raw[${rawStartIdx}, ${rawEndIdx})`);
+      console.log(
+        `[${timestamp}] 位置映射: strict[${searchStart}, ${searchEnd}) -> raw[${rawStartIdx}, ${rawEndIdx})`
+      );
 
       // 2. 如果找到了对应位置，对容器进行高亮
       if (rawStartIdx !== -1 && rawEndIdx !== -1) {
@@ -1839,7 +2065,10 @@
             if (nodeEnd > rawStartIdx && nodeStart < rawEndIdx) {
               const fragment = document.createDocumentFragment();
               const nodeRelStart = Math.max(0, rawStartIdx - nodeStart);
-              const nodeRelEnd = Math.min(nodeText.length, rawEndIdx - nodeStart);
+              const nodeRelEnd = Math.min(
+                nodeText.length,
+                rawEndIdx - nodeStart
+              );
 
               // 高亮前的文本
               if (nodeRelStart > 0) {
@@ -1853,7 +2082,10 @@
               highlightSpan.className = highlightClass;
               highlightSpan.style.cssText =
                 "background-color: #ffeb3b; font-weight: bold; border-bottom: 2px solid #f44336;";
-              highlightSpan.textContent = nodeText.substring(nodeRelStart, nodeRelEnd);
+              highlightSpan.textContent = nodeText.substring(
+                nodeRelStart,
+                nodeRelEnd
+              );
               fragment.appendChild(highlightSpan);
 
               // 高亮后的文本
@@ -1875,7 +2107,9 @@
         processNode(newContainer);
         container.innerHTML = newContainer.innerHTML;
       } else {
-        console.error(`[${timestamp}] ❌ 位置映射失败：无法将strict位置映射到raw位置`);
+        console.error(
+          `[${timestamp}] ❌ 位置映射失败：无法将strict位置映射到raw位置`
+        );
       }
 
       highlightedCount++;
@@ -1890,7 +2124,10 @@
       });
 
       // 标准化比较（忽略空格差异）
-      if (strictNormalizeText(actualHighlightedText) === strictNormalizeText(expectedText)) {
+      if (
+        strictNormalizeText(actualHighlightedText) ===
+        strictNormalizeText(expectedText)
+      ) {
         console.log(`✅ [高亮验证成功] 高亮内容与期望一致`);
         console.log(`  期望: "${expectedText}"`);
         console.log(`  实际: "${actualHighlightedText}"`);
@@ -1941,7 +2178,7 @@
         clearHighlight,
         loadRiskList,
         strictNormalizeText,
-        getTextByDOMOrder
+        getTextByDOMOrder,
       });
     }
 
