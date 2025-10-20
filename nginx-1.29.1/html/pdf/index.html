@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF Viewer with Text Selection</title>
+  <!-- PDF.js CSS for text layer -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.css">
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: Arial, sans-serif;
+      background-color: #111827;
+      color: #e5e7eb;
+    }
+    #controls {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: #0f172a;
+      border-bottom: 1px solid #1f2937;
+      padding: 15px;
+      margin-bottom: 20px;
+      border-radius: 5px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    #controls input {
+      padding: 8px;
+      border: 1px solid #374151;
+      border-radius: 3px;
+      background: #1f2937;
+      color: #e5e7eb;
+      width: 400px;
+    }
+    #controls button {
+      padding: 8px 16px;
+      background: #1f2937;
+      color: #e5e7eb;
+      border: 1px solid #374151;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    #controls button:hover {
+      background: #111827;
+    }
+    #page-info {
+      margin-left: auto;
+      font-size: 14px;
+      color: #9ca3af;
+    }
+    #pdf-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      padding: 16px;
+    }
+    .page-wrapper {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .page-number {
+      text-align: center;
+      margin-bottom: 10px;
+      font-size: 14px;
+      color: #9ca3af;
+      font-weight: bold;
+    }
+    .page-container {
+      position: relative;
+      box-shadow: 0 8px 24px rgba(0,0,0,.5);
+      border-radius: 8px;
+      overflow: hidden;
+      background: white;
+    }
+    canvas.pdf-canvas {
+      display: block;
+      background: white;
+    }
+    /* PDF.js text layer styles */
+    .textLayer {
+      position: absolute;
+      left: 0;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      overflow: hidden;
+      opacity: 0.2;
+      line-height: 1.0;
+    }
+    .textLayer > span {
+      color: transparent;
+      position: absolute;
+      white-space: pre;
+      cursor: text;
+      transform-origin: 0% 0%;
+    }
+    .textLayer ::selection {
+      background: blue;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <input type="text" id="pdf-url" value="/pdf/file/1978018096320905217.pdf" placeholder="输入 PDF URL" />
+    <button id="load-pdf">加载 PDF</button>
+    <button id="zoom-out">缩小</button>
+    <span id="zoom-info">100%</span>
+    <button id="zoom-in">放大</button>
+    <span id="page-info">准备加载...</span>
+  </div>
+
+  <div id="pdf-container"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.js"></script>
+  <script>
+    // PDF.js worker configuration
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const pdfUrlInput = document.getElementById('pdf-url');
+    const loadButton = document.getElementById('load-pdf');
+    const zoomOutBtn = document.getElementById('zoom-out');
+    const zoomInBtn = document.getElementById('zoom-in');
+    const zoomInfo = document.getElementById('zoom-info');
+    const pdfContainer = document.getElementById('pdf-container');
+    const pageInfo = document.getElementById('page-info');
+
+    let pdfDoc = null;
+    let scale = 1.5;
+    const pages = [];
+
+    // 渲染单个页面
+    async function renderPage(page, pageNumber) {
+      const viewport = page.getViewport({ scale });
+
+      // 页面包装器
+      const pageWrapper = document.createElement('div');
+      pageWrapper.className = 'page-wrapper';
+      pageWrapper.id = 'page-' + pageNumber;
+
+      // 页码标签
+      const pageLabel = document.createElement('div');
+      pageLabel.className = 'page-number';
+      pageLabel.textContent = 'Page ' + pageNumber;
+
+      // 页面容器
+      const pageContainer = document.createElement('div');
+      pageContainer.className = 'page-container';
+      pageContainer.style.width = viewport.width + 'px';
+      pageContainer.style.height = viewport.height + 'px';
+      pageContainer.dataset.pageNumber = pageNumber;
+
+      // 创建画布
+      const canvas = document.createElement('canvas');
+      canvas.className = 'pdf-canvas';
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d');
+
+      // 创建文本层
+      const textLayerDiv = document.createElement('div');
+      textLayerDiv.className = 'textLayer';
+      textLayerDiv.style.width = viewport.width + 'px';
+      textLayerDiv.style.height = viewport.height + 'px';
+
+      pageContainer.appendChild(canvas);
+      pageContainer.appendChild(textLayerDiv);
+      pageWrapper.appendChild(pageLabel);
+      pageWrapper.appendChild(pageContainer);
+      pdfContainer.appendChild(pageWrapper);
+
+      // 渲染 PDF 页面到画布
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      // 使用 PDF.js 官方的 TextLayerBuilder 渲染文本层
+      const textContent = await page.getTextContent();
+
+      // 使用 PDF.js 的 renderTextLayer API
+      pdfjsLib.renderTextLayer({
+        textContentSource: textContent,
+        container: textLayerDiv,
+        viewport: viewport,
+        textDivs: []
+      });
+
+      pages.push({ page, viewport, div: pageContainer, canvas, ctx, textLayerDiv });
+    }
+
+    // 渲染所有页面
+    async function renderAllPages(pdf) {
+      pdfContainer.innerHTML = '';
+      pages.length = 0;
+      pageInfo.textContent = `加载中，共 ${pdf.numPages} 页...`;
+
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        await renderPage(page, pageNum);
+        pageInfo.textContent = `已加载 ${pageNum} / ${pdf.numPages} 页`;
+      }
+
+      zoomInfo.textContent = Math.round(scale * 100) + '%';
+      pageInfo.textContent = `全部 ${pdf.numPages} 页加载完成，可选择文本`;
+
+      // 默认滚动到第9页
+      setTimeout(() => {
+        const page9 = document.getElementById('page-9');
+        if (page9) {
+          page9.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 500);
+    }
+
+    // 加载 PDF
+    async function loadPDF(url) {
+      try {
+        pageInfo.textContent = '正在加载 PDF...';
+        const loadingTask = pdfjsLib.getDocument(url);
+        pdfDoc = await loadingTask.promise;
+        await renderAllPages(pdfDoc);
+      } catch (error) {
+        pageInfo.textContent = '加载失败: ' + error.message;
+        console.error('Error loading PDF:', error);
+      }
+    }
+
+    // 重新渲染（缩放后）
+    async function rerenderAtScale() {
+      if (!pdfDoc) return;
+      const doc = pdfDoc;
+      pdfContainer.innerHTML = '';
+      pages.length = 0;
+      pdfDoc = doc;
+      await renderAllPages(pdfDoc);
+    }
+
+    // 事件监听
+    loadButton.addEventListener('click', function() {
+      const url = pdfUrlInput.value.trim();
+      if (url) {
+        loadPDF(url);
+      } else {
+        alert('请输入 PDF URL');
+      }
+    });
+
+    pdfUrlInput.addEventListener('keypress', function(e) {
+      if (e.key === 'Enter') {
+        loadButton.click();
+      }
+    });
+
+    zoomInBtn.addEventListener('click', async () => {
+      if (!pdfDoc) return;
+      scale = Math.min(4, scale + 0.25);
+      await rerenderAtScale();
+    });
+
+    zoomOutBtn.addEventListener('click', async () => {
+      if (!pdfDoc) return;
+      scale = Math.max(0.5, scale - 0.25);
+      await rerenderAtScale();
+    });
+
+    // 自动加载默认 PDF
+    window.addEventListener('load', function() {
+      const defaultUrl = pdfUrlInput.value;
+      if (defaultUrl) {
+        loadPDF(defaultUrl);
+      }
+    });
+
+    // 暴露到全局，便于调试
+    window.__pdfViewer = { pages, pdfDoc };
+  </script>
+</body>
+</html>
