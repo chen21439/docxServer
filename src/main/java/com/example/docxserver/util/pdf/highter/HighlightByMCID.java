@@ -71,48 +71,118 @@ public class HighlightByMCID {
      * @param pageHeight 页面高度（用于Y坐标转换）
      * @return QuadPoints数组
      */
+    /**
+     * 【阶段3：QuadPoints生成】从字符坐标到高亮框
+     *
+     * <h3>核心原理</h3>
+     * PDF高亮注释（Highlight Annotation）需要QuadPoints数组来定义高亮区域的形状。
+     * QuadPoints格式：[x1,y1, x2,y2, x3,y3, x4,y4, ...]
+     *                  ↑TL   ↑TR   ↑BL   ↑BR
+     * 每8个浮点数定义一个四边形（TL=左上, TR=右上, BL=左下, BR=右下）
+     *
+     * <h3>生成过程</h3>
+     * <ol>
+     *   <li><b>按行分组</b>：将TextPosition按Y坐标聚类（同一行的字符Y坐标接近）</li>
+     *   <li><b>计算边界框</b>：
+     *     <ul>
+     *       <li>X坐标：直接使用 XDirAdj（字符左边缘）</li>
+     *       <li>Y坐标：
+     *         <ul>
+     *           <li>基线位置 = Math.abs(YDirAdj)</li>
+     *           <li>顶部 = 基线 + HeightDir + padTop（向上扩展）</li>
+     *           <li>底部 = 基线 - padBottom（向下扩展）</li>
+     *         </ul>
+     *       </li>
+     *     </ul>
+     *   </li>
+     *   <li><b>动态padding</b>：基于字体中位数高度
+     *     <ul>
+     *       <li>顶部：max(0.6pt, 6% × 中位高度)</li>
+     *       <li>底部：max(0.6pt, 8% × 中位高度)</li>
+     *       <li>横向：max(0.4pt, 4% × 宽度)</li>
+     *     </ul>
+     *   </li>
+     *   <li><b>同行合并</b>：将同一行的所有字符合并为一个四边形，避免每个字符一个框</li>
+     *   <li><b>生成QuadPoints</b>：按TL, TR, BL, BR顺序添加四个顶点坐标</li>
+     * </ol>
+     *
+     * <h3>为什么需要padding</h3>
+     * - HeightDir只是字体度量值，不包含行距、上下留白
+     * - 添加padding确保高亮框完整覆盖文字（包括上下边缘、字母上标/下标等）
+     * - 动态padding根据字体大小自适应，小字体小padding，大字体大padding
+     *
+     * <h3>坐标系说明</h3>
+     * - PDF用户空间：原点在左下角，Y轴向上
+     * - YDirAdj为负数时，Math.abs()取绝对值即为从底部算起的Y坐标
+     * - 示例：YDirAdj=-755.889 表示距离页面底部755.889点（即在页面顶部）
+     *
+     * @param positions TextPosition列表（已通过MCID筛选的目标文本）
+     * @param pageHeight 页面高度（未使用，保留用于未来扩展）
+     * @return QuadPoints数组，格式为[TL, TR, BL, BR, TL, TR, BL, BR, ...]（每行一个四边形）
+     */
     private static float[] generateQuadPoints(List<TextPosition> positions, float pageHeight) {
         if (positions.isEmpty()) {
             return new float[0];
         }
 
-        // 步骤1：将TextPosition转换为统一坐标系，并按行聚合
+        // 步骤1：按行分组
         List<List<TextPosition>> lines = groupIntoLines(positions);
-
         List<Float> quadsList = new ArrayList<>();
 
-        // 步骤2：为每一行生成一个QuadPoints（同行合并）
+        // 步骤2：为每一行生成QuadPoints（带padding）
         for (List<TextPosition> line : lines) {
             if (line.isEmpty()) continue;
 
+            // 收集高度用于计算中位数（用于动态padding）
+            List<Float> heights = new ArrayList<>();
+            for (TextPosition tp : line) {
+                heights.add(tp.getHeightDir());
+            }
+            heights.sort(Float::compareTo);
+            float hMed = heights.get(heights.size() / 2);
+
+            // 动态padding（参考TextHighlighter：顶部6%，底部8%，最小0.6pt）
+            float padTop = Math.max(0.6f, 0.06f * hMed);
+            float padBottom = Math.max(0.6f, 0.08f * hMed);
+
+            // 计算边界
             float xMin = Float.MAX_VALUE;
             float xMax = -Float.MAX_VALUE;
-            float yLL = Float.MAX_VALUE;  // 左下角Y（行内最低点）
-            float hMax = 0f;              // 行内最大高度
+            float yMin = Float.MAX_VALUE;  // 最小Y（底部）
+            float yMax = -Float.MAX_VALUE; // 最大Y（顶部）
 
-            // 遍历行内所有字符，计算外接矩形
             for (TextPosition tp : line) {
-                float w = Math.max(0.01f, tp.getWidthDirAdj());  // 宽度兜底
-                float h = Math.max(0.01f, tp.getHeightDir());    // 高度兜底
+                float w = Math.max(0.01f, tp.getWidthDirAdj());
+                float h = tp.getHeightDir();
                 float x = tp.getXDirAdj();
 
-                // Y坐标转换：YDirAdj为负数时，取绝对值即为从底部算起的Y坐标
-                // 例如：YDirAdj=-755.889 表示距离底部755.889点（即在页面顶部）
-                float y = Math.abs(tp.getYDirAdj()) - h;
+                // Y坐标转换：Math.abs(YDirAdj)是基线位置
+                float yBase = Math.abs(tp.getYDirAdj());
+
+                // 文字顶部：基线向上 + 字体高度 + padding
+                // 文字底部：基线向下 - padding（基线通常在字符底部附近）
+                float yTop = yBase + h + padTop;
+                float yBottom = yBase - padBottom;
 
                 xMin = Math.min(xMin, x);
                 xMax = Math.max(xMax, x + w);
-                yLL = Math.min(yLL, y);   // 取行内最低的下边缘
-                hMax = Math.max(hMax, h);
+                yMin = Math.min(yMin, yBottom);
+                yMax = Math.max(yMax, yTop);
             }
 
-            // 生成QuadPoints - 正确顺序：TL, TR, BL, BR
-            float yTop = yLL + hMax;  // 上边缘Y
+            // 横向padding（4%或最小0.4pt）
+            float padX = Math.max(0.4f, 0.04f * (xMax - xMin));
+            xMin -= padX;
+            xMax += padX;
 
-            quadsList.add(xMin);  quadsList.add(yTop);  // TL (左上)
-            quadsList.add(xMax);  quadsList.add(yTop);  // TR (右上)
-            quadsList.add(xMin);  quadsList.add(yLL);   // BL (左下)
-            quadsList.add(xMax);  quadsList.add(yLL);   // BR (右下)
+            System.out.printf("[调试] 行高亮框: left=%.2f right=%.2f top=%.2f bottom=%.2f height=%.2f (中位高度=%.2f, padTop=%.2f, padBottom=%.2f)%n",
+                xMin, xMax, yMax, yMin, yMax - yMin, hMed, padTop, padBottom);
+
+            // 生成QuadPoints - 顺序：TL, TR, BL, BR
+            quadsList.add(xMin);  quadsList.add(yMax);  // TL (左上)
+            quadsList.add(xMax);  quadsList.add(yMax);  // TR (右上)
+            quadsList.add(xMin);  quadsList.add(yMin);  // BL (左下)
+            quadsList.add(xMax);  quadsList.add(yMin);  // BR (右下)
         }
 
         // 转换为数组
@@ -384,13 +454,61 @@ public class HighlightByMCID {
     }
 
     /**
-     * 为指定MCID添加高亮注释
+     * 【完整流程】为指定MCID添加高亮注释
+     *
+     * <h3>核心思路：分层架构 - 不修改ContentStream，而是添加Annotation层</h3>
+     *
+     * <h3>阶段2：TextPosition收集 - 获取精确坐标</h3>
+     * <b>TextPosition包含的信息：</b>
+     * <ul>
+     *   <li>unicode: 字符内容（如"文"）</li>
+     *   <li>XDirAdj: X坐标（已考虑文本矩阵变换）</li>
+     *   <li>YDirAdj: Y坐标（基线位置）</li>
+     *   <li>WidthDirAdj: 字符宽度</li>
+     *   <li>HeightDir: 字符高度（字体大小）</li>
+     *   <li>font: 字体信息</li>
+     *   <li>textMatrix: 文本变换矩阵</li>
+     * </ul>
+     *
+     * <b>关键：PDFBox已经完成所有坐标变换计算</b>
+     * <ul>
+     *   <li>CTM（Current Transformation Matrix）</li>
+     *   <li>文本矩阵（Text Matrix）</li>
+     *   <li>字体矩阵（Font Matrix）</li>
+     *   <li>页面旋转、缩放等</li>
+     * </ul>
+     * 所以XDirAdj、YDirAdj是<b>最终的用户空间坐标</b>，可以直接使用！
+     *
+     * <h3>阶段4：注释插入 - 添加高亮层</h3>
+     * <b>核心：不修改contentStream，而是添加Annotation</b>
+     * <pre>
+     * PDF结构示意：
+     * Page
+     * ├── ContentStream (内容流)  ← 原始文字、图形（不修改！）
+     * │   └── /P &lt;&lt;/MCID 5&gt;&gt; BDC
+     * │       BT ... (文字) Tj ET
+     * │       EMC
+     * │
+     * └── Annotations (注释层)    ← 我们添加的高亮（独立层）
+     *     └── Highlight Annotation
+     *         ├── QuadPoints: [x1,y1, x2,y2, ...]  ← 高亮框位置
+     *         ├── Color: [0, 1, 0]                  ← 绿色
+     *         └── Opacity: 0.5                      ← 半透明
+     * </pre>
+     *
+     * <b>优势：</b>
+     * <ul>
+     *   <li>非破坏性：不修改原始内容流，可随时删除注释</li>
+     *   <li>跨阅读器兼容：Annotation是PDF标准，所有阅读器都支持</li>
+     *   <li>精确定位：利用PDFBox的坐标计算，考虑所有变换</li>
+     *   <li>灵活性：可设置颜色、透明度、注释文本等</li>
+     * </ul>
      *
      * @param doc PDF文档对象
      * @param pageIndex 页码（从0开始）
      * @param mcids 目标MCID集合
-     * @param color RGB颜色数组（如 {1f, 1f, 0f} 表示黄色）
-     * @param opacity 透明度（0.0-1.0）
+     * @param color RGB颜色数组（如 {0f, 1f, 0f} 表示绿色）
+     * @param opacity 透明度（0.0-1.0，未使用，保留用于扩展）
      * @throws IOException 文件操作异常
      */
     public static void highlightByMcid(
@@ -400,15 +518,18 @@ public class HighlightByMCID {
             float[] color,
             float opacity) throws IOException {
 
+        // ========== 阶段2：TextPosition收集 ==========
         // 1. 使用MCIDTextExtractor提取TextPosition（复用已验证的代码）
+        // MCIDTextExtractor通过解析ContentStream中的BDC/EMC操作符，
+        // 识别MCID区域并收集该区域内所有字符的TextPosition
         MCIDTextExtractor extractor = new MCIDTextExtractor(mcids);
 
-        // 2. 处理页面
+        // 2. 处理页面（PDFStreamEngine会解析contentStream）
         PDPage page = doc.getPage(pageIndex);
         System.out.println("[调试] 开始处理页面，目标MCID: " + mcids);
         extractor.processPage(page);
 
-        // 3. 获取TextPosition列表
+        // 3. 获取TextPosition列表（包含精确的用户空间坐标）
         List<TextPosition> positions = extractor.getTextPositions();
         System.out.println("[调试] 页面处理完成，收集到 " + positions.size() + " 个字形");
 
@@ -450,24 +571,7 @@ public class HighlightByMCID {
         PDRectangle rect = calculateBoundingBoxFromQuadPoints(quadPoints);
         System.out.println("[调试] 边界框 Rect: (" + rect.getLowerLeftX() + "," + rect.getLowerLeftY() + ") 宽=" + rect.getWidth() + " 高=" + rect.getHeight());
 
-        // 6. 🔴 添加红色边框验证坐标（用于调试）
-        System.out.println("[调试] 添加红色方框验证坐标...");
-        // PDFBox 3.0中PDAnnotationSquareCircle是抽象类，需要通过COSDictionary创建
-        COSDictionary squareDict = new COSDictionary();
-        squareDict.setName(COSName.TYPE, "Annot");
-        squareDict.setName(COSName.SUBTYPE, "Square");
-        PDAnnotationSquareCircle box = (PDAnnotationSquareCircle) PDAnnotation.createAnnotation(squareDict);
-        box.setRectangle(rect);
-        PDBorderStyleDictionary borderStyle = new PDBorderStyleDictionary();
-        borderStyle.setWidth(1.0f);  // 1pt边框
-        box.setBorderStyle(borderStyle);
-        PDColor redColor = new PDColor(new float[]{1.0f, 0f, 0f}, PDDeviceRGB.INSTANCE);
-        box.setColor(redColor);
-        box.setPrinted(true);
-        page.getAnnotations().add(box);
-        System.out.println("[成功] 红色方框已添加");
-
-        // 7. 创建高亮注释（PDFBox 3.0方式）
+        // 6. 创建高亮注释（PDFBox 3.0方式）
         // PDFBox 3.0中PDAnnotationTextMarkup构造函数是protected，需要通过COSDictionary创建
         COSDictionary highlightDict = new COSDictionary();
         highlightDict.setName(COSName.TYPE, "Annot");
@@ -492,7 +596,7 @@ public class HighlightByMCID {
 
         // 11. 添加到页面
         page.getAnnotations().add(highlight);
-        System.out.println("[成功] 黄色高亮已添加");
+        System.out.println("[成功] 高亮已添加");
 
         // 10. 获取文本内容（用于调试）
         String extractedText = extractor.getText();
@@ -511,16 +615,13 @@ public class HighlightByMCID {
     public static void main(String[] args) throws IOException {
         // 测试参数
         String inputPdf = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_A2b.pdf";
-
-        // 使用时间戳生成唯一的输出文件名，避免覆盖
-        String timestamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new java.util.Date());
-        String outputPdf = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_mcid_highlighted_" + timestamp + ".pdf";
+        String outputPdf = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_mcid_highlighted.pdf";
 
         int pageIndex = 19;  // 第20页（从0开始）
         Set<Integer> targetMcids = new HashSet<>(Arrays.asList(5, 7, 10));  // 测试MCID
 
-        // 黄色高亮，30%透明度
-        float[] color = {1.0f, 1.0f, 0.0f};  // RGB: 黄色
+        // 绿色高亮，30%透明度
+        float[] color = {0.0f, 1.0f, 0.0f};  // RGB: 绿色
         float opacity = 0.3f;
 
         // 打开PDF
