@@ -1,5 +1,6 @@
 package com.example.docxserver.util.pdf.highter;
 
+import com.example.docxserver.util.MCIDTextExtractor;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.contentstream.PDFStreamEngine;
 import org.apache.pdfbox.contentstream.operator.Operator;
@@ -14,6 +15,8 @@ import org.apache.pdfbox.pdmodel.graphics.color.PDColor;
 import org.apache.pdfbox.pdmodel.graphics.color.PDDeviceRGB;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotation;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationTextMarkup;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationSquareCircle;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDBorderStyleDictionary;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.pdfbox.text.TextPosition;
 import org.apache.pdfbox.util.Matrix;
@@ -52,239 +55,175 @@ import java.util.*;
 public class HighlightByMCID {
 
     /**
-     * MCID高亮器（继承PDFStreamEngine）
+     * 生成QuadPoints数组（用于高亮注释）- 必过版
      *
-     * 工作原理（与MCIDTextExtractor完全相同的实现）：
-     * 1. 使用addOperator手动拦截BDC/EMC操作符
-     * 2. 追踪currentMCID（单变量，与MCIDTextExtractor一致）
-     * 3. 在showGlyph中收集目标MCID内的TextPosition
-     * 4. 生成QuadPoints用于高亮注释
+     * 修复内容：
+     * 1. Y坐标转换到页面用户空间（左下原点）
+     * 2. 处理宽度为0的情况（使用兜底值）
+     * 3. ✅ **修复点序为 TL,TR,BL,BR**（PDF标准要求）
+     * 4. ✅ **同行合并**（避免零宽度问题，提高可见性）
      *
-     * 重要：此实现与MCIDTextExtractor保持完全一致，确保能成功提取MCID文本
+     * QuadPoints格式（PDF标准）：
+     * - 每个高亮区域用8个浮点数表示（4个点的x,y坐标）
+     * - **正确顺序：TL(左上), TR(右上), BL(左下), BR(右下)**
+     *
+     * @param positions TextPosition列表
+     * @param pageHeight 页面高度（用于Y坐标转换）
+     * @return QuadPoints数组
      */
-    static class McidHighlighter extends PDFStreamEngine {
-        private final Set<Integer> targetMcids;
-        private Integer currentMCID = null;  // 使用单变量（与MCIDTextExtractor一致）
-        private final List<TextPosition> collectedPositions = new ArrayList<>();
-        private boolean debugMode = false;
-
-        /**
-         * 构造函数
-         * @param targetMcids 目标MCID集合
-         */
-        public McidHighlighter(Set<Integer> targetMcids) throws IOException {
-            this.targetMcids = targetMcids;
-
-            // 添加文本显示操作符（与MCIDTextExtractor完全相同）
-            addOperator(new org.apache.pdfbox.contentstream.operator.text.BeginText(this));
-            addOperator(new org.apache.pdfbox.contentstream.operator.text.EndText(this));
-            addOperator(new org.apache.pdfbox.contentstream.operator.text.SetFontAndSize(this));
-            addOperator(new org.apache.pdfbox.contentstream.operator.text.ShowText(this));
-            addOperator(new org.apache.pdfbox.contentstream.operator.text.ShowTextAdjusted(this));
-            addOperator(new org.apache.pdfbox.contentstream.operator.text.ShowTextLine(this));
-            addOperator(new org.apache.pdfbox.contentstream.operator.text.ShowTextLineAndSpace(this));
-            addOperator(new org.apache.pdfbox.contentstream.operator.text.MoveText(this));
-            addOperator(new org.apache.pdfbox.contentstream.operator.text.MoveTextSetLeading(this));
-            addOperator(new org.apache.pdfbox.contentstream.operator.text.NextLine(this));
-
-            // 添加图形状态操作符（与MCIDTextExtractor完全相同）
-            addOperator(new org.apache.pdfbox.contentstream.operator.state.Concatenate(this));
-            addOperator(new org.apache.pdfbox.contentstream.operator.state.Restore(this));
-            addOperator(new org.apache.pdfbox.contentstream.operator.state.Save(this));
-            addOperator(new org.apache.pdfbox.contentstream.operator.state.SetMatrix(this));
-
-            // 添加标记内容操作符 - 关键！（与MCIDTextExtractor完全相同）
-            addOperator(new org.apache.pdfbox.contentstream.operator.markedcontent.BeginMarkedContentSequence(this) {
-                @Override
-                public void process(Operator operator, List<COSBase> arguments) throws IOException {
-                    super.process(operator, arguments);
-                    // BMC 操作符，可能没有MCID
-                }
-            });
-
-            addOperator(new org.apache.pdfbox.contentstream.operator.markedcontent.BeginMarkedContentSequenceWithProperties(this) {
-                @Override
-                public void process(Operator operator, List<COSBase> arguments) throws IOException {
-                    super.process(operator, arguments);
-
-                    // BDC 操作符，从属性字典中提取MCID（与MCIDTextExtractor完全相同）
-                    if (arguments.size() >= 2) {
-                        COSBase properties = arguments.get(1);
-                        if (properties instanceof COSName) {
-                            // 间接引用，需要查找资源字典
-                            // 简化处理：跳过（与MCIDTextExtractor一致）
-                        } else if (properties instanceof COSDictionary) {
-                            COSDictionary dict = (COSDictionary) properties;
-                            if (dict.containsKey(COSName.MCID)) {
-                                currentMCID = dict.getInt(COSName.MCID);
-
-                                if (debugMode) {
-                                    System.out.println("[BDC] MCID=" + currentMCID +
-                                                     ", inTarget=" + targetMcids.contains(currentMCID));
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-
-            addOperator(new org.apache.pdfbox.contentstream.operator.markedcontent.EndMarkedContentSequence(this) {
-                @Override
-                public void process(Operator operator, List<COSBase> arguments) throws IOException {
-                    super.process(operator, arguments);
-                    currentMCID = null; // 退出标记内容
-                }
-            });
+    private static float[] generateQuadPoints(List<TextPosition> positions, float pageHeight) {
+        if (positions.isEmpty()) {
+            return new float[0];
         }
 
-        /**
-         * 设置调试模式
-         */
-        public void setDebugMode(boolean debugMode) {
-            this.debugMode = debugMode;
-        }
+        // 步骤1：将TextPosition转换为统一坐标系，并按行聚合
+        List<List<TextPosition>> lines = groupIntoLines(positions);
 
-        /**
-         * 判断是否应该收集文本（与MCIDTextExtractor完全相同）
-         */
-        private boolean shouldCollectText() {
-            return currentMCID != null && targetMcids.contains(currentMCID);
-        }
+        List<Float> quadsList = new ArrayList<>();
 
-        /**
-         * 显示字符 - 由父类调用（与MCIDTextExtractor类似，但收集TextPosition而非手动创建）
-         */
-        @Override
-        protected void showGlyph(Matrix textRenderingMatrix, PDFont font, int code, Vector displacement) throws IOException {
-            if (shouldCollectText()) {
-                // 获取Unicode字符
-                String unicode = font.toUnicode(code);
-                if (unicode != null) {
-                    // 计算文本位置（与MCIDTextExtractor完全相同）
-                    Matrix matrix = textRenderingMatrix.clone();
-                    float fontSize = getGraphicsState().getTextState().getFontSize();
-                    float horizontalScaling = getGraphicsState().getTextState().getHorizontalScaling() / 100f;
+        // 步骤2：为每一行生成一个QuadPoints（同行合并）
+        for (List<TextPosition> line : lines) {
+            if (line.isEmpty()) continue;
 
-                    float x = matrix.getTranslateX();
-                    float y = matrix.getTranslateY();
-                    float width = displacement.getX() * fontSize * horizontalScaling;
-                    float height = fontSize;
+            float xMin = Float.MAX_VALUE;
+            float xMax = -Float.MAX_VALUE;
+            float yLL = Float.MAX_VALUE;  // 左下角Y（行内最低点）
+            float hMax = 0f;              // 行内最大高度
 
-                    TextPosition textPosition = new TextPosition(
-                        0, // rotation - 简化处理
-                        0, // page width
-                        0, // page height
-                        matrix,
-                        x,
-                        y,
-                        height,
-                        width,
-                        width,
-                        unicode,
-                        new int[]{code},
-                        font,
-                        fontSize,
-                        (int) (fontSize * matrix.getScalingFactorY())
-                    );
-
-                    collectedPositions.add(textPosition);
-                }
-            }
-        }
-
-        /**
-         * 生成QuadPoints数组（用于高亮注释）
-         *
-         * QuadPoints格式（PDF标准）：
-         * - 每个字形/片段用8个浮点数表示（4个点的x,y坐标）
-         * - 顺序：左下、右下、右上、左上（逆时针）
-         * - 第1、2个点定义文本基线
-         *
-         * @return QuadPoints数组
-         */
-        public float[] generateQuadPoints() {
-            List<Float> quadsList = new ArrayList<>();
-
-            for (TextPosition tp : collectedPositions) {
+            // 遍历行内所有字符，计算外接矩形
+            for (TextPosition tp : line) {
+                float w = Math.max(0.01f, tp.getWidthDirAdj());  // 宽度兜底
+                float h = Math.max(0.01f, tp.getHeightDir());    // 高度兜底
                 float x = tp.getXDirAdj();
-                float y = tp.getYDirAdj();
-                float width = tp.getWidthDirAdj();
-                float height = tp.getHeightDir();
 
-                // 计算四个角的坐标（逆时针：左下、右下、右上、左上）
-                // 注意：PDFBox坐标系是左下角为原点，Y轴向上
-                float x1 = x;           // 左下 X
-                float y1 = y;           // 左下 Y
-                float x2 = x + width;   // 右下 X
-                float y2 = y;           // 右下 Y
-                float x3 = x + width;   // 右上 X
-                float y3 = y + height;  // 右上 Y
-                float x4 = x;           // 左上 X
-                float y4 = y + height;  // 左上 Y
+                // Y坐标转换：YDirAdj为负数时，取绝对值即为从底部算起的Y坐标
+                // 例如：YDirAdj=-755.889 表示距离底部755.889点（即在页面顶部）
+                float y = Math.abs(tp.getYDirAdj()) - h;
 
-                // 添加到QuadPoints（8个值）
-                quadsList.add(x1); quadsList.add(y1);  // 左下
-                quadsList.add(x2); quadsList.add(y2);  // 右下
-                quadsList.add(x3); quadsList.add(y3);  // 右上
-                quadsList.add(x4); quadsList.add(y4);  // 左上
+                xMin = Math.min(xMin, x);
+                xMax = Math.max(xMax, x + w);
+                yLL = Math.min(yLL, y);   // 取行内最低的下边缘
+                hMax = Math.max(hMax, h);
             }
 
-            // 转换为数组
-            float[] quads = new float[quadsList.size()];
-            for (int i = 0; i < quadsList.size(); i++) {
-                quads[i] = quadsList.get(i);
-            }
-            return quads;
+            // 生成QuadPoints - 正确顺序：TL, TR, BL, BR
+            float yTop = yLL + hMax;  // 上边缘Y
+
+            quadsList.add(xMin);  quadsList.add(yTop);  // TL (左上)
+            quadsList.add(xMax);  quadsList.add(yTop);  // TR (右上)
+            quadsList.add(xMin);  quadsList.add(yLL);   // BL (左下)
+            quadsList.add(xMax);  quadsList.add(yLL);   // BR (右下)
         }
 
-        /**
-         * 计算边界框（Rect）
-         * PDF注释必须有Rect属性，表示注释的边界框
-         *
-         * @return 边界框矩形
-         */
-        public PDRectangle calculateBoundingBox() {
-            if (collectedPositions.isEmpty()) {
-                return new PDRectangle(0, 0, 0, 0);
-            }
+        // 转换为数组
+        float[] quads = new float[quadsList.size()];
+        for (int i = 0; i < quadsList.size(); i++) {
+            quads[i] = quadsList.get(i);
+        }
+        return quads;
+    }
 
-            float minX = Float.MAX_VALUE;
-            float minY = Float.MAX_VALUE;
-            float maxX = -Float.MAX_VALUE;
-            float maxY = -Float.MAX_VALUE;
-
-            for (TextPosition tp : collectedPositions) {
-                float x = tp.getXDirAdj();
-                float y = tp.getYDirAdj();
-                float width = tp.getWidthDirAdj();
-                float height = tp.getHeightDir();
-
-                minX = Math.min(minX, x);
-                minY = Math.min(minY, y);
-                maxX = Math.max(maxX, x + width);
-                maxY = Math.max(maxY, y + height);
-            }
-
-            return new PDRectangle(minX, minY, maxX - minX, maxY - minY);
+    /**
+     * 将TextPosition按行聚合
+     * 简单策略：按Y坐标聚类（同一行的Y坐标接近）
+     */
+    private static List<List<TextPosition>> groupIntoLines(List<TextPosition> positions) {
+        if (positions.isEmpty()) {
+            return new ArrayList<>();
         }
 
-        /**
-         * 获取收集到的文本内容（用于调试）
-         */
-        public String getCollectedText() {
-            StringBuilder sb = new StringBuilder();
-            for (TextPosition tp : collectedPositions) {
-                sb.append(tp.getUnicode());
+        List<List<TextPosition>> lines = new ArrayList<>();
+        List<TextPosition> currentLine = new ArrayList<>();
+        currentLine.add(positions.get(0));
+
+        float threshold = 2.0f;  // Y坐标差异阈值（点）
+
+        for (int i = 1; i < positions.size(); i++) {
+            TextPosition prev = positions.get(i - 1);
+            TextPosition curr = positions.get(i);
+
+            // 如果Y坐标接近，认为是同一行
+            float yDiff = Math.abs(curr.getYDirAdj() - prev.getYDirAdj());
+
+            if (yDiff <= threshold) {
+                currentLine.add(curr);
+            } else {
+                // 新行
+                lines.add(currentLine);
+                currentLine = new ArrayList<>();
+                currentLine.add(curr);
             }
-            return sb.toString();
         }
 
-        /**
-         * 获取收集到的字形数量（用于调试）
-         */
-        public int getCollectedPositionsCount() {
-            return collectedPositions.size();
+        // 添加最后一行
+        if (!currentLine.isEmpty()) {
+            lines.add(currentLine);
         }
+
+        return lines;
+    }
+
+    /**
+     * 从QuadPoints计算边界框（Rect）
+     * 找出所有点中的最小X,Y和最大X,Y
+     *
+     * @param quadPoints QuadPoints数组（格式：TL,TR,BL,BR × N个四边形）
+     * @return 边界框矩形
+     */
+    private static PDRectangle calculateBoundingBoxFromQuadPoints(float[] quadPoints) {
+        if (quadPoints.length == 0) {
+            return new PDRectangle(0, 0, 0, 0);
+        }
+
+        float minX = Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE;
+        float maxY = -Float.MAX_VALUE;
+
+        // 遍历所有点（每个点有x,y两个值）
+        for (int i = 0; i < quadPoints.length; i += 2) {
+            float x = quadPoints[i];
+            float y = quadPoints[i + 1];
+
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+        }
+
+        return new PDRectangle(minX, minY, maxX - minX, maxY - minY);
+    }
+
+    /**
+     * 计算边界框（Rect）- 从TextPosition计算（备用）
+     * PDF注释必须有Rect属性，表示注释的边界框
+     *
+     * @param positions TextPosition列表
+     * @return 边界框矩形
+     */
+    private static PDRectangle calculateBoundingBox(List<TextPosition> positions) {
+        if (positions.isEmpty()) {
+            return new PDRectangle(0, 0, 0, 0);
+        }
+
+        float minX = Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE;
+        float maxY = -Float.MAX_VALUE;
+
+        for (TextPosition tp : positions) {
+            float x = tp.getXDirAdj();
+            float y = tp.getYDirAdj();
+            float width = tp.getWidthDirAdj();
+            float height = tp.getHeightDir();
+
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x + width);
+            maxY = Math.max(maxY, y + height);
+        }
+
+        return new PDRectangle(minX, minY, maxX - minX, maxY - minY);
     }
 
     /**
@@ -461,50 +400,105 @@ public class HighlightByMCID {
             float[] color,
             float opacity) throws IOException {
 
-        // 1. 创建MCID高亮器
-        McidHighlighter highlighter = new McidHighlighter(mcids);
-        highlighter.setDebugMode(true);  // 启用调试模式
+        // 1. 使用MCIDTextExtractor提取TextPosition（复用已验证的代码）
+        MCIDTextExtractor extractor = new MCIDTextExtractor(mcids);
 
-        // 2. 处理页面（PDFBox会自动解析内容流，调用beginMarkedContentSequence等方法）
+        // 2. 处理页面
         PDPage page = doc.getPage(pageIndex);
         System.out.println("[调试] 开始处理页面，目标MCID: " + mcids);
-        highlighter.processPage(page);
-        System.out.println("[调试] 页面处理完成，收集到 " + highlighter.getCollectedPositionsCount() + " 个字形");
+        extractor.processPage(page);
 
-        // 3. 生成QuadPoints
-        float[] quadPoints = highlighter.generateQuadPoints();
+        // 3. 获取TextPosition列表
+        List<TextPosition> positions = extractor.getTextPositions();
+        System.out.println("[调试] 页面处理完成，收集到 " + positions.size() + " 个字形");
 
-        if (quadPoints.length == 0) {
+        if (positions.isEmpty()) {
             System.out.println("[警告] 页面 " + (pageIndex + 1) + " 未找到MCID " + mcids + " 的内容");
             return;
         }
 
-        // 4. 创建高亮注释（PDFBox 3.0方式）
-        COSDictionary dict = new COSDictionary();
-        dict.setName(COSName.TYPE, "Annot");
-        dict.setName(COSName.SUBTYPE, "Highlight");
+        // 调试：打印前3个TextPosition的原始数据
+        System.out.println("[调试] 前3个TextPosition原始数据:");
+        PDRectangle cropBox = page.getCropBox();
+        float pageHeight = cropBox.getHeight();
+        float pageWidth = cropBox.getWidth();
+        System.out.println("[调试] 页面尺寸: " + pageWidth + " x " + pageHeight);
+        for (int i = 0; i < Math.min(3, positions.size()); i++) {
+            TextPosition tp = positions.get(i);
+            System.out.println("  TextPosition[" + i + "]: unicode='" + tp.getUnicode() +
+                             "' X=" + tp.getX() + " Y=" + tp.getY() +
+                             " XDirAdj=" + tp.getXDirAdj() + " YDirAdj=" + tp.getYDirAdj() +
+                             " Width=" + tp.getWidth() + " WidthDirAdj=" + tp.getWidthDirAdj() +
+                             " Height=" + tp.getHeight() + " HeightDir=" + tp.getHeightDir());
+        }
 
-        PDAnnotation annotation = PDAnnotation.createAnnotation(dict);
-        PDAnnotationTextMarkup highlight = (PDAnnotationTextMarkup) annotation;
+        // 4. 生成QuadPoints（带页面高度进行Y坐标转换）
+        float[] quadPoints = generateQuadPoints(positions, pageHeight);
 
-        // 5. 设置QuadPoints和边界框
+        // 调试：输出QuadPoints信息
+        System.out.println("[调试] QuadPoints数量: " + (quadPoints.length / 8) + " 个四边形");
+        System.out.println("[调试] 前3个QuadPoints坐标:");
+        for (int i = 0; i < Math.min(3, quadPoints.length / 8); i++) {
+            int offset = i * 8;
+            System.out.println("  QuadPoint[" + i + "]: LL(" + quadPoints[offset] + "," + quadPoints[offset+1] +
+                             ") LR(" + quadPoints[offset+2] + "," + quadPoints[offset+3] +
+                             ") UR(" + quadPoints[offset+4] + "," + quadPoints[offset+5] +
+                             ") UL(" + quadPoints[offset+6] + "," + quadPoints[offset+7] + ")");
+        }
+
+        // 5. 计算边界框（从QuadPoints推导）
+        PDRectangle rect = calculateBoundingBoxFromQuadPoints(quadPoints);
+        System.out.println("[调试] 边界框 Rect: (" + rect.getLowerLeftX() + "," + rect.getLowerLeftY() + ") 宽=" + rect.getWidth() + " 高=" + rect.getHeight());
+
+        // 6. 🔴 添加红色边框验证坐标（用于调试）
+        System.out.println("[调试] 添加红色方框验证坐标...");
+        // PDFBox 3.0中PDAnnotationSquareCircle是抽象类，需要通过COSDictionary创建
+        COSDictionary squareDict = new COSDictionary();
+        squareDict.setName(COSName.TYPE, "Annot");
+        squareDict.setName(COSName.SUBTYPE, "Square");
+        PDAnnotationSquareCircle box = (PDAnnotationSquareCircle) PDAnnotation.createAnnotation(squareDict);
+        box.setRectangle(rect);
+        PDBorderStyleDictionary borderStyle = new PDBorderStyleDictionary();
+        borderStyle.setWidth(1.0f);  // 1pt边框
+        box.setBorderStyle(borderStyle);
+        PDColor redColor = new PDColor(new float[]{1.0f, 0f, 0f}, PDDeviceRGB.INSTANCE);
+        box.setColor(redColor);
+        box.setPrinted(true);
+        page.getAnnotations().add(box);
+        System.out.println("[成功] 红色方框已添加");
+
+        // 7. 创建高亮注释（PDFBox 3.0方式）
+        // PDFBox 3.0中PDAnnotationTextMarkup构造函数是protected，需要通过COSDictionary创建
+        COSDictionary highlightDict = new COSDictionary();
+        highlightDict.setName(COSName.TYPE, "Annot");
+        highlightDict.setName(COSName.SUBTYPE, "Highlight");
+        PDAnnotationTextMarkup highlight = (PDAnnotationTextMarkup) PDAnnotation.createAnnotation(highlightDict);
+
+        // 8. 设置QuadPoints和边界框
         highlight.setQuadPoints(quadPoints);
-        highlight.setRectangle(highlighter.calculateBoundingBox());
+        highlight.setRectangle(rect);
 
-        // 6. 设置颜色和透明度
+        // 9. 设置颜色和不透明度
         PDColor pdColor = new PDColor(color, PDDeviceRGB.INSTANCE);
         highlight.setColor(pdColor);
-        highlight.setConstantOpacity(opacity);
+        highlight.setConstantOpacity(1.0f);  // 改为完全不透明，更容易看到
 
-        // 7. 设置为可打印（在打印时显示）
-        highlight.setPrinted(true);
+        // 设置CA（外观不透明度）
+        highlight.getCOSObject().setFloat(COSName.CA, 0.5f);
 
-        // 8. 添加到页面
+        // 10. 设置标志位
+        highlight.setPrinted(true);  // 可打印
+        // 确保不设置隐藏标志
+
+        // 11. 添加到页面
         page.getAnnotations().add(highlight);
+        System.out.println("[成功] 黄色高亮已添加");
 
+        // 10. 获取文本内容（用于调试）
+        String extractedText = extractor.getText();
         System.out.println("[成功] 页面 " + (pageIndex + 1) + " 高亮了 " +
                          (quadPoints.length / 8) + " 个字形，MCID: " + mcids);
-        System.out.println("       文本内容: " + highlighter.getCollectedText());
+        System.out.println("       文本内容: " + extractedText);
     }
 
     /**
@@ -517,7 +511,10 @@ public class HighlightByMCID {
     public static void main(String[] args) throws IOException {
         // 测试参数
         String inputPdf = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_A2b.pdf";
-        String outputPdf = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_mcid_highlighted.pdf";
+
+        // 使用时间戳生成唯一的输出文件名，避免覆盖
+        String timestamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss").format(new java.util.Date());
+        String outputPdf = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_mcid_highlighted_" + timestamp + ".pdf";
 
         int pageIndex = 19;  // 第20页（从0开始）
         Set<Integer> targetMcids = new HashSet<>(Arrays.asList(5, 7, 10));  // 测试MCID
