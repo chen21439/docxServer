@@ -21,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * 段落映射器：建立 DOCX 段落（从TXT提取）到 PDF 段落的映射关系
@@ -38,13 +39,15 @@ import java.util.*;
  */
 public class ParagraphMapper {
 
+    public static String dir = "E:\\programFile\\AIProgram\\docxServer\\pdf\\";
+
     public static void main(String[] args) throws Exception {
         String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_A2b.pdf";
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
         String taskId = "1978018096320905217";
 //        // 步骤0-1: 从PDF独立提取表格结构到XML格式TXT（不依赖DOCX）
         System.out.println("=== 从PDF独立提取表格结构到XML格式TXT ===");
-        toXML(pdfPath);
+        toXML(taskId);
         System.out.println();
 //
 //        // 步骤0-2: 使用新的ID匹配方法，生成匹配结果
@@ -1108,15 +1111,14 @@ public class ParagraphMapper {
      * @param pdfPath PDF文件路径（必须是PDF/A-4或Tagged PDF）
      * @throws IOException 文件读写异常
      */
-    public static void toXML(String pdfPath) throws IOException {
-        File pdfFile = new File(pdfPath);
-        String pdfDir = pdfFile.getParent();
-        String pdfName = pdfFile.getName().replaceFirst("[.][^.]+$", "");
+    public static void toXML(String taskId) throws IOException {
+        String pdfType = "_A2b";
+        File pdfFile = new File(dir + taskId + pdfType + ".pdf");
 
         // 生成带时间戳的输出文件名
         SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
         String timestamp = sdf.format(new Date());
-        String outputPath = pdfDir + File.separator + pdfName + "_pdf_" + timestamp + ".txt";
+        String outputPath = dir + taskId + pdfType + "_pdf_" + timestamp + ".txt";
 
         StringBuilder output = new StringBuilder();
 
@@ -1231,13 +1233,21 @@ public class ParagraphMapper {
                                 if ("TD".equalsIgnoreCase(cellElement.getStructureType())) {
                                     String cellId = rowId + "-c" + String.format("%03d", colIndex + 1) + "-p001";
 
+                                    // 收集单元格的所有MCID
+                                    Set<Integer> cellMcids = collectAllMcids(cellElement);
+                                    String mcidStr = cellMcids.isEmpty() ? "" :
+                                        cellMcids.stream()
+                                                 .sorted()
+                                                 .map(String::valueOf)
+                                                 .collect(Collectors.joining(","));
+
                                     // 提取单元格文本（传入doc参数和cellId用于调试）
-                                    System.out.println("    提取单元格: " + cellId);
+                                    System.out.println("    提取单元格: " + cellId + ", MCID: " + mcidStr);
                                     String cellText = extractTextFromElement(cellElement, doc, cellId);
                                     System.out.println("      文本内容: " + truncate(cellText, 50));
 
                                     output.append("    <td>\n");
-                                    output.append("      <p id=\"").append(cellId).append("\">")
+                                    output.append("      <p id=\"").append(cellId).append("\" mcid=\"").append(escapeHtml(mcidStr)).append("\">")
                                           .append(escapeHtml(cellText))
                                           .append("</p>\n");
                                     output.append("    </td>\n");
@@ -1792,6 +1802,52 @@ public class ParagraphMapper {
             org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
             PDDocument doc) throws IOException {
         return extractTextFromElement(element, doc, "");
+    }
+
+    /**
+     * 收集该结构元素后代的所有MCID（不分页，返回Set）
+     *
+     * @param element 结构元素
+     * @return MCID集合
+     * @throws IOException IO异常
+     */
+    private static Set<Integer> collectAllMcids(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element) throws IOException {
+        Set<Integer> result = new HashSet<>();
+        collectAllMcidsRecursive(element, result);
+        return result;
+    }
+
+    /**
+     * 递归收集所有MCID（不分页）
+     */
+    private static void collectAllMcidsRecursive(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
+            Set<Integer> mcids) throws IOException {
+
+        for (Object kid : element.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                // 递归处理子结构元素
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+                collectAllMcidsRecursive(childElement, mcids);
+
+            } else if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent) {
+                // PDMarkedContent包含MCID信息
+                org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent mc =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent) kid;
+
+                Integer mcid = mc.getMCID();
+                if (mcid != null) {
+                    mcids.add(mcid);
+                }
+
+            } else if (kid instanceof Integer) {
+                // 直接的MCID整数
+                Integer mcid = (Integer) kid;
+                mcids.add(mcid);
+            }
+        }
     }
 
     /**
