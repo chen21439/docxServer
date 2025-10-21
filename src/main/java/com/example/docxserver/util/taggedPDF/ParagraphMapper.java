@@ -2,9 +2,13 @@ package com.example.docxserver.util.taggedPDF;
 
 import com.example.docxserver.util.MCIDTextExtractor;
 import com.example.docxserver.util.PdfTextExtractSupport;
+import com.example.docxserver.util.pdf.highter.HighlightByText;
+import com.example.docxserver.util.pdf.highter.dto.HighlightRequest;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.pdfbox.text.TextPosition;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -39,9 +43,9 @@ public class ParagraphMapper {
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
         String taskId = "1978018096320905217";
 //        // 步骤0-1: 从PDF独立提取表格结构到XML格式TXT（不依赖DOCX）
-//        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT ===");
-//        toXML(pdfPath);
-//        System.out.println();
+        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT ===");
+        toXML(pdfPath);
+        System.out.println();
 //
 //        // 步骤0-2: 使用新的ID匹配方法，生成匹配结果
 //        System.out.println("=== 使用ID直接匹配，生成匹配结果 ===");
@@ -49,9 +53,9 @@ public class ParagraphMapper {
 //        System.out.println();
 
         // 步骤0-3: 测试通过ID在PDF中查找文本
-        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
-        testFindTextByIdInPdf(taskId);
-        System.out.println();
+//        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
+//        testFindTextByIdInPdf(taskId);
+//        System.out.println();
 
         // 步骤0-4: 使用PDFTextStripper提取PDF全文到txt
 //        System.out.println("=== 使用PDFTextStripper提取PDF全文 ===");
@@ -83,171 +87,286 @@ public class ParagraphMapper {
      *    - 统计数据：测试总数、成功提取数、内容匹配数、提取率、匹配率
      *
      * @param taskId 任务ID（如：1978018096320905217）
-     * @param pdfSuffix PDF文件后缀（如：_A2b，可为null或空字符串）
      * @throws IOException 文件读取异常
      */
     private static void testFindTextByIdInPdf(String taskId) throws IOException {
         // 固定目录
-        String pdfDir = "E:\\programFile\\AIProgram\\docxServer\\pdf";
-
-        // 1. 构建文件路径
-        String pdfFileName = taskId + "_A2b.pdf";
-        String pdfPath = pdfDir + File.separator + pdfFileName;
-        String jsonPath = pdfDir + File.separator + taskId + ".json";
-
-        System.out.println("PDF文件路径: " + pdfPath);
-        System.out.println("JSON文件路径: " + jsonPath);
-
-        // 2. 从JSON文件读取所有pid
-        List<String> testIds = new ArrayList<>();
-        Map<String, String> expectedTexts = new HashMap<>();  // ID -> 预期文本
-
-        try {
-            String jsonContent = new String(Files.readAllBytes(Paths.get(jsonPath)), StandardCharsets.UTF_8);
-            // 简单解析JSON（使用字符串匹配，避免引入额外依赖）
-            // 查找所有 "pid": "xxx" 和对应的 "pidText": "yyy"
-            int pos = 0;
-            while ((pos = jsonContent.indexOf("\"pid\":", pos)) != -1) {
-                // 提取pid值
-                int pidStart = jsonContent.indexOf("\"", pos + 6) + 1;
-                int pidEnd = jsonContent.indexOf("\"", pidStart);
-                String pid = jsonContent.substring(pidStart, pidEnd);
-
-                // 查找对应的pidText值（在同一个span对象内）
-                int pidTextPos = jsonContent.indexOf("\"pidText\":", pidEnd);
-                int nextPidPos = jsonContent.indexOf("\"pid\":", pidEnd + 1);
-
-                // 确保pidText在当前pid和下一个pid之间
-                if (pidTextPos != -1 && (nextPidPos == -1 || pidTextPos < nextPidPos)) {
-                    int textStart = jsonContent.indexOf("\"", pidTextPos + 10) + 1;
-                    int textEnd = jsonContent.indexOf("\"", textStart);
-                    String text = jsonContent.substring(textStart, textEnd);
-
-                    // 反转义JSON字符串
-                    text = text.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"");
-
-                    // 去重：只添加尚未存在的pid（spanList中可能有重复项）
-                    if (!expectedTexts.containsKey(pid)) {
-                        testIds.add(pid);
-                        expectedTexts.put(pid, text);
-                    }
-                }
-
-                pos = pidEnd;
-            }
-
-            System.out.println("从JSON文件中读取到 " + testIds.size() + " 个唯一pid");
-
-        } catch (Exception e) {
-            System.err.println("读取JSON文件失败: " + e.getMessage());
-            e.printStackTrace();
-            return;
-        }
-
-        // 3. 使用新的 PdfTextExtractSupport 批量提取
-        System.out.println("\n开始从PDF中提取文本...\n");
-        Map<String, String> pdfResults = PdfTextExtractSupport.extractTextByIds(pdfPath, testIds);
-
-        // 4. 输出详细对比结果
-        System.out.println("\n=== 详细对比结果（前20个） ===");
-        int foundCount = 0;
-
-        // 显示前20个结果
-        int displayCount = Math.min(20, testIds.size());
-        for (int i = 0; i < displayCount; i++) {
-            String id = testIds.get(i);
-            String expectedText = expectedTexts.get(id);
-            String pdfText = pdfResults.get(id);
-
-            boolean found = (pdfText != null && !pdfText.isEmpty());
-            if (found) foundCount++;
-
-            System.out.println("【" + id + "】");
-            System.out.println("  JSON预期(pidText): " + truncate(expectedText, 100));
-            if (found) {
-                System.out.println("  PDF实际提取:       " + truncate(pdfText, 100));
-            } else {
-                System.out.println("  PDF实际提取:       [未找到]");
-            }
-
-            // 简单判断是否匹配（去除空白后对比）
-            if (found) {
-                String expectedNorm = normalizeText(expectedText);
-                String pdfNorm = normalizeText(pdfText);
-
-                // 对比前50个字符或全部（取较短的）
-                int compareLen = Math.min(50, Math.min(expectedNorm.length(), pdfNorm.length()));
-                if (compareLen > 0) {
-                    String expectedSub = expectedNorm.substring(0, compareLen);
-                    String pdfSub = pdfNorm.substring(0, compareLen);
-
-                    if (expectedSub.equals(pdfSub)) {
-                        System.out.println("  状态: ✓ 匹配");
-                    } else {
-                        System.out.println("  状态: △ 找到但内容不匹配");
-                        System.out.println("    预期(归一化): " + truncate(expectedSub, 80));
-                        System.out.println("    实际(归一化): " + truncate(pdfSub, 80));
-                    }
-                } else {
-                    System.out.println("  状态: △ 文本为空");
-                }
-            } else {
-                System.out.println("  状态: × 未找到");
-            }
-            System.out.println();
-        }
-
-        System.out.println("(仅显示前" + displayCount + "个，共" + testIds.size() + "个)");
-
-        // 统计全部结果（使用去重后的testIds）
-        int matchCount = 0;
-        for (String id : testIds) {
-            String pdfText = pdfResults.get(id);
-            if (pdfText != null && !pdfText.isEmpty()) {
-                String expectedNorm = normalizeText(expectedTexts.get(id));
-                String pdfNorm = normalizeText(pdfText);
-                int compareLen = Math.min(50, Math.min(expectedNorm.length(), pdfNorm.length()));
-                if (compareLen > 0) {
-                    String expectedSub = expectedNorm.substring(0, compareLen);
-                    String pdfSub = pdfNorm.substring(0, compareLen);
-                    if (expectedSub.equals(pdfSub)) {
-                        matchCount++;
-                    }
-                }
-            }
-        }
-
-        // 5. 统计
-        System.out.println("\n=== 最终统计 ===");
-        System.out.println("测试总数: " + testIds.size());
-        System.out.println("成功提取: " + pdfResults.size());
-        System.out.println("内容匹配: " + matchCount);
-        System.out.println("未找到: " + (testIds.size() - pdfResults.size()));
-        System.out.println("提取率: " + String.format("%.2f%%", pdfResults.size() * 100.0 / testIds.size()));
-        System.out.println("匹配率: " + String.format("%.2f%%", matchCount * 100.0 / testIds.size()));
-
-        // 6. 打印未匹配的ID列表
-        List<String> unmatchedIds = new ArrayList<>();
-        for (String id : testIds) {
-            String pdfText = pdfResults.get(id);
-            if (pdfText == null || pdfText.isEmpty()) {
-                unmatchedIds.add(id);
-            }
-        }
-
-        if (!unmatchedIds.isEmpty()) {
-            System.out.println("\n=== 未匹配的ID列表 (" + unmatchedIds.size() + "个) ===");
-            int printLimit = Math.min(50, unmatchedIds.size());
-            for (int i = 0; i < printLimit; i++) {
-                String id = unmatchedIds.get(i);
-                String expectedText = expectedTexts.get(id);
-                System.out.println("【" + id + "】");
-                System.out.println("  预期文本: " + truncate(expectedText, 100));
-            }
-            if (unmatchedIds.size() > printLimit) {
-                System.out.println("... 还有 " + (unmatchedIds.size() - printLimit) + " 个未显示");
-            }
-        }
+//        String pdfDir = "E:\\programFile\\AIProgram\\docxServer\\pdf";
+//
+//        // 1. 构建文件路径
+//        String pdfFileName = taskId + "_A2b.pdf";
+//        String pdfPath = pdfDir + File.separator + pdfFileName;
+//        String jsonPath = pdfDir + File.separator + taskId + ".json";
+//
+//        System.out.println("PDF文件路径: " + pdfPath);
+//        System.out.println("JSON文件路径: " + jsonPath);
+//
+//        // 2. 从JSON文件读取所有pid
+//        List<String> testIds = new ArrayList<>();
+//        Map<String, String> expectedTexts = new HashMap<>();  // ID -> 预期文本
+//
+//        try {
+//            String jsonContent = new String(Files.readAllBytes(Paths.get(jsonPath)), StandardCharsets.UTF_8);
+//            // 简单解析JSON（使用字符串匹配，避免引入额外依赖）
+//            // 查找所有 "pid": "xxx" 和对应的 "pidText": "yyy"
+//            int pos = 0;
+//            while ((pos = jsonContent.indexOf("\"pid\":", pos)) != -1) {
+//                // 提取pid值
+//                int pidStart = jsonContent.indexOf("\"", pos + 6) + 1;
+//                int pidEnd = jsonContent.indexOf("\"", pidStart);
+//                String pid = jsonContent.substring(pidStart, pidEnd);
+//
+//                // 查找对应的pidText值（在同一个span对象内）
+//                int pidTextPos = jsonContent.indexOf("\"pidText\":", pidEnd);
+//                int nextPidPos = jsonContent.indexOf("\"pid\":", pidEnd + 1);
+//
+//                // 确保pidText在当前pid和下一个pid之间
+//                if (pidTextPos != -1 && (nextPidPos == -1 || pidTextPos < nextPidPos)) {
+//                    int textStart = jsonContent.indexOf("\"", pidTextPos + 10) + 1;
+//                    int textEnd = jsonContent.indexOf("\"", textStart);
+//                    String text = jsonContent.substring(textStart, textEnd);
+//
+//                    // 反转义JSON字符串
+//                    text = text.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"");
+//
+//                    // 去重：只添加尚未存在的pid（spanList中可能有重复项）
+//                    if (!expectedTexts.containsKey(pid)) {
+//                        testIds.add(pid);
+//                        expectedTexts.put(pid, text);
+//                    }
+//                }
+//
+//                pos = pidEnd;
+//            }
+//
+//            System.out.println("从JSON文件中读取到 " + testIds.size() + " 个唯一pid");
+//
+//        } catch (Exception e) {
+//            System.err.println("读取JSON文件失败: " + e.getMessage());
+//            e.printStackTrace();
+//            return;
+//        }
+//
+//        // 3. 只打开一次PDF，完成提取和高亮操作（方案A：避免跨文档引用问题）
+//        System.out.println("\n开始从PDF中提取文本并进行高亮...\n");
+//
+//        File pdfFile = new File(pdfPath);
+//        PDDocument doc = Loader.loadPDF(pdfFile);
+//
+//        Map<String, PdfTextExtractSupport.CellTextResult> pdfResults;
+//        try {
+//            // 使用新的API：传入已打开的doc，避免内部重复打开关闭
+//            pdfResults = PdfTextExtractSupport.extractTextByIdsWithPosition(doc, testIds);
+//
+//        // 4. 输出详细对比结果
+//        System.out.println("\n=== 详细对比结果（前20个） ===");
+//        int foundCount = 0;
+//
+//        // 显示前20个结果
+//        int displayCount = Math.min(20, testIds.size());
+//        for (int i = 0; i < displayCount; i++) {
+//            String id = testIds.get(i);
+//            String expectedText = expectedTexts.get(id);
+//            PdfTextExtractSupport.CellTextResult result = pdfResults.get(id);
+//            String pdfText = (result != null) ? result.text : null;
+//
+//            boolean found = (pdfText != null && !pdfText.isEmpty());
+//            if (found) foundCount++;
+//
+//            System.out.println("【" + id + "】");
+//            System.out.println("  JSON预期(pidText): " + truncate(expectedText, 100));
+//            if (found) {
+//                System.out.println("  PDF实际提取:       " + truncate(pdfText, 100));
+//            } else {
+//                System.out.println("  PDF实际提取:       [未找到]");
+//            }
+//
+//            // 简单判断是否匹配（去除空白后对比）
+//            if (found) {
+//                String expectedNorm = normalizeText(expectedText);
+//                String pdfNorm = normalizeText(pdfText);
+//
+//                // 对比前50个字符或全部（取较短的）
+//                int compareLen = Math.min(50, Math.min(expectedNorm.length(), pdfNorm.length()));
+//                if (compareLen > 0) {
+//                    String expectedSub = expectedNorm.substring(0, compareLen);
+//                    String pdfSub = pdfNorm.substring(0, compareLen);
+//
+//                    if (expectedSub.equals(pdfSub)) {
+//                        System.out.println("  状态: ✓ 匹配");
+//                    } else {
+//                        System.out.println("  状态: △ 找到但内容不匹配");
+//                        System.out.println("    预期(归一化): " + truncate(expectedSub, 80));
+//                        System.out.println("    实际(归一化): " + truncate(pdfSub, 80));
+//                    }
+//                } else {
+//                    System.out.println("  状态: △ 文本为空");
+//                }
+//            } else {
+//                System.out.println("  状态: × 未找到");
+//            }
+//            System.out.println();
+//        }
+//
+//        System.out.println("(仅显示前" + displayCount + "个，共" + testIds.size() + "个)");
+//
+//        // 统计全部结果（使用去重后的testIds）
+//        int matchCount = 0;
+//        for (String id : testIds) {
+//            PdfTextExtractSupport.CellTextResult result = pdfResults.get(id);
+//            String pdfText = (result != null) ? result.text : null;
+//            if (pdfText != null && !pdfText.isEmpty()) {
+//                String expectedNorm = normalizeText(expectedTexts.get(id));
+//                String pdfNorm = normalizeText(pdfText);
+//                int compareLen = Math.min(50, Math.min(expectedNorm.length(), pdfNorm.length()));
+//                if (compareLen > 0) {
+//                    String expectedSub = expectedNorm.substring(0, compareLen);
+//                    String pdfSub = pdfNorm.substring(0, compareLen);
+//                    if (expectedSub.equals(pdfSub)) {
+//                        matchCount++;
+//                    }
+//                }
+//            }
+//        }
+//
+//        // 5. 统计
+//        System.out.println("\n=== 最终统计 ===");
+//        System.out.println("测试总数: " + testIds.size());
+//        System.out.println("成功提取: " + pdfResults.size());
+//        System.out.println("内容匹配: " + matchCount);
+//        System.out.println("未找到: " + (testIds.size() - pdfResults.size()));
+//        System.out.println("提取率: " + String.format("%.2f%%", pdfResults.size() * 100.0 / testIds.size()));
+//        System.out.println("匹配率: " + String.format("%.2f%%", matchCount * 100.0 / testIds.size()));
+//
+//        // 6. 打印未匹配的ID列表
+//        List<String> unmatchedIds = new ArrayList<>();
+//        for (String id : testIds) {
+//            PdfTextExtractSupport.CellTextResult result = pdfResults.get(id);
+//            String pdfText = (result != null) ? result.text : null;
+//            if (pdfText == null || pdfText.isEmpty()) {
+//                unmatchedIds.add(id);
+//            }
+//        }
+//
+//        if (!unmatchedIds.isEmpty()) {
+//            System.out.println("\n=== 未匹配的ID列表 (" + unmatchedIds.size() + "个) ===");
+//            int printLimit = Math.min(50, unmatchedIds.size());
+//            for (int i = 0; i < printLimit; i++) {
+//                String id = unmatchedIds.get(i);
+//                String expectedText = expectedTexts.get(id);
+//                System.out.println("【" + id + "】");
+//                System.out.println("  预期文本: " + truncate(expectedText, 100));
+//            }
+//            if (unmatchedIds.size() > printLimit) {
+//                System.out.println("... 还有 " + (unmatchedIds.size() - printLimit) + " 个未显示");
+//            }
+//        }
+//
+//        // 7. 对匹配成功的单元格进行高亮（使用 HighlightByText）
+//        System.out.println("\n=== 开始高亮匹配的单元格 ===");
+//
+//        // 收集所有有文本且有位置信息的结果
+//        List<String> highlightableIds = new ArrayList<>();
+//        for (String id : testIds) {
+//            PdfTextExtractSupport.CellTextResult result = pdfResults.get(id);
+//            if (result != null && result.hasText() && result.hasPosition()) {
+//                // 同时检查是否内容匹配
+//                String expectedText = expectedTexts.get(id);
+//                String expectedNorm = normalizeText(expectedText);
+//                String pdfNorm = normalizeText(result.text);
+//                int compareLen = Math.min(50, Math.min(expectedNorm.length(), pdfNorm.length()));
+//                if (compareLen > 0) {
+//                    String expectedSub = expectedNorm.substring(0, compareLen);
+//                    String pdfSub = pdfNorm.substring(0, compareLen);
+//                    if (expectedSub.equals(pdfSub)) {
+//                        highlightableIds.add(id);
+//                    }
+//                }
+//            }
+//        }
+//
+//        System.out.println("可高亮的单元格: " + highlightableIds.size() + " / " + testIds.size());
+//
+//            if (!highlightableIds.isEmpty()) {
+//                // 构建 HighlightRequest 列表
+//                List<HighlightRequest> highlightRequests = new ArrayList<>();
+//
+//                for (String id : highlightableIds) {
+//                    PdfTextExtractSupport.CellTextResult result = pdfResults.get(id);
+//
+//                    if (result.glyphs == null || result.glyphs.isEmpty()) {
+//                        continue;
+//                    }
+//
+//                    // 从 glyphs 计算边界框坐标
+//                    float[] bbox = calculateBoundingBox(result.glyphs);
+//                    if (bbox == null) {
+//                        System.err.println("无法计算边界框: " + id);
+//                        continue;
+//                    }
+//
+//                    // 打印调试信息：边界框坐标和第一个/最后一个字形的坐标
+//                    TextPosition firstGlyph = result.glyphs.get(0);
+//                    TextPosition lastGlyph = result.glyphs.get(result.glyphs.size() - 1);
+//                    System.out.println("\n[调试] " + id + " 边界框计算:");
+//                    System.out.println("  字形总数: " + result.glyphs.size());
+//                    System.out.println("  第一个字形: x=" + firstGlyph.getXDirAdj() + ", y=" + firstGlyph.getYDirAdj() +
+//                                     ", w=" + firstGlyph.getWidthDirAdj() + ", h=" + firstGlyph.getHeightDir());
+//                    System.out.println("  最后字形: x=" + lastGlyph.getXDirAdj() + ", y=" + lastGlyph.getYDirAdj() +
+//                                     ", w=" + lastGlyph.getWidthDirAdj() + ", h=" + lastGlyph.getHeightDir());
+//                    System.out.println("  计算出的边界框 [minX, minY, maxX, maxY]: " +
+//                                     String.format("[%.2f, %.2f, %.2f, %.2f]", bbox[0], bbox[1], bbox[2], bbox[3]));
+//
+//                    // 构造坐标字符串列表（左上角和右下角）
+//                    // 注意：这里使用 PDFBox 坐标系（左下角为原点，Y轴向上）
+//                    List<String> xy = new ArrayList<>();
+//                    xy.add(String.format("%.2f,%.2f", bbox[0], bbox[3])); // 左上角 (minX, maxY)
+//                    xy.add(String.format("%.2f,%.2f", bbox[2], bbox[1])); // 右下角 (maxX, minY)
+//
+//                    // 创建高亮请求（页码从0开始，但HighlightRequest需要1-based）
+//                    HighlightRequest request = new HighlightRequest(
+//                        result.pageIndex + 1,  // 转换为1-based页码
+//                        result.text,
+//                        xy
+//                    );
+//
+//                    highlightRequests.add(request);
+//                    System.out.println("  准备高亮: 页 " + (result.pageIndex + 1) +
+//                                     ", 坐标区域: " + xy.get(0) + " - " + xy.get(1));
+//                    System.out.println("  文本内容: " + truncate(result.text, 80));
+//                }
+//
+//                System.out.println("\n开始执行高亮...");
+//
+//                // 使用 HighlightByText 进行高亮
+//                try {
+//                    HighlightByText.highlightByText(
+//                        doc,
+//                        highlightRequests,
+//                        new float[]{1.0f, 1.0f, 0.0f},  // 黄色
+//                        0.3f,  // 透明度
+//                        "匹配成功"
+//                    );
+//
+//                    System.out.println("高亮完成，成功高亮 " + highlightRequests.size() + " 个单元格");
+//                } catch (Exception e) {
+//                    System.err.println("高亮失败: " + e.getMessage());
+//                    e.printStackTrace();
+//                }
+//
+//                // 保存高亮后的PDF
+//                String outputPath = pdfDir + File.separator + taskId + "_highlighted.pdf";
+//                doc.save(outputPath);
+//
+//                System.out.println("高亮PDF已保存到: " + outputPath);
+//            } else {
+//                System.out.println("没有可高亮的单元格（需要有文本和位置信息）");
+//            }
+//
+//        } finally {
+//            // 关闭PDF文档
+//            doc.close();
+//        }
     }
 
     /**
@@ -1914,6 +2033,48 @@ public class ParagraphMapper {
             sb.append(str);
         }
         return sb.toString();
+    }
+
+    /**
+     * 从字形列表计算边界框
+     *
+     * 计算所有字形的最小和最大坐标，返回边界框 [minX, minY, maxX, maxY]
+     * 注意：使用 PDFBox 坐标系（左下角为原点，Y轴向上）
+     *
+     * @param glyphs 字形列表（TextPosition）
+     * @return 边界框数组 [minX, minY, maxX, maxY]，计算失败返回 null
+     */
+    private static float[] calculateBoundingBox(List<TextPosition> glyphs) {
+        if (glyphs == null || glyphs.isEmpty()) {
+            return null;
+        }
+
+        float minX = Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE;
+        float maxY = -Float.MAX_VALUE;
+
+        for (TextPosition tp : glyphs) {
+            // 获取字形的位置和尺寸
+            float x = tp.getXDirAdj();
+            float y = tp.getYDirAdj();
+            float width = tp.getWidthDirAdj();
+            float height = tp.getHeightDir();
+
+            // 计算字形的四个角
+            float left = x;
+            float right = x + width;
+            float bottom = y;
+            float top = y - height;  // Y轴向上，top = y - height
+
+            // 更新边界框
+            minX = Math.min(minX, left);
+            maxX = Math.max(maxX, right);
+            minY = Math.min(minY, top);     // minY 是最下方（top 是负偏移）
+            maxY = Math.max(maxY, bottom);  // maxY 是最上方
+        }
+
+        return new float[]{minX, minY, maxX, maxY};
     }
 
     /**
