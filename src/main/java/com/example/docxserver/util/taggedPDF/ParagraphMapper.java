@@ -1145,7 +1145,7 @@ public class ParagraphMapper {
                 }
             }
 
-            System.out.println("共提取 " + tableCounter.tableIndex + " 个表格");
+            System.out.println("共提取 " + tableCounter.tableIndex + " 个表格, " + tableCounter.paragraphIndex + " 个段落");
         }
 
         // 写入文件
@@ -1206,9 +1206,6 @@ public class ParagraphMapper {
             }
 
             String tableId = "t" + String.format("%03d", tableIndex + 1);
-            System.out.println("\n=== 开始提取表格 " + (tableIndex + 1) + " ===");
-            System.out.println("表格ID: " + tableId);
-
             output.append("<table id=\"").append(tableId).append("\">\n");
 
             // 提取表格内的行
@@ -1220,7 +1217,6 @@ public class ParagraphMapper {
 
                     if ("TR".equalsIgnoreCase(rowElement.getStructureType())) {
                         String rowId = tableId + "-r" + String.format("%03d", rowIndex + 1);
-                        System.out.println("  处理行: " + rowId);
                         output.append("  <tr id=\"").append(rowId).append("\">\n");
 
                         // 提取行内的单元格
@@ -1242,9 +1238,7 @@ public class ParagraphMapper {
                                                  .collect(Collectors.joining(","));
 
                                     // 提取单元格文本（传入doc参数和cellId用于调试）
-                                    System.out.println("    提取单元格: " + cellId + ", MCID: " + mcidStr);
                                     String cellText = extractTextFromElement(cellElement, doc, cellId);
-                                    System.out.println("      文本内容: " + truncate(cellText, 50));
 
                                     output.append("    <td>\n");
                                     output.append("      <p id=\"").append(cellId).append("\" mcid=\"").append(escapeHtml(mcidStr)).append("\">")
@@ -1264,8 +1258,6 @@ public class ParagraphMapper {
             }
 
             output.append("</table>\n");
-            System.out.println("=== 表格 " + (tableIndex + 1) + " 提取完成 ===");
-            System.out.println("共提取 " + rowIndex + " 行");
 
             // 如果已经提取了25个表格,就停止
             if (tableCounter.tableIndex >= 25) {
@@ -1273,7 +1265,30 @@ public class ParagraphMapper {
             }
         }
 
-        // 递归处理子元素（继续查找更多表格）
+        // 如果是P元素（普通段落，不在表格内）
+        if ("P".equalsIgnoreCase(structType)) {
+            int paraIndex = tableCounter.paragraphIndex++;
+            String paraId = "p" + String.format("%03d", paraIndex + 1);
+
+            // 收集段落的所有MCID
+            Set<Integer> paraMcids = collectAllMcids(element);
+            String mcidStr = paraMcids.isEmpty() ? "" :
+                paraMcids.stream()
+                         .sorted()
+                         .map(String::valueOf)
+                         .collect(Collectors.joining(","));
+
+            // 提取段落文本
+            String paraText = extractTextFromElement(element, doc, paraId);
+
+            // 输出XML
+            output.append("<p id=\"").append(paraId)
+                  .append("\" mcid=\"").append(escapeHtml(mcidStr)).append("\">")
+                  .append(escapeHtml(paraText))
+                  .append("</p>\n");
+        }
+
+        // 递归处理子元素（继续查找更多表格和段落）
         for (Object kid : element.getKids()) {
             if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
                 org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
@@ -2011,6 +2026,7 @@ public class ParagraphMapper {
      */
     static class Counter {
         int tableIndex = 0;
+        int paragraphIndex = 0;  // 表格外段落计数
     }
 
     /**
