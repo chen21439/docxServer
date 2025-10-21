@@ -233,6 +233,8 @@ public class PdfTableExtractor {
 
                                     // 提取单元格文本
                                     String cellText = PdfTextExtractor.extractTextFromElement(cellElement, doc);
+                                    // 去除零宽字符（保留换行、空格、标点等）
+                                    cellText = TextUtils.removeZeroWidthChars(cellText);
 
                                     tableOutput.append("    <td type=\"").append(cellType).append("\">\n");
                                     tableOutput.append("      <p id=\"").append(cellId)
@@ -307,6 +309,8 @@ public class PdfTableExtractor {
 
                 // 提取元素文本
                 String paraText = PdfTextExtractor.extractTextFromElement(element, doc);
+                // 去除零宽字符（保留换行、空格、标点等）
+                paraText = TextUtils.removeZeroWidthChars(paraText);
 
                 // 只有文本非空时才输出（避免输出空容器元素如Document、Part）
                 if (!paraText.trim().isEmpty()) {
@@ -322,6 +326,9 @@ public class PdfTableExtractor {
                           .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\">")
                           .append(TextUtils.escapeHtml(paraText))
                           .append("</p>\n");
+
+                    // 已经提取了该元素及其所有子元素的文本，不再递归
+                    return;
                 }
             }
         }
