@@ -1,0 +1,223 @@
+package com.example.docxserver.util.taggedPDF;
+
+import com.example.docxserver.util.taggedPDF.dto.Counter;
+import com.example.docxserver.util.taggedPDF.dto.McidPageInfo;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement;
+import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
+import java.util.*;
+
+/**
+ * PDF表格提取器
+ * 负责从PDF结构树中提取表格和段落到XML格式
+ */
+public class PdfTableExtractor {
+
+    /**
+     * 从PDF提取表格和段落结构到XML格式
+     *
+     * @param taskId 任务ID
+     * @param pdfPath PDF文件路径
+     * @param outputDir 输出目录
+     * @throws IOException 文件读写异常
+     */
+    public static void extractToXml(String taskId, String pdfPath, String outputDir) throws IOException {
+        File pdfFile = new File(pdfPath);
+
+        // 生成带时间戳的输出文件名
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
+        String timestamp = sdf.format(new Date());
+        String tableOutputPath = outputDir + File.separator + taskId + "_pdf_" + timestamp + ".txt";
+        String paragraphOutputPath = outputDir + File.separator + taskId + "_pdf_paragraph_" + timestamp + ".txt";
+
+        StringBuilder tableOutput = new StringBuilder();
+        StringBuilder paragraphOutput = new StringBuilder();
+
+        // 打开PDF文档
+        try (PDDocument doc = Loader.loadPDF(pdfFile)) {
+            // 获取结构树根节点
+            if (doc.getDocumentCatalog() == null || doc.getDocumentCatalog().getStructureTreeRoot() == null) {
+                System.err.println("该PDF没有结构树（不是Tagged PDF）");
+                return;
+            }
+
+            PDStructureTreeRoot structTreeRoot = doc.getDocumentCatalog().getStructureTreeRoot();
+
+            System.out.println("开始从PDF结构树提取表格和段落...");
+
+            // 第一遍遍历：收集所有表格的MCID（按页分桶）
+            System.out.println("第一遍：收集所有表格的MCID...");
+            Map<PDPage, Set<Integer>> tableMCIDsByPage = new HashMap<>();
+            for (Object kid : structTreeRoot.getKids()) {
+                if (kid instanceof PDStructureElement) {
+                    PDStructureElement element = (PDStructureElement) kid;
+                    McidCollector.collectTableMCIDs(element, tableMCIDsByPage, doc);
+                }
+            }
+
+            // 统计表格MCID总数
+            int totalTableMCIDs = 0;
+            for (Set<Integer> mcids : tableMCIDsByPage.values()) {
+                totalTableMCIDs += mcids.size();
+            }
+            System.out.println("收集到表格MCID总数: " + totalTableMCIDs + " (跨 " + tableMCIDsByPage.size() + " 个页面)");
+
+            // 第二遍遍历：提取所有表格和段落（传入doc参数和tableMCIDsByPage）
+            System.out.println("第二遍：提取表格和段落...");
+            Counter tableCounter = new Counter();
+            for (Object kid : structTreeRoot.getKids()) {
+                if (kid instanceof PDStructureElement) {
+                    PDStructureElement element = (PDStructureElement) kid;
+                    extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage);
+                }
+            }
+
+            System.out.println("共提取 " + tableCounter.tableIndex + " 个表格, " + tableCounter.paragraphIndex + " 个段落");
+        }
+
+        // 写入文件
+        Files.write(Paths.get(tableOutputPath), tableOutput.toString().getBytes(StandardCharsets.UTF_8));
+        System.out.println("PDF表格结构已写入到: " + tableOutputPath);
+
+        Files.write(Paths.get(paragraphOutputPath), paragraphOutput.toString().getBytes(StandardCharsets.UTF_8));
+        System.out.println("PDF段落结构已写入到: " + paragraphOutputPath);
+    }
+
+    /**
+     * 从结构元素中递归提取表格
+     *
+     * 核心思路（与PdfTextExtractSupport保持一致的实现）：
+     * 1. 结构树遍历：深度优先遍历PDF结构树，查找所有Table元素
+     *    - 遇到Table元素时开始提取
+     *
+     * 2. ID生成规则（严格按照顺序）：
+     *    - 表格ID：t001, t002, ... (按遍历顺序递增)
+     *    - 行ID：t001-r001, t001-r002, ... (在表格内按顺序)
+     *    - 单元格ID：t001-r001-c001-p001 (行内按列顺序，固定-p001后缀)
+     *    - 索引从1开始，格式化为3位数字（%03d）
+     *
+     * 3. 表格结构提取：
+     *    - Table -> TR (行) -> TD (单元格) 的层级结构
+     *    - 对每个TD调用extractTextFromElement()提取文本
+     *    - 使用MCID按页分桶的方法确保文本提取精确
+     *
+     * 4. 输出格式：
+     *    - XML格式：<table id="..."><tr id="..."><td><p id="...">文本</p></td></tr></table>
+     *    - HTML转义所有文本内容（&, <, >, ", '）
+     *    - 输出到_pdf_YYYYMMDD_HHMMSS.txt文件
+     *
+     * @param element 当前结构元素（可能是Table或其他类型）
+     * @param tableOutput 表格输出缓冲区（用于构建XML）
+     * @param paragraphOutput 段落输出缓冲区
+     * @param tableCounter 表格计数器（全局共享，用于生成表格ID）
+     * @param doc PDF文档对象（传递给extractTextFromElement用于MCID提取）
+     * @param tableMCIDsByPage 表格MCID按页分桶的映射
+     * @throws IOException 文件读取或文本提取异常
+     */
+    private static void extractTablesFromElement(
+            PDStructureElement element,
+            StringBuilder tableOutput,
+            StringBuilder paragraphOutput,
+            Counter tableCounter,
+            PDDocument doc,
+            Map<PDPage, Set<Integer>> tableMCIDsByPage) throws IOException {
+
+        String structType = element.getStructureType();
+
+        // 如果是Table元素
+        if ("Table".equalsIgnoreCase(structType)) {
+            int tableIndex = tableCounter.tableIndex++;
+            String tableId = IdUtils.formatTableId(tableIndex);
+            tableOutput.append("<table id=\"").append(tableId).append("\">\n");
+
+            // 提取表格内的行
+            int rowIndex = 0;
+            for (Object kid : element.getKids()) {
+                if (kid instanceof PDStructureElement) {
+                    PDStructureElement rowElement = (PDStructureElement) kid;
+
+                    if ("TR".equalsIgnoreCase(rowElement.getStructureType())) {
+                        String rowId = IdUtils.formatRowId(tableId, rowIndex);
+                        tableOutput.append("  <tr id=\"").append(rowId).append("\">\n");
+
+                        // 提取行内的单元格
+                        int colIndex = 0;
+                        for (Object cellKid : rowElement.getKids()) {
+                            if (cellKid instanceof PDStructureElement) {
+                                PDStructureElement cellElement = (PDStructureElement) cellKid;
+
+                                if ("TD".equalsIgnoreCase(cellElement.getStructureType())) {
+                                    String cellId = IdUtils.formatCellId(rowId, colIndex);
+
+                                    // 收集单元格的所有MCID（按页分桶，不排除表格）
+                                    Map<PDPage, Set<Integer>> cellMcidsByPage =
+                                        McidCollector.collectMcidsByPage(cellElement, doc, false);
+                                    McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(cellMcidsByPage, doc);
+
+                                    // 提取单元格文本
+                                    String cellText = PdfTextExtractor.extractTextFromElement(cellElement, doc);
+
+                                    tableOutput.append("    <td>\n");
+                                    tableOutput.append("      <p id=\"").append(cellId)
+                                          .append("\" mcid=\"").append(TextUtils.escapeHtml(mcidPageInfo.mcidStr))
+                                          .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\">")
+                                          .append(TextUtils.escapeHtml(cellText))
+                                          .append("</p>\n");
+                                    tableOutput.append("    </td>\n");
+
+                                    colIndex++;
+                                }
+                            }
+                        }
+
+                        tableOutput.append("  </tr>\n");
+                        rowIndex++;
+                    }
+                }
+            }
+
+            tableOutput.append("</table>\n");
+        }
+
+        // 如果是段落类型元素 且 不在表格后代中（表格外段落）
+        if (PdfStructureUtils.isParagraphType(structType) && !PdfStructureUtils.isUnderTable(element)) {
+            // 收集段落的所有MCID（按页分桶，排除表格后代）
+            Map<PDPage, Set<Integer>> paraMcidsByPage =
+                McidCollector.collectMcidsByPage(element, doc, true);
+            McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(paraMcidsByPage, doc);
+
+            // 提取段落文本
+            String paraText = PdfTextExtractor.extractTextFromElement(element, doc);
+
+            // 只有文本非空时才输出（避免输出空段落）
+            if (!paraText.trim().isEmpty()) {
+                int paraIndex = tableCounter.paragraphIndex++;
+                String paraId = IdUtils.formatParagraphId(paraIndex);
+
+                // 输出XML
+                paragraphOutput.append("<p id=\"").append(paraId)
+                      .append("\" mcid=\"").append(TextUtils.escapeHtml(mcidPageInfo.mcidStr))
+                      .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\">")
+                      .append(TextUtils.escapeHtml(paraText))
+                      .append("</p>\n");
+            }
+        }
+
+        // 递归处理子元素（继续查找更多表格和段落）
+        for (Object kid : element.getKids()) {
+            if (kid instanceof PDStructureElement) {
+                PDStructureElement childElement = (PDStructureElement) kid;
+                extractTablesFromElement(childElement, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage);
+            }
+        }
+    }
+}
