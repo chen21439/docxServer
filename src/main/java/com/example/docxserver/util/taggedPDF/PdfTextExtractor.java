@@ -115,8 +115,6 @@ public class PdfTextExtractor {
                 Set<Integer> mcids = mcidsByPage.get(page);
 
                 if (mcids != null && !mcids.isEmpty()) {
-                    System.out.println("      [调试] 页" + (i+1) + "的MCID集合: " + mcids + " (共" + mcids.size() + "个)");
-
                     // 使用MCIDTextExtractor提取该页该元素的文本
                     MCIDTextExtractor extractor = new MCIDTextExtractor(mcids);
                     extractor.setDebugPrefix(cellId);  // 设置调试前缀

@@ -112,6 +112,33 @@ public class PdfStructureUtils {
     }
 
     /**
+     * 判断是否是容器元素（不包含文本内容，只用于组织结构）
+     *
+     * @param structType 结构类型
+     * @return 是否是容器元素
+     */
+    public static boolean isContainerElement(String structType) {
+        if (structType == null) {
+            return false;
+        }
+
+        String type = structType.toLowerCase();
+
+        // 常见的容器元素类型
+        return type.equals("document") ||
+               type.equals("part") ||
+               type.equals("art") ||
+               type.equals("sect") ||
+               type.equals("div") ||
+               type.equals("blockquote") ||
+               type.equals("toc") ||
+               type.equals("toci") ||
+               type.equals("index") ||
+               type.equals("nonstruct") ||
+               type.equals("private");
+    }
+
+    /**
      * 通过 ParentTree 查找 MCID 对应的页面
      * 当 element.getPage() 返回 null 时的兜底方案
      *

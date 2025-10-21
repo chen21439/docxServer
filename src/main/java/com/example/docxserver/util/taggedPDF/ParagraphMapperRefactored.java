@@ -37,8 +37,8 @@ public class ParagraphMapperRefactored {
         String pdfPath = dir + taskId + "_A2b.pdf";
         String docxTxtPath = dir + taskId + "_docx.txt";
 
-        // 步骤1: 从PDF独立提取表格结构到XML格式TXT（不依赖DOCX）
-        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT ===");
+        // 步骤1: 从PDF独立提取表格结构到XML格式TXT（全量处理）
+        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT（全量处理）===");
         extractPdfToXml(taskId, pdfPath);
         System.out.println();
 
