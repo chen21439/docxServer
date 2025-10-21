@@ -44,7 +44,7 @@ public class ParagraphMapper {
     public static void main(String[] args) throws Exception {
         String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_A2b.pdf";
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
-        String taskId = "1978018096320905217";
+        String taskId = "a";
 //        // 步骤0-1: 从PDF独立提取表格结构到XML格式TXT（不依赖DOCX）
         System.out.println("=== 从PDF独立提取表格结构到XML格式TXT ===");
         toXML(taskId);
@@ -1118,9 +1118,11 @@ public class ParagraphMapper {
         // 生成带时间戳的输出文件名
         SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
         String timestamp = sdf.format(new Date());
-        String outputPath = dir + taskId + pdfType + "_pdf_" + timestamp + ".txt";
+        String tableOutputPath = dir + taskId + pdfType + "_pdf_" + timestamp + ".txt";
+        String paragraphOutputPath = dir + taskId + pdfType + "_pdf_paragraph_" + timestamp + ".txt";
 
-        StringBuilder output = new StringBuilder();
+        StringBuilder tableOutput = new StringBuilder();
+        StringBuilder paragraphOutput = new StringBuilder();
 
         // 打开PDF文档
         try (PDDocument doc = Loader.loadPDF(pdfFile)) {
@@ -1133,15 +1135,34 @@ public class ParagraphMapper {
             org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot structTreeRoot =
                 doc.getDocumentCatalog().getStructureTreeRoot();
 
-            System.out.println("开始从PDF结构树提取表格...");
+            System.out.println("开始从PDF结构树提取表格和段落...");
 
-            // 遍历结构树，提取所有表格（传入doc参数）
+            // 第一遍遍历：收集所有表格的MCID（按页分桶）
+            System.out.println("第一遍：收集所有表格的MCID...");
+            Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> tableMCIDsByPage = new HashMap<>();
+            for (Object kid : structTreeRoot.getKids()) {
+                if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                    org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element =
+                        (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+                    collectTableMCIDs(element, tableMCIDsByPage, doc);
+                }
+            }
+
+            // 统计表格MCID总数
+            int totalTableMCIDs = 0;
+            for (Set<Integer> mcids : tableMCIDsByPage.values()) {
+                totalTableMCIDs += mcids.size();
+            }
+            System.out.println("收集到表格MCID总数: " + totalTableMCIDs + " (跨 " + tableMCIDsByPage.size() + " 个页面)");
+
+            // 第二遍遍历：提取所有表格和段落（传入doc参数和tableMCIDsByPage）
+            System.out.println("第二遍：提取表格和段落...");
             Counter tableCounter = new Counter();
             for (Object kid : structTreeRoot.getKids()) {
                 if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
                     org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element =
                         (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
-                    extractTablesFromElement(element, output, tableCounter, doc);
+                    extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage);
                 }
             }
 
@@ -1149,8 +1170,11 @@ public class ParagraphMapper {
         }
 
         // 写入文件
-        Files.write(Paths.get(outputPath), output.toString().getBytes(StandardCharsets.UTF_8));
-        System.out.println("PDF表格结构已写入到: " + outputPath);
+        Files.write(Paths.get(tableOutputPath), tableOutput.toString().getBytes(StandardCharsets.UTF_8));
+        System.out.println("PDF表格结构已写入到: " + tableOutputPath);
+
+        Files.write(Paths.get(paragraphOutputPath), paragraphOutput.toString().getBytes(StandardCharsets.UTF_8));
+        System.out.println("PDF段落结构已写入到: " + paragraphOutputPath);
     }
 
     /**
@@ -1189,24 +1213,19 @@ public class ParagraphMapper {
      */
     private static void extractTablesFromElement(
             org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
-            StringBuilder output,
+            StringBuilder tableOutput,
+            StringBuilder paragraphOutput,
             Counter tableCounter,
-            PDDocument doc) throws IOException {
+            PDDocument doc,
+            Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> tableMCIDsByPage) throws IOException {
 
         String structType = element.getStructureType();
 
         // 如果是Table元素
         if ("Table".equalsIgnoreCase(structType)) {
             int tableIndex = tableCounter.tableIndex++;
-
-            // 只处理前25个表格
-            if (tableIndex >= 25) {
-                System.out.println("跳过表格 " + (tableIndex + 1) + "（只提取前25个表格）");
-                return;
-            }
-
             String tableId = "t" + String.format("%03d", tableIndex + 1);
-            output.append("<table id=\"").append(tableId).append("\">\n");
+            tableOutput.append("<table id=\"").append(tableId).append("\">\n");
 
             // 提取表格内的行
             int rowIndex = 0;
@@ -1217,7 +1236,7 @@ public class ParagraphMapper {
 
                     if ("TR".equalsIgnoreCase(rowElement.getStructureType())) {
                         String rowId = tableId + "-r" + String.format("%03d", rowIndex + 1);
-                        output.append("  <tr id=\"").append(rowId).append("\">\n");
+                        tableOutput.append("  <tr id=\"").append(rowId).append("\">\n");
 
                         // 提取行内的单元格
                         int colIndex = 0;
@@ -1229,63 +1248,58 @@ public class ParagraphMapper {
                                 if ("TD".equalsIgnoreCase(cellElement.getStructureType())) {
                                     String cellId = rowId + "-c" + String.format("%03d", colIndex + 1) + "-p001";
 
-                                    // 收集单元格的所有MCID
-                                    Set<Integer> cellMcids = collectAllMcids(cellElement);
-                                    String mcidStr = cellMcids.isEmpty() ? "" :
-                                        cellMcids.stream()
-                                                 .sorted()
-                                                 .map(String::valueOf)
-                                                 .collect(Collectors.joining(","));
+                                    // 收集单元格的所有MCID（按页分桶）
+                                    Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> cellMcidsByPage =
+                                        collectMcidsByPage(cellElement, doc);
+                                    McidPageInfo mcidPageInfo = formatMcidsWithPage(cellMcidsByPage, doc);
 
                                     // 提取单元格文本（传入doc参数和cellId用于调试）
                                     String cellText = extractTextFromElement(cellElement, doc, cellId);
 
-                                    output.append("    <td>\n");
-                                    output.append("      <p id=\"").append(cellId).append("\" mcid=\"").append(escapeHtml(mcidStr)).append("\">")
+                                    tableOutput.append("    <td>\n");
+                                    tableOutput.append("      <p id=\"").append(cellId)
+                                          .append("\" mcid=\"").append(escapeHtml(mcidPageInfo.mcidStr))
+                                          .append("\" page=\"").append(escapeHtml(mcidPageInfo.pageStr)).append("\">")
                                           .append(escapeHtml(cellText))
                                           .append("</p>\n");
-                                    output.append("    </td>\n");
+                                    tableOutput.append("    </td>\n");
 
                                     colIndex++;
                                 }
                             }
                         }
 
-                        output.append("  </tr>\n");
+                        tableOutput.append("  </tr>\n");
                         rowIndex++;
                     }
                 }
             }
 
-            output.append("</table>\n");
-
-            // 如果已经提取了25个表格,就停止
-            if (tableCounter.tableIndex >= 25) {
-                return;
-            }
+            tableOutput.append("</table>\n");
         }
 
-        // 如果是P元素（普通段落，不在表格内）
-        if ("P".equalsIgnoreCase(structType)) {
-            int paraIndex = tableCounter.paragraphIndex++;
-            String paraId = "p" + String.format("%03d", paraIndex + 1);
-
-            // 收集段落的所有MCID
-            Set<Integer> paraMcids = collectAllMcids(element);
-            String mcidStr = paraMcids.isEmpty() ? "" :
-                paraMcids.stream()
-                         .sorted()
-                         .map(String::valueOf)
-                         .collect(Collectors.joining(","));
+        // 如果是段落类型元素 且 不在表格后代中（表格外段落）
+        if (isParagraphType(structType) && !isUnderTable(element)) {
+            // 收集段落的所有MCID（按页分桶）
+            Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> paraMcidsByPage =
+                collectMcidsByPage(element, doc);
+            McidPageInfo mcidPageInfo = formatMcidsWithPage(paraMcidsByPage, doc);
 
             // 提取段落文本
-            String paraText = extractTextFromElement(element, doc, paraId);
+            String paraText = extractTextFromElement(element, doc, "");
 
-            // 输出XML
-            output.append("<p id=\"").append(paraId)
-                  .append("\" mcid=\"").append(escapeHtml(mcidStr)).append("\">")
-                  .append(escapeHtml(paraText))
-                  .append("</p>\n");
+            // 只有文本非空时才输出（避免输出空段落）
+            if (!paraText.trim().isEmpty()) {
+                int paraIndex = tableCounter.paragraphIndex++;
+                String paraId = "p" + String.format("%03d", paraIndex + 1);
+
+                // 输出XML
+                paragraphOutput.append("<p id=\"").append(paraId)
+                      .append("\" mcid=\"").append(escapeHtml(mcidPageInfo.mcidStr))
+                      .append("\" page=\"").append(escapeHtml(mcidPageInfo.pageStr)).append("\">")
+                      .append(escapeHtml(paraText))
+                      .append("</p>\n");
+            }
         }
 
         // 递归处理子元素（继续查找更多表格和段落）
@@ -1293,12 +1307,7 @@ public class ParagraphMapper {
             if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
                 org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
                     (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
-                extractTablesFromElement(childElement, output, tableCounter, doc);
-
-                // 如果已经提取了25个表格，就不再继续
-                if (tableCounter.tableIndex >= 25) {
-                    return;
-                }
+                extractTablesFromElement(childElement, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage);
             }
         }
     }
@@ -1757,7 +1766,7 @@ public class ParagraphMapper {
         }
 
         // 2. 收集该TD后代的MCID，按页分桶
-        Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> mcidsByPage = collectMcidsByPage(element);
+        Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> mcidsByPage = collectMcidsByPage(element, doc);
 
         if (mcidsByPage.isEmpty()) {
             // 没有MCID，尝试递归提取子元素的ActualText
@@ -1866,31 +1875,85 @@ public class ParagraphMapper {
     }
 
     /**
+     * 递归收集所有表格的MCID（按页分桶）
+     *
+     * 遍历结构树，查找所有Table元素，收集它们的MCID到全局映射中。
+     * 目的：在第二遍遍历时，可以精准排除表格文本。
+     *
+     * @param element 当前结构元素
+     * @param tableMCIDsByPage 表格MCID按页分桶的全局映射（会被修改）
+     * @param doc PDF文档（用于ParentTree兜底查找）
+     * @throws IOException IO异常
+     */
+    private static void collectTableMCIDs(
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
+            Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> tableMCIDsByPage,
+            PDDocument doc) throws IOException {
+
+        String structType = element.getStructureType();
+
+        // 如果是Table元素，收集其所有MCID
+        if ("Table".equalsIgnoreCase(structType)) {
+            Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> tableMcids = collectMcidsByPage(element, doc);
+
+            // 合并到全局映射
+            for (Map.Entry<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> entry : tableMcids.entrySet()) {
+                tableMCIDsByPage.computeIfAbsent(entry.getKey(), k -> new HashSet<>())
+                                .addAll(entry.getValue());
+            }
+        }
+
+        // 递归处理子元素
+        for (Object kid : element.getKids()) {
+            if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
+                    (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
+                collectTableMCIDs(childElement, tableMCIDsByPage, doc);
+            }
+        }
+    }
+
+    /**
      * 收集该结构元素后代的所有MCID，按页分桶
      *
      * 关键：**只递归该元素的后代**，不包含兄弟节点或父节点
+     *
+     * @param element 结构元素
+     * @param doc PDF文档（用于ParentTree兜底查找）
+     * @return MCID按页分桶的映射
+     * @throws IOException IO异常
      */
     private static Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> collectMcidsByPage(
-            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element) throws IOException {
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
+            PDDocument doc) throws IOException {
 
         Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> result = new HashMap<>();
-        collectMcidsRecursive(element, result);
+        collectMcidsRecursive(element, result, doc);
         return result;
     }
 
     /**
      * 递归收集MCID（深度优先遍历）
+     *
+     * 支持 ParentTree 兜底：当 element.getPage() 返回 null 时，
+     * 通过 ParentTree 查找MCID对应的页面
+     *
+     * @param element 结构元素
+     * @param mcidsByPage MCID按页分桶的结果映射
+     * @param doc PDF文档（用于ParentTree兜底查找）
+     * @throws IOException IO异常
      */
     private static void collectMcidsRecursive(
             org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element,
-            Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> mcidsByPage) throws IOException {
+            Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> mcidsByPage,
+            PDDocument doc) throws IOException {
 
         for (Object kid : element.getKids()) {
             if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
                 // 递归处理子结构元素
                 org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement childElement =
                     (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) kid;
-                collectMcidsRecursive(childElement, mcidsByPage);
+                collectMcidsRecursive(childElement, mcidsByPage, doc);
 
             } else if (kid instanceof org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent) {
                 // PDMarkedContent包含MCID信息
@@ -1898,11 +1961,22 @@ public class ParagraphMapper {
                     (org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent) kid;
 
                 Integer mcid = mc.getMCID();
+                if (mcid == null) {
+                    continue;  // 跳过无效的 MCID
+                }
+
                 // PDFBox 3.0中PDMarkedContent没有getPage()方法，需要从父元素获取
                 org.apache.pdfbox.pdmodel.PDPage page = element.getPage();
 
-                if (mcid != null && page != null) {
+                // 如果element.getPage()返回null，尝试通过ParentTree查找
+                if (page == null) {
+                    page = resolvePageByParentTree(doc, element, mcid);
+                }
+
+                if (page != null) {
                     mcidsByPage.computeIfAbsent(page, k -> new HashSet<>()).add(mcid);
+                } else {
+                    System.err.println("      [警告] 无法确定MCID " + mcid + " 的页面位置（element.getPage()和ParentTree均失败）");
                 }
 
             } else if (kid instanceof Integer) {
@@ -1910,8 +1984,15 @@ public class ParagraphMapper {
                 Integer mcid = (Integer) kid;
                 org.apache.pdfbox.pdmodel.PDPage page = element.getPage();
 
+                // 如果element.getPage()返回null，尝试通过ParentTree查找
+                if (page == null) {
+                    page = resolvePageByParentTree(doc, element, mcid);
+                }
+
                 if (page != null) {
                     mcidsByPage.computeIfAbsent(page, k -> new HashSet<>()).add(mcid);
+                } else {
+                    System.err.println("      [警告] 无法确定MCID " + mcid + " 的页面位置（element.getPage()和ParentTree均失败）");
                 }
             }
         }
@@ -2019,6 +2100,234 @@ public class ParagraphMapper {
                 text.append(mc.toString()).append(" ");
             }
         }
+    }
+
+    /**
+     * 通过 ParentTree 查找 MCID 对应的页面（兜底方案）
+     *
+     * 实现思路：
+     * 1. 遍历文档的所有页面
+     * 2. 对于每个页面，检查其 StructParents 属性
+     * 3. 通过 StructTreeRoot.ParentTree 查找该页面的 MCID→父元素映射
+     * 4. 如果找到的父元素是我们要找的元素，则返回该页面
+     *
+     * @param doc PDF文档
+     * @param targetElement 目标结构元素
+     * @param mcid 要查找的MCID
+     * @return 对应的页面，找不到返回null
+     */
+    private static org.apache.pdfbox.pdmodel.PDPage resolvePageByParentTree(
+            PDDocument doc,
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement targetElement,
+            int mcid) {
+
+        try {
+            org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot structTreeRoot =
+                doc.getDocumentCatalog().getStructureTreeRoot();
+
+            if (structTreeRoot == null) {
+                return null;
+            }
+
+            org.apache.pdfbox.pdmodel.common.PDNumberTreeNode parentTree = structTreeRoot.getParentTree();
+            if (parentTree == null) {
+                return null;
+            }
+
+            // 遍历所有页面
+            for (int i = 0; i < doc.getNumberOfPages(); i++) {
+                org.apache.pdfbox.pdmodel.PDPage page = doc.getPage(i);
+
+                // 获取页面的 StructParents 属性
+                int structParents = page.getStructParents();
+                if (structParents < 0) {
+                    continue;  // 该页面没有结构父元素映射
+                }
+
+                try {
+                    // 从 ParentTree 获取该页面的 MCID→父元素映射数组
+                    Object parentArray = parentTree.getValue(structParents);
+
+                    if (parentArray instanceof org.apache.pdfbox.cos.COSArray) {
+                        org.apache.pdfbox.cos.COSArray array = (org.apache.pdfbox.cos.COSArray) parentArray;
+
+                        // 检查 mcid 是否在数组范围内
+                        if (mcid >= 0 && mcid < array.size()) {
+                            org.apache.pdfbox.cos.COSBase parentObj = array.getObject(mcid);
+
+                            if (parentObj instanceof org.apache.pdfbox.cos.COSDictionary) {
+                                // 检查这个父元素是否就是我们要找的目标元素
+                                // 通过比较 COSDictionary 引用
+                                if (parentObj == targetElement.getCOSObject()) {
+                                    return page;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    // 忽略单个页面的查找失败
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("      [警告] ParentTree查找失败: " + e.getMessage());
+        }
+
+        return null;
+    }
+
+    /**
+     * MCID和页码信息分开存储的类
+     */
+    static class McidPageInfo {
+        String mcidStr;  // MCID字符串，格式：1,2,3|4,5,6
+        String pageStr;  // 页码字符串，格式：1|2
+
+        McidPageInfo(String mcidStr, String pageStr) {
+            this.mcidStr = mcidStr;
+            this.pageStr = pageStr;
+        }
+    }
+
+    /**
+     * 格式化MCID和页码信息（分开存储）
+     *
+     * 格式：
+     * - mcidStr: "1,2,3|4,5,6"（按页分组）
+     * - pageStr: "1|2"（对应的页码）
+     *
+     * @param mcidsByPage MCID按页分桶的映射
+     * @param doc PDF文档（用于获取页码）
+     * @return McidPageInfo对象
+     */
+    private static McidPageInfo formatMcidsWithPage(Map<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> mcidsByPage, PDDocument doc) {
+        if (mcidsByPage.isEmpty()) {
+            return new McidPageInfo("", "");
+        }
+
+        StringBuilder mcidResult = new StringBuilder();
+        StringBuilder pageResult = new StringBuilder();
+
+        // 按页码排序
+        List<Map.Entry<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>>> sortedEntries = new ArrayList<>(mcidsByPage.entrySet());
+        Collections.sort(sortedEntries, new Comparator<Map.Entry<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>>>() {
+            @Override
+            public int compare(Map.Entry<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> e1,
+                             Map.Entry<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> e2) {
+                int pageNum1 = doc.getPages().indexOf(e1.getKey());
+                int pageNum2 = doc.getPages().indexOf(e2.getKey());
+                return Integer.compare(pageNum1, pageNum2);
+            }
+        });
+
+        for (Map.Entry<org.apache.pdfbox.pdmodel.PDPage, Set<Integer>> entry : sortedEntries) {
+            org.apache.pdfbox.pdmodel.PDPage page = entry.getKey();
+            Set<Integer> mcids = entry.getValue();
+
+            // 获取页码（从1开始）
+            int pageNum = doc.getPages().indexOf(page) + 1;
+
+            if (mcidResult.length() > 0) {
+                mcidResult.append("|");
+                pageResult.append("|");
+            }
+
+            // MCID部分
+            mcidResult.append(mcids.stream()
+                              .sorted()
+                              .map(String::valueOf)
+                              .collect(Collectors.joining(",")));
+
+            // Page部分
+            pageResult.append(pageNum);
+        }
+
+        return new McidPageInfo(mcidResult.toString(), pageResult.toString());
+    }
+
+    /**
+     * 判断是否是段落型结构元素
+     *
+     * 支持的类型：
+     * - P: 普通段落
+     * - H, H1-H6: 标题
+     * - LI: 列表项
+     * - LBody: 列表项主体
+     * - Caption: 表格/图形标题
+     * - Quote: 引用块
+     * - Note: 注释
+     * - Code: 代码块
+     *
+     * @param structType 结构类型
+     * @return 是否是段落型元素
+     */
+    /**
+     * 判断结构类型是否为块级段落类型（扩大白名单，包含常见的块级标签）
+     *
+     * 包括：
+     * - 段落: P
+     * - 标题: H, H1-H6, Title
+     * - 列表: LI, LBody, Lbl, L
+     * - 块引用: BlockQuote, Quote
+     * - 其他块级: Div, Span, Caption, Note, Code, Aside, Section, Article
+     */
+    private static boolean isParagraphType(String structType) {
+        if (structType == null) {
+            return false;
+        }
+
+        // 转换为小写进行比较（不区分大小写）
+        String type = structType.toLowerCase();
+
+        return type.equals("p") ||
+               type.equals("h") ||
+               type.equals("h1") ||
+               type.equals("h2") ||
+               type.equals("h3") ||
+               type.equals("h4") ||
+               type.equals("h5") ||
+               type.equals("h6") ||
+               type.equals("title") ||
+               type.equals("li") ||
+               type.equals("lbody") ||
+               type.equals("lbl") ||
+               type.equals("l") ||
+               type.equals("caption") ||
+               type.equals("quote") ||
+               type.equals("blockquote") ||
+               type.equals("note") ||
+               type.equals("code") ||
+               type.equals("div") ||
+               type.equals("span") ||
+               type.equals("aside") ||
+               type.equals("section") ||
+               type.equals("article");
+    }
+
+    /**
+     * 判断结构元素是否在Table后代中
+     *
+     * @param element 要检查的结构元素
+     * @return true 如果该元素在Table的后代中，false 否则
+     */
+    private static boolean isUnderTable(org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement element) {
+        org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement current = element;
+
+        while (current != null) {
+            String type = current.getStructureType();
+            if (type != null && type.equalsIgnoreCase("Table")) {
+                return true;
+            }
+
+            // 向上遍历到父元素
+            Object parent = current.getParent();
+            if (parent instanceof org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) {
+                current = (org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement) parent;
+            } else {
+                break;  // 到达根节点
+            }
+        }
+
+        return false;
     }
 
     /**
