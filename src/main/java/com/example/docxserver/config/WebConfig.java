@@ -11,6 +11,9 @@ public class WebConfig implements WebMvcConfigurer {
         registry.addResourceHandler("/docx/**")
                 .addResourceLocations("classpath:/docx/"); // 对应 src/main/resources/docx
 
+        registry.addResourceHandler("/htmlUnitTest/**")
+                .addResourceLocations("classpath:/htmlUnitTest/");
+
         registry.addResourceHandler("/lib/**")
                 .addResourceLocations("classpath:/docx/lib/");
     }

@@ -651,8 +651,8 @@ public class HighlightByMCID {
         }
 
         String fullText = extractor.getText();
-        System.out.println("[调试] MCID范围内的完整文本: " + fullText);
-        System.out.println("[调试] 目标文本: " + targetText);
+        System.out.println("[调试-原始] MCID范围内的完整文本: " + fullText);
+        System.out.println("[调试-原始] 目标文本: " + targetText);
 
         // ========== 阶段2：查找匹配的TextPosition ==========
         List<TextPosition> matchedPositions = findTextPositions(allPositions, fullText, targetText);
@@ -746,8 +746,20 @@ public class HighlightByMCID {
      */
     private static String normalizeWhitespace(String text) {
         if (text == null) return "";
-        // 将所有连续空白符替换为单个空格
-        return text.replaceAll("\\s+", " ").trim();
+
+        // 步骤1：使用TextUtils清理PDF提取文本中的字符间空格（只处理中文之间的空格）
+        String cleaned = com.example.docxserver.util.taggedPDF.TextUtils.cleanPdfExtractedText(text);
+        System.out.println("[调试-清理后] cleanPdfExtractedText处理后: " + cleaned);
+
+        // 步骤2：去除单字符之间的空格（处理 "1 8" -> "18"，"I S O" -> "ISO"）
+        String noSingleCharSpaces = cleaned.replaceAll("(\\S) (\\S)", "$1$2");
+        System.out.println("[调试-去除单字符空格后] " + noSingleCharSpaces);
+
+        // 步骤3：将剩余的连续空白符替换为单个空格
+        String normalized = noSingleCharSpaces.replaceAll("\\s+", " ").trim();
+        System.out.println("[调试-最终归一化] " + normalized);
+
+        return normalized;
     }
 
     /**

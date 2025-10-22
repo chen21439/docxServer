@@ -200,18 +200,6 @@ public class MCIDTextExtractor extends PDFStreamEngine {
             }
         });
 
-        // 调试输出：显示行的baseline顺序（带单元格ID前缀）
-        System.out.println("      " + debugPrefix + "[调试] 行数: " + lines.size());
-        for (int i = 0; i < Math.min(5, lines.size()); i++) {
-            Line line = lines.get(i);
-            String preview = "";
-            for (int j = 0; j < Math.min(20, line.positions.size()); j++) {
-                preview += line.positions.get(j).getUnicode();
-            }
-            System.out.println("      " + debugPrefix + "[调试] 第" + (i+1) + "行 baseline=" +
-                String.format("%.2f", line.baseline) + " 预览: " + preview);
-        }
-
         // ===== 步骤3: 行内排序（按XDirAdj从左到右） =====
         for (Line line : lines) {
             sortLineByX(line);
@@ -246,6 +234,15 @@ public class MCIDTextExtractor extends PDFStreamEngine {
         }
 
         return extractedText.toString().trim();
+    }
+
+    /**
+     * 获取收集到的TextPosition列表（用于高亮等功能）
+     *
+     * @return TextPosition列表（未排序的原始列表）
+     */
+    public List<TextPosition> getTextPositions() {
+        return new ArrayList<>(textPositions);  // 返回副本，避免外部修改
     }
 
     /**

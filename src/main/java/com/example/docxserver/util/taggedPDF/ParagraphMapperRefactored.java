@@ -561,19 +561,28 @@ public class ParagraphMapperRefactored {
                 PdfTextFinder.FindResult result = findResults.get(span.pid);
                 if (result != null && result.page != null && result.mcid != null) {
                     // TODO: 后续修改 - 处理跨页段落（page包含"|"表示跨多页）
-                    // 当前临时方案：取第一个页码
+                    // 当前临时方案：取第一个页码和对应的MCID组
                     String pageStr = result.page;
+                    String mcidStr = result.mcid;
+
+                    // 处理跨页内容：page和mcid都可能包含"|"分隔符
+                    // 格式示例：page="10|11", mcid="1,2,3|4,5,6"
+                    // 取第一组（第一个页面的MCID）
                     if (pageStr.contains("|")) {
-                        pageStr = pageStr.split("\\|")[0];
+                        String[] pageGroups = pageStr.split("\\|");
+                        String[] mcidGroups = mcidStr.split("\\|");
+                        pageStr = pageGroups[0];
+                        // 只取第一个页面对应的MCID组
+                        mcidStr = (mcidGroups.length > 0) ? mcidGroups[0] : mcidStr;
                     }
 
                     // 创建带text字段的HighlightTarget（使用新增的构造函数）
                     com.example.docxserver.util.pdf.highter.HighlightTarget target =
                         new com.example.docxserver.util.pdf.highter.HighlightTarget(
-                            Integer.parseInt(pageStr),  // page (0-based)
-                            java.util.Arrays.asList(result.mcid.split(",")),  // mcids
+                            Integer.parseInt(pageStr) - 1,  // page (转换为0-based，_pdf.txt中是1-based)
+                            java.util.Arrays.asList(mcidStr.split(",")),  // mcids（已经只包含第一个页面的MCID）
                             span.pid,  // id
-                            null  // text（来自JSON的pidText字段）
+                            span.pidText  // text（来自JSON的pidText字段）
                         );
                     targets.add(target);
                 }

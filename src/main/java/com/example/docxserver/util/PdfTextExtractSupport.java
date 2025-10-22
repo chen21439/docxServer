@@ -64,7 +64,7 @@ import java.util.*;
  * 4. ID生成逻辑完全相同，确保一致性
  *
  * 五、使用场景
- * 1. testFindTextByIdInPdf()：批量测试ID定位和文本提取
+ * 1. test()：批量测试ID定位和文本提取
  * 2. 未来功能：根据ID修改PDF文字格式
  * 3. 验证功能：对比_pdf.txt文件中的文本
  *

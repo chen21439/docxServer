@@ -292,7 +292,45 @@ public class PdfTextHighlighter {
     }
 
     /**
-     * 创建高亮注释
+     * 基于坐标高亮区域（重载方法）
+     *
+     * @param page PDF页面
+     * @param x1 左上角 x 坐标
+     * @param y1 左上角 y 坐标
+     * @param x2 右下角 x 坐标
+     * @param y2 右下角 y 坐标
+     * @param color 高亮颜色（可选，null则使用默认红色）
+     * @throws IOException IO异常
+     */
+    public static void highlightByCoordinates(PDPage page, float x1, float y1, float x2, float y2,
+                                               org.apache.pdfbox.pdmodel.graphics.color.PDColor color) throws IOException {
+        if (color == null) {
+            // 默认红色
+            color = new org.apache.pdfbox.pdmodel.graphics.color.PDColor(
+                new float[]{1f, 0f, 0f},
+                org.apache.pdfbox.pdmodel.graphics.color.PDDeviceRGB.INSTANCE
+            );
+        }
+
+        // PDF 坐标系统：原点在左下角
+        // 用户传入的是 [左上, 右下]，需要转换为 PDF 坐标系的 [左下, 右上]
+        float pageHeight = page.getMediaBox().getHeight();
+
+        // 转换坐标：y 轴翻转
+        float pdfX1 = x1;
+        float pdfY1 = pageHeight - y2;  // 左下角 y（用户的右下角y）
+        float pdfX2 = x2;
+        float pdfY2 = pageHeight - y1;  // 右上角 y（用户的左上角y）
+
+        // 创建 PDRectangle（PDF 格式：左下角x, y, 宽度, 高度）
+        PDRectangle rect = new PDRectangle(pdfX1, pdfY1, pdfX2 - pdfX1, pdfY2 - pdfY1);
+
+        // 调用公共方法创建注释
+        createAnnotationsByRect(page, rect, color, "坐标高亮");
+    }
+
+    /**
+     * 创建高亮注释（基于文本位置）
      *
      * @param page PDF页面
      * @param positions 文本位置列表
@@ -381,6 +419,95 @@ public class PdfTextHighlighter {
 
         System.out.println("  QuadPoints数量: " + quadPoints.length / 8 + " 个四边形");
         System.out.println("  已添加明显的红色边框标记（边框宽度3px）");
+    }
+
+    /**
+     * 公共方法：基于矩形创建注释
+     *
+     * @param page PDF页面
+     * @param rect 矩形区域（PDF坐标系）
+     * @param color 高亮颜色
+     * @param label 注释标签
+     * @throws IOException IO异常
+     */
+    private static void createAnnotationsByRect(PDPage page, PDRectangle rect,
+                                                 org.apache.pdfbox.pdmodel.graphics.color.PDColor color,
+                                                 String label) throws IOException {
+        // 1. 创建高亮注释 (PDAnnotationTextMarkup)
+        org.apache.pdfbox.cos.COSDictionary dict = new org.apache.pdfbox.cos.COSDictionary();
+        dict.setName(org.apache.pdfbox.cos.COSName.TYPE, "Annot");
+        dict.setName(org.apache.pdfbox.cos.COSName.SUBTYPE, "Highlight");
+
+        org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotation annotation =
+            org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotation.createAnnotation(dict);
+
+        org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationTextMarkup highlight =
+            (org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationTextMarkup) annotation;
+
+        highlight.setColor(color);
+
+        // 从矩形计算 QuadPoints（单个四边形）
+        float[] quadPoints = rectToQuadPoints(rect);
+        highlight.setQuadPoints(quadPoints);
+        highlight.setRectangle(rect);
+        highlight.setContents(label);
+        highlight.setPrinted(true);
+
+        // 2. 创建矩形边框注释（更明显）
+        org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationSquare square =
+            new org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationSquare();
+
+        // 扩大边框
+        PDRectangle expandedRect = new PDRectangle(
+            rect.getLowerLeftX() - 5,
+            rect.getLowerLeftY() - 5,
+            rect.getWidth() + 10,
+            rect.getHeight() + 10
+        );
+        square.setRectangle(expandedRect);
+        square.setColor(color);
+
+        org.apache.pdfbox.pdmodel.interactive.annotation.PDBorderStyleDictionary borderStyle =
+            new org.apache.pdfbox.pdmodel.interactive.annotation.PDBorderStyleDictionary();
+        borderStyle.setWidth(3);
+        square.setBorderStyle(borderStyle);
+
+        square.setContents(label);
+        square.setPrinted(true);
+
+        // 3. 添加到页面
+        List<org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotation> annotations = page.getAnnotations();
+        annotations.add(highlight);
+        annotations.add(square);
+
+        // 4. 构建外观流
+        try {
+            highlight.constructAppearances();
+            square.constructAppearances();
+        } catch (Exception e) {
+            // 忽略
+        }
+    }
+
+    /**
+     * 将矩形转换为 QuadPoints（单个四边形）
+     *
+     * @param rect PDF矩形
+     * @return QuadPoints数组（8个float）
+     */
+    private static float[] rectToQuadPoints(PDRectangle rect) {
+        float x1 = rect.getLowerLeftX();
+        float y1 = rect.getLowerLeftY();
+        float x2 = rect.getUpperRightX();
+        float y2 = rect.getUpperRightY();
+
+        // QuadPoints 顺序：Top-Left, Top-Right, Bottom-Left, Bottom-Right
+        return new float[]{
+            x1, y2,  // Top-Left
+            x2, y2,  // Top-Right
+            x1, y1,  // Bottom-Left
+            x2, y1   // Bottom-Right
+        };
     }
 
     /**

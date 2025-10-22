@@ -1,6 +1,7 @@
 package com.example.docxserver.service;
 
 import com.example.docxserver.util.CommentUtils;
+import com.example.docxserver.util.MergeUtils;
 import org.apache.poi.xwpf.usermodel.*;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.*;
@@ -28,11 +29,16 @@ import java.util.*;
  */
 public class DocxHtmlIdAligner {
 
-    private final static String dir = "E:\\programFile\\AIProgram\\docxServer\\src\\main\\resources\\docx\\香港中文大学\\";
+    private final static String dir = "E:\\programFile\\AIProgram\\docxServer\\src\\main\\resources\\docx\\香港中文大学a\\";
     private final static int MERGE_K = 3; // 跨 block 滑窗大小（建议 2~4）
 
     // 用于跟踪每个 ID 的使用次数，避免重复
     private static Map<String, Integer> idUsageCounter = new HashMap<>();
+
+    // 三参数消费者接口，用于处理表格单元格的合并属性
+    private interface TriConsumer<T, U, V> {
+        void accept(T t, U u, V v);
+    }
 
     static class Span {
         String id;
@@ -52,8 +58,10 @@ public class DocxHtmlIdAligner {
 
     public static void main(String[] args) throws Exception {
 
+
+
         File docx = new File(dir + "香港中文大学（深圳）家具采购项目.docx");
-        File htmlIn = new File(dir + "香港中文大学（深圳）家具采购项目.html");
+        File htmlIn = new File(dir + "香港中文大学（深圳）家具采购项目.xhtml");
 
         // 生成带时间戳的输出文件名
         SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
@@ -64,10 +72,11 @@ public class DocxHtmlIdAligner {
 //        debugSpanId(docx,"p-00811-r-004");
 
         List<Span> spans = extractRunsAsSpans(docx);
+        Map<String, MergeUtils.MergeAttr> mergeIndex = MergeUtils.buildMergeIndex(docx);
         System.out.println("Extracted spans: " + spans.size());
 
         // 将标签和文本写入txt文件
-        writeSpansToTxt(spans, txtOut);
+        writeSpansToTxt(spans, txtOut, mergeIndex);
         System.out.println("Tags written to: " + txtOut.getAbsolutePath());
 
         String html = readString(htmlIn);
@@ -78,13 +87,16 @@ public class DocxHtmlIdAligner {
     }
 
     /**
-     * 将提取的所有标签和文本内容写入txt文件，保持HTML结构
-     * 输出格式保留<p>, <table>, <tr>, <td>等HTML标签
-     * 将同一段落的所有Run文本合并，ID放在段落标签上
-     * @param spans 提取的标签列表
-     * @param txtFile 输出的txt文件
+     * 将提取的所有标签和文本内容写入txt文件，保持HTML结构。
+     * 输出格式保留<p>, <table>, <tr>, <td>等HTML标签；同一单元格的段落内容会合并输出。
+     * 该版本集成表格合并信息（colspan/rowspan/data-vmerge/data-merge-id/data-logic-col/id）。
+     *
+     * @param spans      提取的标签列表
+     * @param txtFile    输出的txt文件
+     * @param mergeIndex 由 MergeUtils.buildMergeIndex(docx) 构建的合并索引
      */
-    static void writeSpansToTxt(List<Span> spans, File txtFile) throws IOException {
+    static void writeSpansToTxt(List<Span> spans, File txtFile,
+                                Map<String, com.example.docxserver.util.MergeUtils.MergeAttr> mergeIndex) throws IOException {
         try (BufferedWriter writer = new BufferedWriter(
                 new OutputStreamWriter(Files.newOutputStream(txtFile.toPath()), StandardCharsets.UTF_8))) {
 
@@ -103,6 +115,49 @@ public class DocxHtmlIdAligner {
             boolean inRow = false;
             boolean inCell = false;
 
+            // 用于存储同一单元格的多个段落
+            List<String> cellParagraphIds = new ArrayList<>();
+            StringBuilder cellContent = new StringBuilder();
+
+            // 一个小工具：开始新 <td> 并写入合并属性
+            // 使用自定义的三参数接口来传递cellId
+            TriConsumer<String, String, String> openTdWithMerge = (tableId, rowId, cellId) -> {
+                String key = tableId + "-" + rowId + "-" + cellId; // e.g., t001-r002-c003
+                com.example.docxserver.util.MergeUtils.MergeAttr attr = mergeIndex == null ? null : mergeIndex.get(key);
+
+                StringBuilder td = new StringBuilder();
+                td.append("<td");
+                if (attr != null) {
+                    if (attr.colspan > 1) {
+                        td.append(" colspan=\"").append(attr.colspan).append("\"");
+                    }
+                    if (attr.vmerge == com.example.docxserver.util.MergeUtils.VMergeState.RESTART && attr.rowspan > 1) {
+                        td.append(" rowspan=\"").append(attr.rowspan).append("\"");
+                    }
+                    String vm = (attr.vmerge == com.example.docxserver.util.MergeUtils.VMergeState.NONE) ? "none"
+                            : (attr.vmerge == com.example.docxserver.util.MergeUtils.VMergeState.RESTART) ? "restart" : "continue";
+                    td.append(" data-vmerge=\"").append(vm).append("\"");
+                    if (attr.vmerge != com.example.docxserver.util.MergeUtils.VMergeState.NONE && attr.anchorId != null) {
+                        td.append(" data-merge-id=\"").append(attr.anchorId).append("\"");
+                    }
+                    td.append(" data-logic-col=\"").append(attr.logicalCol).append("\"");
+                    // 给 td 自身一个稳定 id，便于对齐与调试
+                    td.append(" id=\"").append(key).append("\"");
+                } else {
+                    // 没拿到合并信息也给出默认标记，便于排查
+                    td.append(" data-vmerge=\"none\"");
+                    // 仍然赋一个 id
+                    td.append(" id=\"").append(key).append("\"");
+                }
+                td.append(">");
+                try {
+                    writer.write(td.toString());
+                    writer.newLine(); // 美观：每个 <td> 后换行
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            };
+
             // 遍历每个段落组
             for (Map.Entry<String, List<Span>> entry : paragraphGroups.entrySet()) {
                 String paragraphId = entry.getKey();
@@ -117,12 +172,26 @@ public class DocxHtmlIdAligner {
                 // 判断是普通段落还是表格段落
                 if (paragraphId.startsWith("p-")) {
                     // 普通段落
-                    // 如果在表格中，先关闭表格
+                    // 如果在表格中，先输出合并的单元格内容并关闭表格
                     if (inTable) {
                         if (inCell) {
+                            // 输出合并的单元格内容
+                            if (cellContent.length() > 0 || cellParagraphIds.size() > 0) {
+                                String firstId = cellParagraphIds.isEmpty() ? null : cellParagraphIds.get(0);
+                                if (cellContent.length() == 0) {
+                                    writer.write("<p></p>");
+                                } else if (firstId != null) {
+                                    writer.write("<p id=\"" + firstId + "\">" + cellContent + "</p>");
+                                } else {
+                                    writer.write("<p>" + cellContent + "</p>");
+                                }
+                                writer.newLine();
+                            }
                             writer.write("</td>");
                             writer.newLine();
                             inCell = false;
+                            cellParagraphIds.clear();
+                            cellContent.setLength(0);
                         }
                         if (inRow) {
                             writer.write("</tr>");
@@ -150,18 +219,16 @@ public class DocxHtmlIdAligner {
                     // 解析表格位置: t{table}-r{row}-c{cell}-p{para}
                     String[] parts = paragraphId.split("-");
 
-                    // 处理嵌套表格的情况
+                    // 支持嵌套表格：外层表格 id 仍然取 parts[0..2]
                     String tableId, rowId, cellId;
                     if (paragraphId.contains("-nested-")) {
-                        // 嵌套表格
                         tableId = parts[0]; // t001
                         rowId = parts[1];   // r001
                         cellId = parts[2];  // c001
-                        // 后面还有nested-r{row}-c{cell}-p{para}，但我们主要关注外层表格结构
                     } else {
-                        tableId = parts[0]; // t001
-                        rowId = parts[1];   // r001
-                        cellId = parts[2];  // c001
+                        tableId = parts[0];
+                        rowId = parts[1];
+                        cellId = parts[2];
                     }
 
                     // 检查是否需要开始新表格
@@ -169,9 +236,22 @@ public class DocxHtmlIdAligner {
                         // 关闭之前的表格（如果有）
                         if (inTable) {
                             if (inCell) {
+                                if (cellContent.length() > 0 || cellParagraphIds.size() > 0) {
+                                    String firstId = cellParagraphIds.isEmpty() ? null : cellParagraphIds.get(0);
+                                    if (cellContent.length() == 0) {
+                                        writer.write("<p></p>");
+                                    } else if (firstId != null) {
+                                        writer.write("<p id=\"" + firstId + "\">" + cellContent + "</p>");
+                                    } else {
+                                        writer.write("<p>" + cellContent + "</p>");
+                                    }
+                                    writer.newLine();
+                                }
                                 writer.write("</td>");
                                 writer.newLine();
                                 inCell = false;
+                                cellParagraphIds.clear();
+                                cellContent.setLength(0);
                             }
                             if (inRow) {
                                 writer.write("</tr>");
@@ -195,9 +275,22 @@ public class DocxHtmlIdAligner {
                     if (!inRow || !rowId.equals(currentRow)) {
                         // 关闭之前的单元格和行（如果有）
                         if (inCell) {
+                            if (cellContent.length() > 0 || cellParagraphIds.size() > 0) {
+                                String firstId = cellParagraphIds.isEmpty() ? null : cellParagraphIds.get(0);
+                                if (cellContent.length() == 0) {
+                                    writer.write("<p></p>");
+                                } else if (firstId != null) {
+                                    writer.write("<p id=\"" + firstId + "\">" + cellContent + "</p>");
+                                } else {
+                                    writer.write("<p>" + cellContent + "</p>");
+                                }
+                                writer.newLine();
+                            }
                             writer.write("</td>");
                             writer.newLine();
                             inCell = false;
+                            cellParagraphIds.clear();
+                            cellContent.setLength(0);
                         }
                         if (inRow) {
                             writer.write("</tr>");
@@ -216,28 +309,51 @@ public class DocxHtmlIdAligner {
                     if (!inCell || !cellId.equals(currentCell)) {
                         // 关闭之前的单元格（如果有）
                         if (inCell) {
+                            if (cellContent.length() > 0 || cellParagraphIds.size() > 0) {
+                                String firstId = cellParagraphIds.isEmpty() ? null : cellParagraphIds.get(0);
+                                if (cellContent.length() == 0) {
+                                    writer.write("<p></p>");
+                                } else if (firstId != null) {
+                                    writer.write("<p id=\"" + firstId + "\">" + cellContent + "</p>");
+                                } else {
+                                    writer.write("<p>" + cellContent + "</p>");
+                                }
+                                writer.newLine();
+                            }
                             writer.write("</td>");
                             writer.newLine();
+                            cellParagraphIds.clear();
+                            cellContent.setLength(0);
                         }
 
-                        // 开始新单元格
-                        writer.write("<td>");
+                        // 开始新单元格：这里写入合并属性
                         currentCell = cellId;
                         inCell = true;
+                        openTdWithMerge.accept(currentTable, currentRow, currentCell);
                     }
 
-                    // 写入段落（表格单元格中的段落，空段落不带ID）
-                    if (paragraphText.length() == 0) {
-                        writer.write("<p></p>");
-                    } else {
-                        writer.write("<p id=\"" + paragraphId + "\">" + paragraphText + "</p>");
+                    // 将段落添加到当前单元格的内容中
+                    cellParagraphIds.add(paragraphId);
+                    if (cellContent.length() > 0 && paragraphText.length() > 0) {
+                        cellContent.append(" "); // 段落间用空格分隔
                     }
-                    writer.newLine();
+                    cellContent.append(paragraphText);
                 }
             }
 
             // 关闭所有未关闭的标签
             if (inCell) {
+                if (cellContent.length() > 0 || cellParagraphIds.size() > 0) {
+                    String firstId = cellParagraphIds.isEmpty() ? null : cellParagraphIds.get(0);
+                    if (cellContent.length() == 0) {
+                        writer.write("<p></p>");
+                    } else if (firstId != null) {
+                        writer.write("<p id=\"" + firstId + "\">" + cellContent + "</p>");
+                    } else {
+                        writer.write("<p>" + cellContent + "</p>");
+                    }
+                    writer.newLine();
+                }
                 writer.write("</td>");
                 writer.newLine();
             }
@@ -264,9 +380,9 @@ public class DocxHtmlIdAligner {
 
             // 统计表格数
             Set<String> tables = new HashSet<>();
-            for (String paragraphId : paragraphGroups.keySet()) {
-                if (paragraphId.startsWith("t")) {
-                    String[] parts = paragraphId.split("-");
+            for (String pid : paragraphGroups.keySet()) {
+                if (pid.startsWith("t")) {
+                    String[] parts = pid.split("-");
                     if (parts.length > 0) {
                         tables.add(parts[0]);
                     }
@@ -278,6 +394,7 @@ public class DocxHtmlIdAligner {
             writer.newLine();
         }
     }
+
 
     /**
      * 从span的ID中提取段落ID
