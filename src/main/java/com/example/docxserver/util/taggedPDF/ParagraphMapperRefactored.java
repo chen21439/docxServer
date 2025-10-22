@@ -322,11 +322,13 @@ public class ParagraphMapperRefactored {
         class SpanData {
             String pid;
             String pidText;
+            String text;  // 需要高亮的文本（pidText的子串）
             int index;  // span的序号（从1开始）
 
-            SpanData(String pid, String pidText, int index) {
+            SpanData(String pid, String pidText, String text, int index) {
                 this.pid = pid;
                 this.pidText = pidText;
+                this.text = text;
                 this.index = index;
             }
         }
@@ -336,7 +338,7 @@ public class ParagraphMapperRefactored {
         String jsonContent = new String(Files.readAllBytes(Paths.get(jsonPath)), StandardCharsets.UTF_8);
 
         // 使用字符串解析JSON（简单粗暴但有效）
-        // 查找所有 "pid": "xxx" 和对应的 "pidText": "yyy"
+        // 查找所有 "pid": "xxx" 和对应的 "pidText": "yyy" 以及 "text": "zzz"
         int pos = 0;
         int spanIndex = 1;
         while ((pos = jsonContent.indexOf("\"pid\":", pos)) != -1) {
@@ -345,22 +347,34 @@ public class ParagraphMapperRefactored {
             int pidEnd = jsonContent.indexOf("\"", pidStart);
             String pid = jsonContent.substring(pidStart, pidEnd);
 
-            // 查找对应的pidText值（在同一个span对象内）
-            int pidTextPos = jsonContent.indexOf("\"pidText\":", pidEnd);
+            // 查找下一个pid的位置（用于限定查找范围）
             int nextPidPos = jsonContent.indexOf("\"pid\":", pidEnd + 1);
+            int searchEnd = (nextPidPos == -1) ? jsonContent.length() : nextPidPos;
 
-            // 确保pidText在当前pid和下一个pid之间
-            if (pidTextPos != -1 && (nextPidPos == -1 || pidTextPos < nextPidPos)) {
-                int textStart = jsonContent.indexOf("\"", pidTextPos + 10) + 1;
+            // 查找对应的pidText值（在当前pid和下一个pid之间）
+            int pidTextPos = jsonContent.indexOf("\"pidText\":", pidEnd);
+            String pidText = "";
+            if (pidTextPos != -1 && pidTextPos < searchEnd) {
+                int pidTextStart = jsonContent.indexOf("\"", pidTextPos + 10) + 1;
+                int pidTextEnd = jsonContent.indexOf("\"", pidTextStart);
+                pidText = jsonContent.substring(pidTextStart, pidTextEnd);
+                // 反转义JSON字符串
+                pidText = pidText.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"");
+            }
+
+            // 查找对应的text值（在当前pid和下一个pid之间）
+            int textFieldPos = jsonContent.indexOf("\"text\":", pidEnd);
+            String text = "";
+            if (textFieldPos != -1 && textFieldPos < searchEnd) {
+                int textStart = jsonContent.indexOf("\"", textFieldPos + 7) + 1;
                 int textEnd = jsonContent.indexOf("\"", textStart);
-                String text = jsonContent.substring(textStart, textEnd);
-
+                text = jsonContent.substring(textStart, textEnd);
                 // 反转义JSON字符串
                 text = text.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"");
-
-                // 不去重：为每个span都创建一条记录
-                spanList.add(new SpanData(pid, text, spanIndex++));
             }
+
+            // 不去重：为每个span都创建一条记录
+            spanList.add(new SpanData(pid, pidText, text, spanIndex++));
 
             pos = pidEnd;
         }
@@ -576,13 +590,14 @@ public class ParagraphMapperRefactored {
                         mcidStr = (mcidGroups.length > 0) ? mcidGroups[0] : mcidStr;
                     }
 
-                    // 创建带text字段的HighlightTarget（使用新增的构造函数）
+                    // 创建带pidText和text字段的HighlightTarget（使用新增的构造函数）
                     com.example.docxserver.util.pdf.highter.HighlightTarget target =
                         new com.example.docxserver.util.pdf.highter.HighlightTarget(
                             Integer.parseInt(pageStr) - 1,  // page (转换为0-based，_pdf.txt中是1-based)
                             java.util.Arrays.asList(mcidStr.split(",")),  // mcids（已经只包含第一个页面的MCID）
                             span.pid,  // id
-                            span.pidText  // text（来自JSON的pidText字段）
+                            span.pidText,  // pidText（来自JSON的pidText字段，完整段落文本用于定位）
+                            span.text  // text（来自JSON的text字段，需要高亮的子串）
                         );
                     targets.add(target);
                 }
