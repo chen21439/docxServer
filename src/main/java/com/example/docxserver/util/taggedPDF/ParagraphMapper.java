@@ -50,9 +50,9 @@ public class ParagraphMapper {
         String docxTxtPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\1978018096320905217_docx.txt";
         String taskId = "1978018096320905217";
 //        // 步骤0-1: 从PDF独立提取表格结构到XML格式TXT（不依赖DOCX）
-        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT ===");
-        toXML(taskId);
-        System.out.println();
+//        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT ===");
+//        toXML(taskId);
+//        System.out.println();
 //
 //        // 步骤0-2: 使用新的ID匹配方法，生成匹配结果
 //        System.out.println("=== 使用ID直接匹配，生成匹配结果 ===");
@@ -60,9 +60,9 @@ public class ParagraphMapper {
 //        System.out.println();
 
         // 步骤0-3: 测试通过ID在PDF中查找文本
-//        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
-//        testFindTextByIdInPdf(taskId);
-//        System.out.println();
+        System.out.println("=== 测试通过ID在PDF中查找文本 ===");
+        testFindTextByIdInPdf(taskId);
+        System.out.println();
 
         // 步骤0-4: 使用PDFTextStripper提取PDF全文到txt
 //        System.out.println("=== 使用PDFTextStripper提取PDF全文 ===");

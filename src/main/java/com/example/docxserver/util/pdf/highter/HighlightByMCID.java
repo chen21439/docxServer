@@ -658,7 +658,15 @@ public class HighlightByMCID {
         List<TextPosition> matchedPositions = findTextPositions(allPositions, fullText, targetText);
 
         if (matchedPositions.isEmpty()) {
+            System.out.println("[警告] 未找到匹配的文本");
             System.out.println("[警告] 在MCID " + mcids + " 中未找到文本: " + targetText);
+
+            // 打印规范化后的对比
+            String mcidTextNorm = normalizeWhitespace(fullText);
+            String targetTextNorm = normalizeWhitespace(targetText);
+            System.out.println("  [MCID文本-norm后] " + mcidTextNorm);
+            System.out.println("  [目标文本-norm后] " + targetTextNorm);
+
             return;
         }
 
@@ -742,22 +750,21 @@ public class HighlightByMCID {
     }
 
     /**
-     * 归一化空白符（多个空格/换行/制表符 -> 单个空格）
+     * 归一化文本（直接调用TextUtils.normalizeText()保持一致性）
+     *
+     * 重要：必须使用与ParagraphMapperRefactored相同的归一化逻辑，否则会导致匹配失败！
+     * 该方法会：
+     * - 去除所有换行符和空白符
+     * - 去除零宽字符
+     * - 去除标点符号
+     * - 转换为小写
      */
     private static String normalizeWhitespace(String text) {
         if (text == null) return "";
 
-        // 步骤1：使用TextUtils清理PDF提取文本中的字符间空格（只处理中文之间的空格）
-        String cleaned = com.example.docxserver.util.taggedPDF.TextUtils.cleanPdfExtractedText(text);
-        System.out.println("[调试-清理后] cleanPdfExtractedText处理后: " + cleaned);
-
-        // 步骤2：去除单字符之间的空格（处理 "1 8" -> "18"，"I S O" -> "ISO"）
-        String noSingleCharSpaces = cleaned.replaceAll("(\\S) (\\S)", "$1$2");
-        System.out.println("[调试-去除单字符空格后] " + noSingleCharSpaces);
-
-        // 步骤3：将剩余的连续空白符替换为单个空格
-        String normalized = noSingleCharSpaces.replaceAll("\\s+", " ").trim();
-        System.out.println("[调试-最终归一化] " + normalized);
+        // 直接调用TextUtils.normalizeText()，保持与ParagraphMapperRefactored一致
+        String normalized = com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(text);
+        System.out.println("[调试-归一化] normalizeText处理后: " + normalized);
 
         return normalized;
     }

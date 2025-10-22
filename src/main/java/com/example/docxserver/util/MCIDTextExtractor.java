@@ -158,10 +158,13 @@ public class MCIDTextExtractor extends PDFStreamEngine {
      * 1. 行聚类（按YDirAdj）- 解决同行文字因微小Y坐标差异被切分的问题
      * 2. 行间排序（按baseline从上到下）- 确保行的顺序正确
      * 3. 行内排序（按XDirAdj从左到右）- 解决kerning/TJ操作符导致的X坐标抖动问题
+     * 4. 清理PDF提取文本中的字符间空格 - 修复 "1 8" -> "18" 的问题
      */
     public String getText() {
         if (extractedText.length() > 0) {
-            return extractedText.toString();
+            // 应用cleanPdfExtractedText清理字符间空格
+            String cleaned = com.example.docxserver.util.taggedPDF.TextUtils.cleanPdfExtractedText(extractedText.toString());
+            return cleaned;
         }
 
         if (textPositions.isEmpty()) {
