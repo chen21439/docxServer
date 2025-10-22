@@ -335,8 +335,11 @@ public class TextHighlighter {
         // 尝试构建外观流
         try {
             hl.constructAppearances();
+            System.out.println("[DEBUG] Successfully constructed appearance for annotation");
         } catch (Exception e) {
-            // 忽略
+            System.err.println("[WARNING] Failed to construct appearance: " + e.getMessage());
+            e.printStackTrace();
+            // 不中断流程，继续添加注释（某些PDF查看器会自动渲染）
         }
     }
 

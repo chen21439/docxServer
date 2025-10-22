@@ -318,14 +318,27 @@ public class ParagraphMapperRefactored {
         System.out.println("JSON文件路径: " + jsonPath);
 
         // ===== 步骤1: 从JSON文件读取所有pid和pidText =====
-        List<String> pidList = new ArrayList<String>();
-        Map<String, String> expectedTexts = new HashMap<String, String>();  // pid -> pidText
+        // 定义Span数据结构（内部类）
+        class SpanData {
+            String pid;
+            String pidText;
+            int index;  // span的序号（从1开始）
+
+            SpanData(String pid, String pidText, int index) {
+                this.pid = pid;
+                this.pidText = pidText;
+                this.index = index;
+            }
+        }
+
+        List<SpanData> spanList = new ArrayList<SpanData>();
 
         String jsonContent = new String(Files.readAllBytes(Paths.get(jsonPath)), StandardCharsets.UTF_8);
 
         // 使用字符串解析JSON（简单粗暴但有效）
         // 查找所有 "pid": "xxx" 和对应的 "pidText": "yyy"
         int pos = 0;
+        int spanIndex = 1;
         while ((pos = jsonContent.indexOf("\"pid\":", pos)) != -1) {
             // 提取pid值
             int pidStart = jsonContent.indexOf("\"", pos + 6) + 1;
@@ -345,19 +358,16 @@ public class ParagraphMapperRefactored {
                 // 反转义JSON字符串
                 text = text.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"");
 
-                // 去重：只添加尚未存在的pid
-                if (!expectedTexts.containsKey(pid)) {
-                    pidList.add(pid);
-                    expectedTexts.put(pid, text);
-                }
+                // 不去重：为每个span都创建一条记录
+                spanList.add(new SpanData(pid, text, spanIndex++));
             }
 
             pos = pidEnd;
         }
 
-        System.out.println("从JSON文件中读取到 " + pidList.size() + " 个唯一pid\n");
+        System.out.println("从JSON文件中读取到 " + spanList.size() + " 个span\n");
 
-        if (pidList.isEmpty()) {
+        if (spanList.isEmpty()) {
             System.out.println("JSON文件中没有找到pid，退出");
             return;
         }
@@ -374,23 +384,29 @@ public class ParagraphMapperRefactored {
 
         System.out.println("使用_pdf.txt文件: " + pdfTxtFile.getName() + "\n");
 
-        // ===== 步骤3: 使用PdfTextFinder批量查找文本 =====
+        // ===== 步骤3: 构建pid到pidText的映射（用于批量查找）=====
+        Map<String, String> pidToTextMap = new HashMap<String, String>();
+        for (SpanData span : spanList) {
+            pidToTextMap.put(span.pid, span.pidText);
+        }
+
+        // ===== 步骤4: 使用PdfTextFinder批量查找文本 =====
         System.out.println("开始从_pdf.txt文件中批量查找文本...\n");
-        Map<String, PdfTextFinder.FindResult> findResults = PdfTextFinder.findTextByIds(pdfTxtPath, expectedTexts);
+        Map<String, PdfTextFinder.FindResult> findResults = PdfTextFinder.findTextByIds(pdfTxtPath, pidToTextMap);
 
-        // ===== 步骤4: 第一轮统计 - 分类所有结果 =====
-        List<String> exactMatchIds = new ArrayList<String>();       // 精确匹配
-        List<String> fallbackMatchIds = new ArrayList<String>();    // 回退匹配
-        List<String> mismatchedIds = new ArrayList<String>();       // 找到但不匹配
-        List<String> notFoundIds = new ArrayList<String>();         // 未找到
+        // ===== 步骤5: 为每个span分类结果 =====
+        List<SpanData> exactMatchSpans = new ArrayList<SpanData>();       // 精确匹配
+        List<SpanData> fallbackMatchSpans = new ArrayList<SpanData>();    // 回退匹配
+        List<SpanData> mismatchedSpans = new ArrayList<SpanData>();       // 找到但不匹配
+        List<SpanData> notFoundSpans = new ArrayList<SpanData>();         // 未找到
 
-        for (String id : pidList) {
-            PdfTextFinder.FindResult result = findResults.get(id);
-            String expectedText = expectedTexts.get(id);
+        for (SpanData span : spanList) {
+            PdfTextFinder.FindResult result = findResults.get(span.pid);
+            String expectedText = span.pidText;
 
             if (result == null || !result.isFound()) {
                 // 未找到
-                notFoundIds.add(id);
+                notFoundSpans.add(span);
             } else {
                 // 找到了，检查是否匹配
                 String pdfText = result.text;
@@ -405,114 +421,113 @@ public class ParagraphMapperRefactored {
                     if (expectedSub.equals(pdfSub)) {
                         // 匹配成功，区分精确匹配和回退匹配
                         if (result.isExactMatch()) {
-                            exactMatchIds.add(id);
+                            exactMatchSpans.add(span);
                         } else {
-                            fallbackMatchIds.add(id);
+                            fallbackMatchSpans.add(span);
                         }
                     } else {
-                        mismatchedIds.add(id);
+                        mismatchedSpans.add(span);
                     }
                 } else {
-                    mismatchedIds.add(id);  // 文本为空也算不匹配
+                    mismatchedSpans.add(span);  // 文本为空也算不匹配
                 }
             }
         }
 
-        // ===== 步骤5: 打印精确匹配的详情 =====
-        if (!exactMatchIds.isEmpty()) {
-            System.out.println("\n=== 精确匹配的ID详情 (" + exactMatchIds.size() + "个) ===");
-            int printLimit = Math.min(10, exactMatchIds.size());  // 显示前10个
+        // ===== 步骤6: 打印精确匹配的详情 =====
+        if (!exactMatchSpans.isEmpty()) {
+            System.out.println("\n=== 精确匹配的Span详情 (" + exactMatchSpans.size() + "个) ===");
+            int printLimit = Math.min(10, exactMatchSpans.size());  // 显示前10个
             for (int i = 0; i < printLimit; i++) {
-                String id = exactMatchIds.get(i);
-                String expectedText = expectedTexts.get(id);
-                PdfTextFinder.FindResult result = findResults.get(id);
+                SpanData span = exactMatchSpans.get(i);
+                PdfTextFinder.FindResult result = findResults.get(span.pid);
 
-                System.out.println("\n【精确匹配 #" + (i + 1) + "】ID: " + id);
+                System.out.println("\n【精确匹配 #" + (i + 1) + "】Span索引: " + span.index);
+                System.out.println("  PID: " + span.pid);
                 System.out.println("  匹配类型: " + result.matchType);
                 System.out.println("  Page: " + result.page + ", MCID: " + result.mcid);
-                System.out.println("  JSON预期文本: " + TextUtils.truncate(expectedText, 80));
+                System.out.println("  JSON预期文本: " + TextUtils.truncate(span.pidText, 80));
                 System.out.println("  PDF实际文本:  " + TextUtils.truncate(result.text, 80));
             }
-            if (exactMatchIds.size() > printLimit) {
-                System.out.println("\n... 还有 " + (exactMatchIds.size() - printLimit) + " 个精确匹配项未显示");
+            if (exactMatchSpans.size() > printLimit) {
+                System.out.println("\n... 还有 " + (exactMatchSpans.size() - printLimit) + " 个精确匹配项未显示");
             }
         }
 
-        // ===== 步骤6: 【重点】打印回退匹配的详情 =====
-        if (!fallbackMatchIds.isEmpty()) {
-            System.out.println("\n=== 【重点】回退匹配的ID详情 (" + fallbackMatchIds.size() + "个) ===");
-            int printLimit = Math.min(50, fallbackMatchIds.size());  // 显示前50个
+        // ===== 步骤7: 【重点】打印回退匹配的详情 =====
+        if (!fallbackMatchSpans.isEmpty()) {
+            System.out.println("\n=== 【重点】回退匹配的Span详情 (" + fallbackMatchSpans.size() + "个) ===");
+            int printLimit = Math.min(50, fallbackMatchSpans.size());  // 显示前50个
             for (int i = 0; i < printLimit; i++) {
-                String id = fallbackMatchIds.get(i);
-                String expectedText = expectedTexts.get(id);
-                PdfTextFinder.FindResult result = findResults.get(id);
+                SpanData span = fallbackMatchSpans.get(i);
+                PdfTextFinder.FindResult result = findResults.get(span.pid);
 
-                System.out.println("\n【回退匹配 #" + (i + 1) + "】");
-                System.out.println("  查询ID: " + id);
+                System.out.println("\n【回退匹配 #" + (i + 1) + "】Span索引: " + span.index);
+                System.out.println("  查询PID: " + span.pid);
                 System.out.println("  实际ID: " + result.actualId);
                 System.out.println("  匹配类型: " + result.matchType);
                 System.out.println("  Page: " + result.page + ", MCID: " + result.mcid);
-                System.out.println("  JSON预期文本: " + TextUtils.truncate(expectedText, 80));
+                System.out.println("  JSON预期文本: " + TextUtils.truncate(span.pidText, 80));
                 System.out.println("  PDF实际文本:  " + TextUtils.truncate(result.text, 80));
             }
-            if (fallbackMatchIds.size() > printLimit) {
-                System.out.println("\n... 还有 " + (fallbackMatchIds.size() - printLimit) + " 个回退匹配项未显示");
+            if (fallbackMatchSpans.size() > printLimit) {
+                System.out.println("\n... 还有 " + (fallbackMatchSpans.size() - printLimit) + " 个回退匹配项未显示");
             }
         }
 
-        // ===== 步骤7: 【优先级最高】打印找到但不匹配的详情 =====
-        if (!mismatchedIds.isEmpty()) {
-            System.out.println("\n=== 【重要】找到但不匹配的ID详情 (" + mismatchedIds.size() + "个) ===");
-            int printLimit = Math.min(100, mismatchedIds.size());  // 显示前100个不匹配项
+        // ===== 步骤8: 【优先级最高】打印找到但不匹配的详情 =====
+        if (!mismatchedSpans.isEmpty()) {
+            System.out.println("\n=== 【重要】找到但不匹配的Span详情 (" + mismatchedSpans.size() + "个) ===");
+            int printLimit = Math.min(100, mismatchedSpans.size());  // 显示前100个不匹配项
             for (int i = 0; i < printLimit; i++) {
-                String id = mismatchedIds.get(i);
-                String expectedText = expectedTexts.get(id);
-                PdfTextFinder.FindResult result = findResults.get(id);
+                SpanData span = mismatchedSpans.get(i);
+                PdfTextFinder.FindResult result = findResults.get(span.pid);
 
-                System.out.println("\n【不匹配 #" + (i + 1) + "】ID: " + id);
+                System.out.println("\n【不匹配 #" + (i + 1) + "】Span索引: " + span.index);
+                System.out.println("  PID: " + span.pid);
                 System.out.println("  匹配类型: " + result.matchType);
                 System.out.println("  实际ID: " + result.actualId);
-                System.out.println("  JSON预期文本: " + expectedText);
+                System.out.println("  JSON预期文本: " + span.pidText);
                 System.out.println("  PDF实际文本:  " + result.text);
 
                 // 打印归一化后的对比
-                String expectedNorm = TextUtils.normalizeText(expectedText);
+                String expectedNorm = TextUtils.normalizeText(span.pidText);
                 String pdfNorm = TextUtils.normalizeText(result.text);
                 System.out.println("  预期(归一化): " + expectedNorm);
                 System.out.println("  实际(归一化): " + pdfNorm);
             }
-            if (mismatchedIds.size() > printLimit) {
-                System.out.println("\n... 还有 " + (mismatchedIds.size() - printLimit) + " 个不匹配项未显示");
+            if (mismatchedSpans.size() > printLimit) {
+                System.out.println("\n... 还有 " + (mismatchedSpans.size() - printLimit) + " 个不匹配项未显示");
             }
         }
 
-        // ===== 步骤8: 打印最终统计 =====
-        int totalMatchCount = exactMatchIds.size() + fallbackMatchIds.size();
-        int totalFoundCount = totalMatchCount + mismatchedIds.size();
+        // ===== 步骤9: 打印最终统计 =====
+        int totalMatchCount = exactMatchSpans.size() + fallbackMatchSpans.size();
+        int totalFoundCount = totalMatchCount + mismatchedSpans.size();
 
         System.out.println("\n=== 最终统计 ===");
-        System.out.println("测试总数: " + pidList.size());
+        System.out.println("测试总数: " + spanList.size());
         System.out.println("成功提取: " + totalFoundCount);
-        System.out.println("  - 精确匹配: " + exactMatchIds.size());
-        System.out.println("  - 回退匹配: " + fallbackMatchIds.size());
-        System.out.println("  - 找到但不匹配: " + mismatchedIds.size());
+        System.out.println("  - 精确匹配: " + exactMatchSpans.size());
+        System.out.println("  - 回退匹配: " + fallbackMatchSpans.size());
+        System.out.println("  - 找到但不匹配: " + mismatchedSpans.size());
         System.out.println("内容匹配: " + totalMatchCount);
-        System.out.println("未找到: " + notFoundIds.size());
-        System.out.println("提取率: " + String.format("%.2f%%", totalFoundCount * 100.0 / pidList.size()));
-        System.out.println("匹配率: " + String.format("%.2f%%", totalMatchCount * 100.0 / pidList.size()));
+        System.out.println("未找到: " + notFoundSpans.size());
+        System.out.println("提取率: " + String.format("%.2f%%", totalFoundCount * 100.0 / spanList.size()));
+        System.out.println("匹配率: " + String.format("%.2f%%", totalMatchCount * 100.0 / spanList.size()));
 
-        // ===== 步骤9: 打印未找到的ID列表 =====
-        if (!notFoundIds.isEmpty()) {
-            System.out.println("\n=== 未找到的ID列表 (" + notFoundIds.size() + "个) ===");
+        // ===== 步骤10: 打印未找到的Span列表 =====
+        if (!notFoundSpans.isEmpty()) {
+            System.out.println("\n=== 未找到的Span列表 (" + notFoundSpans.size() + "个) ===");
 
-            int printLimit = Math.min(50, notFoundIds.size());
+            int printLimit = Math.min(50, notFoundSpans.size());
             for (int i = 0; i < printLimit; i++) {
-                String id = notFoundIds.get(i);
-                String expectedText = expectedTexts.get(id);
-                PdfTextFinder.FindResult result = findResults.get(id);
+                SpanData span = notFoundSpans.get(i);
+                PdfTextFinder.FindResult result = findResults.get(span.pid);
 
-                System.out.println("\n【未找到 #" + (i + 1) + "】ID: " + id);
-                System.out.println("  JSON预期文本: " + TextUtils.truncate(expectedText, 80));
+                System.out.println("\n【未找到 #" + (i + 1) + "】Span索引: " + span.index);
+                System.out.println("  PID: " + span.pid);
+                System.out.println("  JSON预期文本: " + TextUtils.truncate(span.pidText, 80));
 
                 if (result == null || result.text == null) {
                     System.out.println("  PDF实际文本:  [NULL - ID未在_pdf.txt中找到]");
@@ -522,9 +537,78 @@ public class ParagraphMapperRefactored {
                     System.out.println("  PDF实际文本:  " + result.text);
                 }
             }
-            if (notFoundIds.size() > printLimit) {
-                System.out.println("\n... 还有 " + (notFoundIds.size() - printLimit) + " 个未找到项未显示");
+            if (notFoundSpans.size() > printLimit) {
+                System.out.println("\n... 还有 " + (notFoundSpans.size() - printLimit) + " 个未找到项未显示");
             }
+        }
+
+        // ===== 步骤11: 批量高亮匹配成功的段落 =====
+        if (totalMatchCount > 0) {
+            System.out.println("\n=== 准备高亮PDF ===");
+            System.out.println("将高亮 " + totalMatchCount + " 个匹配项（精确匹配：" + exactMatchSpans.size() +
+                             "，回退匹配：" + fallbackMatchSpans.size() + "）");
+
+            // 合并精确匹配和回退匹配的Span列表
+            List<SpanData> allMatchedSpans = new ArrayList<SpanData>();
+            allMatchedSpans.addAll(exactMatchSpans);
+            allMatchedSpans.addAll(fallbackMatchSpans);
+
+            // 转换为HighlightTarget列表（每个span一个target，带text字段）
+            List<com.example.docxserver.util.pdf.highter.HighlightTarget> targets =
+                new ArrayList<com.example.docxserver.util.pdf.highter.HighlightTarget>();
+
+            for (SpanData span : allMatchedSpans) {
+                PdfTextFinder.FindResult result = findResults.get(span.pid);
+                if (result != null && result.page != null && result.mcid != null) {
+                    // TODO: 后续修改 - 处理跨页段落（page包含"|"表示跨多页）
+                    // 当前临时方案：取第一个页码
+                    String pageStr = result.page;
+                    if (pageStr.contains("|")) {
+                        pageStr = pageStr.split("\\|")[0];
+                    }
+
+                    // 创建带text字段的HighlightTarget（使用新增的构造函数）
+                    com.example.docxserver.util.pdf.highter.HighlightTarget target =
+                        new com.example.docxserver.util.pdf.highter.HighlightTarget(
+                            Integer.parseInt(pageStr),  // page (0-based)
+                            java.util.Arrays.asList(result.mcid.split(",")),  // mcids
+                            span.pid,  // id
+                            null  // text（来自JSON的pidText字段）
+                        );
+                    targets.add(target);
+                }
+            }
+
+            System.out.println("转换完成，共 " + targets.size() + " 个目标（每个都包含text字段）");
+
+            // 打开PDF并高亮
+            String pdfPath = dir + taskId + "_A2b.pdf";
+            String outputPdfPath = dir + taskId + "_highlighted.pdf";
+
+            File pdfFile = new File(pdfPath);
+            if (!pdfFile.exists()) {
+                System.out.println("PDF文件不存在: " + pdfPath);
+            } else {
+                try (org.apache.pdfbox.pdmodel.PDDocument doc = org.apache.pdfbox.Loader.loadPDF(pdfFile)) {
+                    // 绿色高亮
+                    float[] color = {0.0f, 1.0f, 0.0f};  // RGB: 绿色
+                    float opacity = 0.3f;
+
+                    com.example.docxserver.util.pdf.highter.HighlightByMCID.highlightMultipleTargets(
+                        doc, targets, color, opacity);
+
+                    // 保存文件
+                    doc.save(outputPdfPath);
+                    System.out.println("\n高亮PDF已保存到: " + outputPdfPath);
+
+                } catch (Exception e) {
+                    System.err.println("高亮失败: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            }
+        } else {
+            System.out.println("\n=== 跳过高亮 ===");
+            System.out.println("没有匹配成功的项，跳过高亮");
         }
     }
 }

@@ -50,17 +50,14 @@ public class PdfIdLocator {
         }
 
         // 按table、row、col排序
-        Collections.sort(sortedIds, new Comparator<CellIdWithLocation>() {
-            @Override
-            public int compare(CellIdWithLocation a, CellIdWithLocation b) {
-                if (a.location.tableIndex != b.location.tableIndex) {
-                    return Integer.compare(a.location.tableIndex, b.location.tableIndex);
-                }
-                if (a.location.rowIndex != b.location.rowIndex) {
-                    return Integer.compare(a.location.rowIndex, b.location.rowIndex);
-                }
-                return Integer.compare(a.location.colIndex, b.location.colIndex);
+        Collections.sort(sortedIds, (a, b) -> {
+            if (a.location.tableIndex != b.location.tableIndex) {
+                return Integer.compare(a.location.tableIndex, b.location.tableIndex);
             }
+            if (a.location.rowIndex != b.location.rowIndex) {
+                return Integer.compare(a.location.rowIndex, b.location.rowIndex);
+            }
+            return Integer.compare(a.location.colIndex, b.location.colIndex);
         });
 
         System.out.println("\n=== 批量查找PDF文本 ===");

@@ -96,7 +96,7 @@ public class ParagraphMapper {
      * @param taskId 任务ID（如：1978018096320905217）
      * @throws IOException 文件读取异常
      */
-    private static void testFindTextByIdInPdf(String taskId) throws IOException {
+    static void testFindTextByIdInPdf(String taskId) throws IOException {
         // 固定目录
 //        String pdfDir = "E:\\programFile\\AIProgram\\docxServer\\pdf";
 //

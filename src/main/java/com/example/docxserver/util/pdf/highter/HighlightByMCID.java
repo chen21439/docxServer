@@ -606,6 +606,298 @@ public class HighlightByMCID {
     }
 
     /**
+     * 【字符级别高亮】在指定MCID范围内查找文本并高亮
+     *
+     * 核心思路：
+     * 1. 从指定的 page + mcids 中提取所有 TextPosition
+     * 2. 在这些 TextPosition 中查找匹配的文本
+     * 3. 只高亮匹配的 TextPosition
+     *
+     * 使用场景：
+     * - 高亮表格单元格中的特定文本（而非整个单元格）
+     * - 精确高亮搜索结果
+     * - 避免高亮不相关的内容
+     *
+     * @param doc PDF文档对象
+     * @param pageIndex 页码（从0开始）
+     * @param mcids 目标MCID集合（搜索范围）
+     * @param targetText 要高亮的文本内容
+     * @param color RGB颜色数组
+     * @param opacity 透明度（0.0-1.0）
+     * @throws IOException 文件操作异常
+     */
+    public static void highlightByTextInMcids(
+            PDDocument doc,
+            int pageIndex,
+            Set<Integer> mcids,
+            String targetText,
+            float[] color,
+            float opacity) throws IOException {
+
+        if (targetText == null || targetText.trim().isEmpty()) {
+            System.out.println("[警告] 目标文本为空，跳过高亮");
+            return;
+        }
+
+        // ========== 阶段1：提取MCID范围内的所有TextPosition ==========
+        MCIDTextExtractor extractor = new MCIDTextExtractor(mcids);
+        PDPage page = doc.getPage(pageIndex);
+        extractor.processPage(page);
+
+        List<TextPosition> allPositions = extractor.getTextPositions();
+        if (allPositions.isEmpty()) {
+            System.out.println("[警告] 页面 " + (pageIndex + 1) + " 在MCID " + mcids + " 中未找到任何内容");
+            return;
+        }
+
+        String fullText = extractor.getText();
+        System.out.println("[调试] MCID范围内的完整文本: " + fullText);
+        System.out.println("[调试] 目标文本: " + targetText);
+
+        // ========== 阶段2：查找匹配的TextPosition ==========
+        List<TextPosition> matchedPositions = findTextPositions(allPositions, fullText, targetText);
+
+        if (matchedPositions.isEmpty()) {
+            System.out.println("[警告] 在MCID " + mcids + " 中未找到文本: " + targetText);
+            return;
+        }
+
+        System.out.println("[调试] 找到 " + matchedPositions.size() + " 个匹配的字符");
+
+        // ========== 阶段3：生成QuadPoints并高亮 ==========
+        PDRectangle cropBox = page.getCropBox();
+        float pageHeight = cropBox.getHeight();
+
+        float[] quadPoints = generateQuadPoints(matchedPositions, pageHeight);
+        PDRectangle rect = calculateBoundingBoxFromQuadPoints(quadPoints);
+
+        // 创建高亮注释
+        COSDictionary highlightDict = new COSDictionary();
+        highlightDict.setName(COSName.TYPE, "Annot");
+        highlightDict.setName(COSName.SUBTYPE, "Highlight");
+        PDAnnotationTextMarkup highlight = (PDAnnotationTextMarkup) PDAnnotation.createAnnotation(highlightDict);
+
+        highlight.setQuadPoints(quadPoints);
+        highlight.setRectangle(rect);
+
+        PDColor pdColor = new PDColor(color, PDDeviceRGB.INSTANCE);
+        highlight.setColor(pdColor);
+        highlight.setConstantOpacity(1.0f);
+        highlight.getCOSObject().setFloat(COSName.CA, 0.5f);
+        highlight.setPrinted(true);
+
+        page.getAnnotations().add(highlight);
+
+        System.out.println("[成功] 页面 " + (pageIndex + 1) + " 高亮了 " +
+                         matchedPositions.size() + " 个字符，文本: " + targetText);
+    }
+
+    /**
+     * 在TextPosition列表中查找匹配的文本
+     *
+     * 算法：
+     * 1. 构建完整文本字符串（用于匹配）
+     * 2. 查找目标文本的起始位置
+     * 3. 根据匹配位置提取对应的TextPosition
+     *
+     * 注意：
+     * - 忽略文本中的空白符差异（多个空格/换行视为一个空格）
+     * - 支持部分匹配
+     *
+     * @param positions 所有TextPosition
+     * @param fullText 完整文本（与positions对应）
+     * @param targetText 要查找的文本
+     * @return 匹配的TextPosition列表
+     */
+    private static List<TextPosition> findTextPositions(
+            List<TextPosition> positions,
+            String fullText,
+            String targetText) {
+
+        List<TextPosition> result = new ArrayList<>();
+
+        // 归一化文本（去除多余空白符）
+        String normalizedFull = normalizeWhitespace(fullText);
+        String normalizedTarget = normalizeWhitespace(targetText);
+
+        System.out.println("[调试] 归一化后的完整文本: " + normalizedFull);
+        System.out.println("[调试] 归一化后的目标文本: " + normalizedTarget);
+
+        // 查找匹配位置（在归一化文本中）
+        int matchStart = normalizedFull.indexOf(normalizedTarget);
+        if (matchStart < 0) {
+            System.out.println("[警告] 未找到匹配的文本");
+            return result;
+        }
+
+        int matchEnd = matchStart + normalizedTarget.length();
+        System.out.println("[调试] 匹配位置: " + matchStart + " - " + matchEnd);
+
+        // 映射归一化位置到原始TextPosition
+        // 需要建立归一化文本位置 -> 原始TextPosition的映射
+        result = mapNormalizedPositionsToTextPositions(
+            positions, fullText, normalizedFull, matchStart, matchEnd);
+
+        return result;
+    }
+
+    /**
+     * 归一化空白符（多个空格/换行/制表符 -> 单个空格）
+     */
+    private static String normalizeWhitespace(String text) {
+        if (text == null) return "";
+        // 将所有连续空白符替换为单个空格
+        return text.replaceAll("\\s+", " ").trim();
+    }
+
+    /**
+     * 将归一化文本中的位置映射回原始TextPosition
+     *
+     * 算法：
+     * 1. 遍历原始文本，同时追踪归一化文本的位置
+     * 2. 当归一化位置在匹配范围内时，记录对应的TextPosition
+     *
+     * @param positions 原始TextPosition列表
+     * @param originalText 原始文本
+     * @param normalizedText 归一化文本
+     * @param normalizedStart 归一化文本中的起始位置
+     * @param normalizedEnd 归一化文本中的结束位置
+     * @return 匹配的TextPosition列表
+     */
+    private static List<TextPosition> mapNormalizedPositionsToTextPositions(
+            List<TextPosition> positions,
+            String originalText,
+            String normalizedText,
+            int normalizedStart,
+            int normalizedEnd) {
+
+        List<TextPosition> result = new ArrayList<>();
+
+        int normalizedIndex = 0;  // 归一化文本中的当前位置
+        int originalIndex = 0;    // 原始文本中的当前位置
+        boolean inWhitespace = false;  // 是否在连续空白符中
+
+        for (int i = 0; i < positions.size(); i++) {
+            if (originalIndex >= originalText.length()) break;
+
+            char originalChar = originalText.charAt(originalIndex);
+            boolean isWhitespace = Character.isWhitespace(originalChar);
+
+            if (isWhitespace) {
+                // 空白符：在归一化文本中只占1个位置（如果不在连续空白符中）
+                if (!inWhitespace) {
+                    normalizedIndex++;
+                    inWhitespace = true;
+                }
+            } else {
+                // 非空白符：在归一化文本中占1个位置
+                inWhitespace = false;
+
+                // 检查是否在匹配范围内
+                if (normalizedIndex >= normalizedStart && normalizedIndex < normalizedEnd) {
+                    result.add(positions.get(i));
+                }
+
+                normalizedIndex++;
+            }
+
+            originalIndex++;
+        }
+
+        return result;
+    }
+
+    /**
+     * 【批量高亮】一次调用高亮多个位置
+     *
+     * 使用场景：
+     * - 高亮JSON文件中所有匹配的段落
+     * - 高亮搜索结果（可能跨多个页面）
+     * - 从PdfTextFinder.FindResult批量转换并高亮
+     *
+     * 示例：
+     * <pre>
+     * List&lt;HighlightTarget&gt; targets = new ArrayList&lt;&gt;();
+     * targets.add(new HighlightTarget(0, Arrays.asList("4", "5"), "t001-r001-c001-p001"));
+     * targets.add(new HighlightTarget(1, Arrays.asList("10"), "t001-r002-c001-p001"));
+     *
+     * highlightMultipleTargets(doc, targets, new float[]{1f, 1f, 0f}, 0.3f);
+     * </pre>
+     *
+     * @param doc PDF文档对象
+     * @param targets 高亮目标列表
+     * @param color RGB颜色数组（如 {1f, 1f, 0f} 表示黄色）
+     * @param opacity 透明度（0.0-1.0）
+     * @throws IOException 文件操作异常
+     */
+    public static void highlightMultipleTargets(
+            PDDocument doc,
+            List<HighlightTarget> targets,
+            float[] color,
+            float opacity) throws IOException {
+
+        if (targets == null || targets.isEmpty()) {
+            System.out.println("[警告] 高亮目标列表为空，跳过");
+            return;
+        }
+
+        System.out.println("\n=== 批量高亮开始 ===");
+        System.out.println("总目标数: " + targets.size());
+
+        int successCount = 0;
+        int skipCount = 0;
+        int errorCount = 0;
+
+        for (int i = 0; i < targets.size(); i++) {
+            HighlightTarget target = targets.get(i);
+
+            // 跳过无效目标
+            if (!target.isValid()) {
+                System.out.println("[跳过 #" + (i + 1) + "] " + target.getId() + " - MCID列表为空");
+                skipCount++;
+                continue;
+            }
+
+            try {
+                System.out.println("\n[处理 #" + (i + 1) + "/" + targets.size() + "] " + target);
+
+                // 转换MCID字符串为整数集合
+                java.util.Set<Integer> mcidInts = target.getMcidIntegers();
+
+                if (mcidInts.isEmpty()) {
+                    System.out.println("  -> 跳过：MCID解析失败");
+                    skipCount++;
+                    continue;
+                }
+
+                // 判断是否使用字符级别高亮
+                if (target.hasText()) {
+                    // 字符级别高亮：在MCID范围内查找文本并高亮
+                    System.out.println("  -> 使用字符级别高亮，目标文本: " + target.getText());
+                    highlightByTextInMcids(doc, target.getPage(), mcidInts, target.getText(), color, opacity);
+                } else {
+                    // MCID区域高亮：高亮整个MCID区域
+                    System.out.println("  -> 使用MCID区域高亮");
+                    highlightByMcid(doc, target.getPage(), mcidInts, color, opacity);
+                }
+
+                successCount++;
+                System.out.println("  -> 成功");
+
+            } catch (Exception e) {
+                errorCount++;
+                System.err.println("  -> 失败：" + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+
+        System.out.println("\n=== 批量高亮完成 ===");
+        System.out.println("成功: " + successCount);
+        System.out.println("跳过: " + skipCount);
+        System.out.println("失败: " + errorCount);
+    }
+
+    /**
      * 测试方法：高亮指定PDF中的MCID
      *
      * 使用示例：
