@@ -37,8 +37,8 @@ import java.util.Map;
  */
 public class ParagraphMapperRefactored {
 
-    public static String dir = "E:\\programFile\\AIProgram\\docxServer\\pdf\\task\\1980815235174494210\\";
-    public static String taskId = "1980815235174494210";
+    public static String dir = "E:\\programFile\\AIProgram\\docxServer\\pdf\\task\\1978018096320905217\\";
+    public static String taskId = "1978018096320905217";
 
     public static void main(String[] args) throws Exception {
 

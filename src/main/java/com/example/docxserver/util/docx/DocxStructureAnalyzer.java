@@ -1,14 +1,20 @@
 package com.example.docxserver.util.docx;
 
+import com.example.docxserver.util.common.FileUtils;
+import com.example.docxserver.util.taggedPDF.ParagraphMapperRefactored;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.apache.poi.ooxml.POIXMLProperties;
 import org.apache.poi.xwpf.usermodel.*;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.text.Normalizer;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Docx文档结构分析器
@@ -130,6 +136,7 @@ public class DocxStructureAnalyzer {
         DocxAnalysisResult.LayoutStats stats = new DocxAnalysisResult.LayoutStats();
 
         Map<String, Integer> headingCounts = new LinkedHashMap<>();
+        int paragraphCount = 0;
         int tableCount = 0;
         int imageCount = 0;
         int listBlockCount = 0;
@@ -143,6 +150,11 @@ public class DocxStructureAnalyzer {
                 XWPFParagraph para = (XWPFParagraph) element;
                 String style = para.getStyle();
                 String text = para.getText();
+
+                // 统计段落数量（只统计非空段落）
+                if (text != null && !text.trim().isEmpty()) {
+                    paragraphCount++;
+                }
 
                 // 统计标题
                 if (style != null && style.toLowerCase().startsWith("heading")) {
@@ -171,16 +183,14 @@ public class DocxStructureAnalyzer {
         }
 
         stats.setHeadingCounts(headingCounts);
+        stats.setParagraphCount(paragraphCount);
         stats.setTableCount(tableCount);
         stats.setImageCount(imageCount);
         stats.setListBlockCount(listBlockCount);
 
         // 计算表格密度（表格数/文档总段落数）
-        int totalParagraphs = (int) doc.getBodyElements().stream()
-                .filter(e -> e instanceof XWPFParagraph)
-                .count();
-        if (totalParagraphs > 0) {
-            stats.setTableDensity((double) tableCount / totalParagraphs);
+        if (paragraphCount > 0) {
+            stats.setTableDensity((double) tableCount / paragraphCount);
         }
 
         // 计算平均标题间隔（字符数）
@@ -203,6 +213,11 @@ public class DocxStructureAnalyzer {
         Stack<DocxAnalysisResult.Section> sectionStack = new Stack<>();
         DocxAnalysisResult.Section currentSection = null;
 
+        // ID 计数器
+        int sectionCounter = 0;
+        int paragraphCounter = 0;
+        int tableCounter = 0;
+
         for (IBodyElement element : doc.getBodyElements()) {
             if (element instanceof XWPFParagraph) {
                 XWPFParagraph para = (XWPFParagraph) element;
@@ -214,7 +229,9 @@ public class DocxStructureAnalyzer {
 
                 if (headingLevel != null) {
                     // 创建新的section
+                    sectionCounter++;
                     DocxAnalysisResult.Section section = new DocxAnalysisResult.Section();
+                    section.setId(String.format("s-%03d", sectionCounter));
                     section.setLevel(headingLevel);
                     section.setStyle(style != null ? style : "detected-heading");
                     section.setText(text);
@@ -240,7 +257,9 @@ public class DocxStructureAnalyzer {
                     // 非标题段落，添加到当前section的blocks中
                     // 如果没有section，创建一个默认的根section
                     if (currentSection == null) {
+                        sectionCounter++;
                         DocxAnalysisResult.Section defaultSection = new DocxAnalysisResult.Section();
+                        defaultSection.setId(String.format("s-%03d", sectionCounter));
                         defaultSection.setLevel(1);
                         defaultSection.setStyle("document-body");
                         defaultSection.setText("文档内容");
@@ -251,7 +270,8 @@ public class DocxStructureAnalyzer {
                         currentSection = defaultSection;
                     }
 
-                    DocxAnalysisResult.ParagraphBlock block = createParagraphBlock(para);
+                    paragraphCounter++;
+                    DocxAnalysisResult.ParagraphBlock block = createParagraphBlock(para, paragraphCounter);
                     currentSection.getBlocks().add(block);
                 }
 
@@ -259,7 +279,9 @@ public class DocxStructureAnalyzer {
                 // 表格块
                 // 如果没有section，创建一个默认的根section
                 if (currentSection == null) {
+                    sectionCounter++;
                     DocxAnalysisResult.Section defaultSection = new DocxAnalysisResult.Section();
+                    defaultSection.setId(String.format("s-%03d", sectionCounter));
                     defaultSection.setLevel(1);
                     defaultSection.setStyle("document-body");
                     defaultSection.setText("文档内容");
@@ -270,7 +292,8 @@ public class DocxStructureAnalyzer {
                     currentSection = defaultSection;
                 }
 
-                DocxAnalysisResult.TableBlock block = createTableBlock((XWPFTable) element);
+                tableCounter++;
+                DocxAnalysisResult.TableBlock block = createTableBlock((XWPFTable) element, tableCounter);
                 currentSection.getBlocks().add(block);
             }
         }
@@ -352,15 +375,23 @@ public class DocxStructureAnalyzer {
 
     /**
      * 创建段落块
+     *
+     * @param para 段落对象
+     * @param paragraphIndex 段落索引（全局计数）
+     * @return 段落块
      */
-    private static DocxAnalysisResult.ParagraphBlock createParagraphBlock(XWPFParagraph para) {
+    private static DocxAnalysisResult.ParagraphBlock createParagraphBlock(XWPFParagraph para, int paragraphIndex) {
         DocxAnalysisResult.ParagraphBlock block = new DocxAnalysisResult.ParagraphBlock();
+        block.setId(String.format("p-%05d", paragraphIndex));
         block.setText(para.getText());
         block.setStyle(para.getStyle());
 
         List<DocxAnalysisResult.Run> runs = new ArrayList<>();
+        int runIndex = 0;
         for (XWPFRun run : para.getRuns()) {
+            runIndex++;
             DocxAnalysisResult.Run runObj = new DocxAnalysisResult.Run();
+            runObj.setId(String.format("p-%05d-r-%03d", paragraphIndex, runIndex));
             runObj.setText(run.text());
             runObj.setBold(run.isBold());
             runObj.setItalic(run.isItalic());
@@ -374,9 +405,14 @@ public class DocxStructureAnalyzer {
 
     /**
      * 创建表格块
+     *
+     * @param table 表格对象
+     * @param tableIndex 表格索引（全局计数）
+     * @return 表格块
      */
-    private static DocxAnalysisResult.TableBlock createTableBlock(XWPFTable table) {
+    private static DocxAnalysisResult.TableBlock createTableBlock(XWPFTable table, int tableIndex) {
         DocxAnalysisResult.TableBlock block = new DocxAnalysisResult.TableBlock();
+        block.setId(String.format("t-%03d", tableIndex));
 
         List<XWPFTableRow> rows = table.getRows();
         if (!rows.isEmpty()) {
@@ -458,6 +494,9 @@ public class DocxStructureAnalyzer {
         String defaultDir = "E:\\programFile\\AIProgram\\docxServer\\pdf\\task\\1978018096320905217";
         String defaultFile = "1978018096320905217.docx";
 
+        defaultDir = ParagraphMapperRefactored.dir;
+        defaultFile = ParagraphMapperRefactored.taskId + ".docx";
+
         File docxFile;
         File outputFile = null;
 
@@ -505,15 +544,78 @@ public class DocxStructureAnalyzer {
         System.out.println("Layout statistics:");
         if (result.getLayoutStats() != null) {
             System.out.println("  - Heading counts: " + result.getLayoutStats().getHeadingCounts());
+            System.out.println("  - Paragraph count: " + result.getLayoutStats().getParagraphCount());
             System.out.println("  - Table count: " + result.getLayoutStats().getTableCount());
             System.out.println("  - Image count: " + result.getLayoutStats().getImageCount());
             System.out.println("  - List blocks: " + result.getLayoutStats().getListBlockCount());
+            System.out.println("  - Table density: " + String.format("%.3f", result.getLayoutStats().getTableDensity()));
         }
         System.out.println();
         System.out.println("Document structure:");
         System.out.println("  - Root sections: " + result.getTree().size());
 
+        // 验证段落数量（与 tags.txt 文件对比）
+        System.out.println();
+        System.out.println("======== Validation ========");
+        validateParagraphCount(docxFile.getParent(), docxFile.getName().replaceAll("\\.docx$", ""),
+                result.getLayoutStats().getParagraphCount());
+
         System.out.println();
         System.out.println("======== Analysis Completed ========");
+    }
+
+    /**
+     * 验证段落数量（与tags.txt文件对比）
+     *
+     * @param dir 目录路径
+     * @param taskId 任务ID（文件名前缀）
+     * @param analyzedParagraphCount 分析器统计的段落数量
+     */
+    private static void validateParagraphCount(String dir, String taskId, int analyzedParagraphCount) {
+        try {
+            // 查找最新的 tags.txt 文件
+            File tagsFile = FileUtils.findLatestFileByPrefix(dir, taskId + "_tags_");
+
+            if (tagsFile == null || !tagsFile.exists()) {
+                System.out.println("警告：未找到 tags.txt 文件");
+                System.out.println("  期望前缀: " + taskId + "_tags_");
+                System.out.println("  目录: " + dir);
+                return;
+            }
+
+            System.out.println("找到 tags 文件: " + tagsFile.getName());
+
+            // 读取文件内容
+            List<String> lines = Files.readAllLines(tagsFile.toPath(), StandardCharsets.UTF_8);
+            String content = String.join("\n", lines);
+
+            // 统计表格外段落ID（格式为 p-xxxxx）
+            Pattern pattern = Pattern.compile("<p\\s+id=\"(p-\\d+)\"");
+            Matcher matcher = pattern.matcher(content);
+
+            Set<String> paragraphIds = new LinkedHashSet<String>();
+            while (matcher.find()) {
+                paragraphIds.add(matcher.group(1));
+            }
+
+            int tagsFileCount = paragraphIds.size();
+
+            // 输出对比结果
+            System.out.println();
+            System.out.println("【段落数量对比】");
+            System.out.println("  DOCX 分析统计的段落数量: " + analyzedParagraphCount);
+            System.out.println("  tags.txt 中表格外段落数量: " + tagsFileCount);
+            System.out.println("  差异: " + (analyzedParagraphCount - tagsFileCount));
+
+            if (analyzedParagraphCount == tagsFileCount) {
+                System.out.println("  ✓ 数量匹配：段落数量相等！");
+            } else {
+                System.out.println("  ✗ 数量不匹配：段落数量不一致！");
+            }
+
+        } catch (Exception e) {
+            System.err.println("验证过程出错: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 }

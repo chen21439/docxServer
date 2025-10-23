@@ -1,5 +1,6 @@
 package com.example.docxserver.util.docx;
 
+import com.example.docxserver.util.taggedPDF.ParagraphMapperRefactored;
 import org.apache.poi.xwpf.usermodel.*;
 
 import java.io.*;
@@ -44,8 +45,11 @@ public class DocxHtmlProcessorUtil {
      * 主处理方法：从docx和HTML生成带ID的HTML文件
      */
     public static void main(String[] args) throws Exception {
-        String programDir = "E:\\programFile\\AIProgram\\productline-gcycloud-agent-aiserver\\basic-tender-compliance\\src\\main\\java\\com\\bosssoft\\sppgpt\\compliance\\service\\docx\\docx2html\\A街道办事处办公物业服务管理采购";
-        String fileName = "A街道办事处办公物业服务管理采购";
+        String programDir = "E:\\programFile\\AIProgram\\docxServer\\pdf\\task\\1978018096320905217\\";
+        String fileName = "1978018096320905217";
+        programDir = ParagraphMapperRefactored.dir;
+        fileName = ParagraphMapperRefactored.taskId;
+
         File docx = new File(programDir + "/" + fileName + ".docx");
         File htmlIn = new File(programDir + "/" + fileName + ".xhtml");
 

@@ -97,6 +97,9 @@ public class DocxAnalysisResult {
         @JsonProperty("heading_counts")
         private Map<String, Integer> headingCounts;
 
+        @JsonProperty("paragraph_count")
+        private Integer paragraphCount;
+
         @JsonProperty("table_count")
         private Integer tableCount;
 
@@ -115,6 +118,9 @@ public class DocxAnalysisResult {
         // Getters and Setters
         public Map<String, Integer> getHeadingCounts() { return headingCounts; }
         public void setHeadingCounts(Map<String, Integer> headingCounts) { this.headingCounts = headingCounts; }
+
+        public Integer getParagraphCount() { return paragraphCount; }
+        public void setParagraphCount(Integer paragraphCount) { this.paragraphCount = paragraphCount; }
 
         public Integer getTableCount() { return tableCount; }
         public void setTableCount(Integer tableCount) { this.tableCount = tableCount; }
@@ -199,6 +205,7 @@ public class DocxAnalysisResult {
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class Section extends TreeNode {
+        private String id;
         private Integer level;
         private String style;
         private String text;
@@ -213,6 +220,9 @@ public class DocxAnalysisResult {
         }
 
         // Getters and Setters
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+
         public Integer getLevel() { return level; }
         public void setLevel(Integer level) { this.level = level; }
 
@@ -252,6 +262,7 @@ public class DocxAnalysisResult {
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class ParagraphBlock extends Block {
+        private String id;
         private String text;
         private String style;
         private List<Run> runs;
@@ -261,6 +272,9 @@ public class DocxAnalysisResult {
         }
 
         // Getters and Setters
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+
         public String getText() { return text; }
         public void setText(String text) { this.text = text; }
 
@@ -276,6 +290,7 @@ public class DocxAnalysisResult {
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class Run {
+        private String id;
         private Boolean bold;
         private Boolean italic;
 
@@ -285,6 +300,9 @@ public class DocxAnalysisResult {
         private String text;
 
         // Getters and Setters
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+
         public Boolean getBold() { return bold; }
         public void setBold(Boolean bold) { this.bold = bold; }
 
@@ -303,6 +321,7 @@ public class DocxAnalysisResult {
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class TableBlock extends Block {
+        private String id;
         private String caption;
 
         @JsonProperty("header_row")
@@ -322,6 +341,9 @@ public class DocxAnalysisResult {
         }
 
         // Getters and Setters
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+
         public String getCaption() { return caption; }
         public void setCaption(String caption) { this.caption = caption; }
 
