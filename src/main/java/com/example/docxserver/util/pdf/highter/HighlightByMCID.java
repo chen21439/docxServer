@@ -621,22 +621,25 @@ public class HighlightByMCID {
      * @param doc PDF文档对象
      * @param pageIndex 页码（从0开始）
      * @param mcids 目标MCID集合（搜索范围）
+     * @param pidText 段落完整文本（可选，用于调试）
      * @param targetText 要高亮的文本内容
      * @param color RGB颜色数组
      * @param opacity 透明度（0.0-1.0）
+     * @return 是否成功高亮（true=成功，false=失败）
      * @throws IOException 文件操作异常
      */
-    public static void highlightByTextInMcids(
+    public static boolean highlightByTextInMcids(
             PDDocument doc,
             int pageIndex,
             Set<Integer> mcids,
+            String pidText,
             String targetText,
             float[] color,
             float opacity) throws IOException {
 
         if (targetText == null || targetText.trim().isEmpty()) {
             System.out.println("[警告] 目标文本为空，跳过高亮");
-            return;
+            return false;
         }
 
         // ========== 阶段1：提取MCID范围内的所有TextPosition ==========
@@ -647,7 +650,7 @@ public class HighlightByMCID {
         List<TextPosition> allPositions = extractor.getTextPositions();
         if (allPositions.isEmpty()) {
             System.out.println("[警告] 页面 " + (pageIndex + 1) + " 在MCID " + mcids + " 中未找到任何内容");
-            return;
+            return false;
         }
 
         String fullText = extractor.getText();
@@ -656,8 +659,22 @@ public class HighlightByMCID {
         List<TextPosition> matchedPositions = findTextPositions(allPositions, fullText, targetText);
 
         if (matchedPositions.isEmpty()) {
+            // 归一化后的文本（用于调试）
+            String mcidTextNorm = com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(fullText);
+            String pidTextNorm = pidText != null ? com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(pidText) : "";
+            String textNorm = com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(targetText);
+
+            // 打印前50个字符
             System.out.println("[警告] 未找到匹配的文本");
-            return;
+            System.out.println("    → MCID文本(归一化前50): " +
+                (mcidTextNorm.length() > 50 ? mcidTextNorm.substring(0, 50) + "..." : mcidTextNorm));
+            if (pidText != null && !pidText.trim().isEmpty()) {
+                System.out.println("    → pidText(前50):       " +
+                    (pidText.length() > 50 ? pidText.substring(0, 50) + "..." : pidText));
+            }
+            System.out.println("    → text(前50):          " +
+                (targetText.length() > 50 ? targetText.substring(0, 50) + "..." : targetText));
+            return false;
         }
 
         // ========== 阶段3：生成QuadPoints并高亮 ==========
@@ -689,6 +706,7 @@ public class HighlightByMCID {
 
         System.out.println("[成功] 页面 " + (pageIndex + 1) + " 高亮了 " +
                          matchedPositions.size() + " 个字符，文本: " + targetText);
+        return true;
     }
 
     /**
@@ -750,10 +768,7 @@ public class HighlightByMCID {
         if (text == null) return "";
 
         // 直接调用TextUtils.normalizeText()，保持与ParagraphMapperRefactored一致
-        String normalized = com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(text);
-        System.out.println("[调试-归一化] normalizeText处理后: " + normalized);
-
-        return normalized;
+        return com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(text);
     }
 
     /**
@@ -893,18 +908,25 @@ public class HighlightByMCID {
                 }
 
                 // 判断是否使用字符级别高亮
+                boolean success;
                 if (target.hasText()) {
                     // 字符级别高亮：在MCID范围内查找文本并高亮
                     System.out.println("  -> 使用字符级别高亮，目标文本: " + target.getText());
-                    highlightByTextInMcids(doc, target.getPage(), mcidInts, target.getText(), color, opacity);
+                    success = highlightByTextInMcids(doc, target.getPage(), mcidInts, target.getPidText(), target.getText(), color, opacity);
                 } else {
                     // MCID区域高亮：高亮整个MCID区域
                     System.out.println("  -> 使用MCID区域高亮");
                     highlightByMcid(doc, target.getPage(), mcidInts, color, opacity);
+                    success = true;  // highlightByMcid不返回布尔值，假设成功
                 }
 
-                successCount++;
-                System.out.println("  -> 成功");
+                if (success) {
+                    successCount++;
+                    System.out.println("  -> 成功");
+                } else {
+                    errorCount++;
+                    System.out.println("  -> 失败");
+                }
 
             } catch (Exception e) {
                 errorCount++;
