@@ -709,57 +709,63 @@ public class ParagraphMapperRefactored {
             for (SpanData span : allMatchedSpans) {
                 UnifiedFindResult result = findResults.get(span.pid);
                 if (result != null && result.page != null && result.mcid != null) {
+                    targetIndex++;
+
                     String pageStr = result.page;
                     String mcidStr = result.mcid;
-
-                    // 处理跨页内容：page和mcid都可能包含"|"分隔符
-                    // 格式示例：page="83|84", mcid="146,147,148|0,1,2,3,..."
-                    // 需要拆分为多个HighlightTarget，每个页面一个
-                    String[] pageGroups = pageStr.split("\\|");
-                    String[] mcidGroups = mcidStr.split("\\|");
 
                     // 归一化文本用于日志展示
                     String mcidTextNorm = TextUtils.normalizeText(result.text);
                     String pidTextNorm = TextUtils.normalizeText(span.pidText);
                     String textNorm = TextUtils.normalizeText(span.text);
 
-                    // 为每个页面创建一个HighlightTarget
-                    for (int i = 0; i < pageGroups.length; i++) {
-                        targetIndex++;
+                    // 检测是否跨页
+                    boolean isAcrossPages = pageStr.contains("|");
 
-                        int pageNum = Integer.parseInt(pageGroups[i].trim());
-                        String mcidForPage = (i < mcidGroups.length) ? mcidGroups[i].trim() : "";
+                    // 获取第一个页码和第一组MCID（用于HighlightTarget的基本字段）
+                    String firstPage = isAcrossPages ? pageStr.split("\\|")[0] : pageStr;
+                    String firstMcids = isAcrossPages ? mcidStr.split("\\|")[0] : mcidStr;
+                    int pageNum = Integer.parseInt(firstPage.trim());
 
-                        if (mcidForPage.isEmpty()) {
-                            System.out.println("\n  [" + targetIndex + "] " + span.pid + " - 跳过页面" + pageNum + "（无MCID）");
-                            continue;
+                    // 打印详细信息
+                    System.out.println("\n  [" + targetIndex + "] " + span.pid + (isAcrossPages ? " [跨页]" : ""));
+                    System.out.println("    页面: " + pageStr + " | MCID: " + mcidStr);
+                    System.out.println("    → PDF实际文本(归一化前50): " +
+                        (mcidTextNorm.length() > 50 ? mcidTextNorm.substring(0, 50) + "..." : mcidTextNorm));
+                    System.out.println("    → pidText(归一化前50):     " +
+                        (pidTextNorm.length() > 50 ? pidTextNorm.substring(0, 50) + "..." : pidTextNorm));
+                    System.out.println("    → 高亮text(归一化前50):    " +
+                        (textNorm.length() > 50 ? textNorm.substring(0, 50) + "..." : textNorm));
+                    System.out.println("    → 成功");
+
+                    // 统计页面高亮数量（跨页情况统计所有页面）
+                    if (isAcrossPages) {
+                        String[] pages = pageStr.split("\\|");
+                        for (String p : pages) {
+                            int pNum = Integer.parseInt(p.trim());
+                            pageHighlightCount.put(pNum, pageHighlightCount.getOrDefault(pNum, 0) + 1);
                         }
-
-                        // 打印详细信息
-                        System.out.println("\n  [" + targetIndex + "] " + span.pid + (pageGroups.length > 1 ? " [跨页 " + (i+1) + "/" + pageGroups.length + "]" : ""));
-                        System.out.println("    页面: " + pageNum + " | MCID: " + mcidForPage);
-                        System.out.println("    → PDF实际文本(归一化前50): " +
-                            (mcidTextNorm.length() > 50 ? mcidTextNorm.substring(0, 50) + "..." : mcidTextNorm));
-                        System.out.println("    → pidText(归一化前50):     " +
-                            (pidTextNorm.length() > 50 ? pidTextNorm.substring(0, 50) + "..." : pidTextNorm));
-                        System.out.println("    → 高亮text(归一化前50):    " +
-                            (textNorm.length() > 50 ? textNorm.substring(0, 50) + "..." : textNorm));
-                        System.out.println("    → 成功");
-
-                        // 统计页面高亮数量
+                    } else {
                         pageHighlightCount.put(pageNum, pageHighlightCount.getOrDefault(pageNum, 0) + 1);
-
-                        // 创建带pidText和text字段的HighlightTarget
-                        com.example.docxserver.util.pdf.highter.HighlightTarget target =
-                            new com.example.docxserver.util.pdf.highter.HighlightTarget(
-                                pageNum - 1,  // page (转换为0-based，_pdf.txt中是1-based)
-                                java.util.Arrays.asList(mcidForPage.split(",")),  // mcids（当前页面的MCID）
-                                span.pid,  // id
-                                span.pidText,  // pidText（来自JSON的pidText字段，完整段落文本用于定位）
-                                span.text  // text（来自JSON的text字段，需要高亮的子串）
-                            );
-                        targets.add(target);
                     }
+
+                    // 创建HighlightTarget（不拆分，保留完整的跨页信息）
+                    com.example.docxserver.util.pdf.highter.HighlightTarget target =
+                        new com.example.docxserver.util.pdf.highter.HighlightTarget(
+                            pageNum - 1,  // page (转换为0-based，使用第一个页码)
+                            java.util.Arrays.asList(firstMcids.split(",")),  // mcids（使用第一组MCID）
+                            span.pid,  // id
+                            span.pidText,  // pidText
+                            span.text  // text
+                        );
+
+                    // 设置原始的跨页信息
+                    if (isAcrossPages) {
+                        target.setPageStr(pageStr);   // "83|84"
+                        target.setMcidStr(mcidStr);   // "146,147,148|0,1,2,3,..."
+                    }
+
+                    targets.add(target);
                 }
             }
 

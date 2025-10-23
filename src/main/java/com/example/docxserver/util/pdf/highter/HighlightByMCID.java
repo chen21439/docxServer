@@ -710,6 +710,179 @@ public class HighlightByMCID {
     }
 
     /**
+     * 【跨页高亮】在跨越多个页面的MCID范围内查找文本并高亮
+     *
+     * 核心思路：
+     * 1. 从多个页面提取TextPosition，并标记每个TextPosition所属的页面
+     * 2. 合并所有TextPosition，在完整文本中查找目标文本
+     * 3. 根据匹配结果，按页面分组TextPosition
+     * 4. 为每个页面生成高亮注释
+     *
+     * 使用场景：
+     * - 段落跨越多页（如page="83|84", mcid="146,147,148|0,1,2,..."）
+     * - 目标文本可能在任何一页或跨越多页
+     *
+     * @param doc PDF文档对象
+     * @param pageToMcids 页面到MCID的映射 Map<页码(0-based), MCID集合>
+     * @param pidText 完整段落文本（可选，用于调试）
+     * @param targetText 要高亮的文本内容
+     * @param color RGB颜色数组
+     * @param opacity 透明度（0.0-1.0）
+     * @return 是否成功高亮（true=成功，false=失败）
+     * @throws IOException 文件操作异常
+     */
+    public static boolean highlightByTextAcrossPages(
+            PDDocument doc,
+            Map<Integer, Set<Integer>> pageToMcids,
+            String pidText,
+            String targetText,
+            float[] color,
+            float opacity) throws IOException {
+
+        if (targetText == null || targetText.trim().isEmpty()) {
+            System.out.println("[警告] 目标文本为空，跳过高亮");
+            return false;
+        }
+
+        if (pageToMcids == null || pageToMcids.isEmpty()) {
+            System.out.println("[警告] 页面MCID映射为空，跳过高亮");
+            return false;
+        }
+
+        // ========== 阶段1：从所有页面提取TextPosition ==========
+        // 使用辅助类记录TextPosition所属的页面
+        class TextPositionWithPage {
+            TextPosition position;
+            int pageIndex;
+
+            TextPositionWithPage(TextPosition position, int pageIndex) {
+                this.position = position;
+                this.pageIndex = pageIndex;
+            }
+        }
+
+        List<TextPositionWithPage> allPositionsWithPage = new ArrayList<>();
+        StringBuilder fullTextBuilder = new StringBuilder();
+
+        // 按页面顺序提取（确保文本顺序正确）
+        List<Integer> sortedPages = new ArrayList<>(pageToMcids.keySet());
+        Collections.sort(sortedPages);
+
+        for (int pageIndex : sortedPages) {
+            Set<Integer> mcids = pageToMcids.get(pageIndex);
+            if (mcids == null || mcids.isEmpty()) {
+                continue;
+            }
+
+            // 提取该页面的TextPosition
+            MCIDTextExtractor extractor = new MCIDTextExtractor(mcids);
+            PDPage page = doc.getPage(pageIndex);
+            extractor.processPage(page);
+
+            List<TextPosition> positions = extractor.getTextPositions();
+            String pageText = extractor.getText();
+
+            // 记录页面信息
+            for (TextPosition tp : positions) {
+                allPositionsWithPage.add(new TextPositionWithPage(tp, pageIndex));
+            }
+
+            fullTextBuilder.append(pageText);
+
+            System.out.println("[跨页提取] 页面 " + (pageIndex + 1) + " 提取了 " +
+                positions.size() + " 个字形，文本长度: " + pageText.length());
+        }
+
+        if (allPositionsWithPage.isEmpty()) {
+            System.out.println("[警告] 所有页面均未找到内容");
+            return false;
+        }
+
+        String fullText = fullTextBuilder.toString();
+        System.out.println("[跨页提取] 合并后文本总长度: " + fullText.length());
+
+        // ========== 阶段2：在完整文本中查找目标文本 ==========
+        // 提取纯TextPosition列表用于GlyphMatcher
+        List<TextPosition> allPositions = new ArrayList<>();
+        for (TextPositionWithPage tpWithPage : allPositionsWithPage) {
+            allPositions.add(tpWithPage.position);
+        }
+
+        List<TextPosition> matchedPositions = findTextPositions(allPositions, fullText, targetText);
+
+        if (matchedPositions.isEmpty()) {
+            String fullTextNorm = com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(fullText);
+            String targetTextNorm = com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(targetText);
+
+            System.out.println("[警告] 跨页匹配失败");
+            System.out.println("    → 合并文本(归一化前50): " +
+                (fullTextNorm.length() > 50 ? fullTextNorm.substring(0, 50) + "..." : fullTextNorm));
+            System.out.println("    → 目标文本(归一化前50): " +
+                (targetTextNorm.length() > 50 ? targetTextNorm.substring(0, 50) + "..." : targetTextNorm));
+            return false;
+        }
+
+        System.out.println("[成功] 跨页匹配成功，匹配了 " + matchedPositions.size() + " 个字形");
+
+        // ========== 阶段3：按页面分组匹配的TextPosition ==========
+        // 建立TextPosition到页面的映射
+        Map<TextPosition, Integer> positionToPage = new HashMap<>();
+        for (TextPositionWithPage tpWithPage : allPositionsWithPage) {
+            positionToPage.put(tpWithPage.position, tpWithPage.pageIndex);
+        }
+
+        // 按页面分组
+        Map<Integer, List<TextPosition>> pageToPositions = new HashMap<>();
+        for (TextPosition tp : matchedPositions) {
+            Integer pageIndex = positionToPage.get(tp);
+            if (pageIndex != null) {
+                pageToPositions.computeIfAbsent(pageIndex, k -> new ArrayList<>()).add(tp);
+            }
+        }
+
+        System.out.println("[跨页高亮] 匹配文本分布在 " + pageToPositions.size() + " 个页面");
+
+        // ========== 阶段4：为每个页面创建高亮注释 ==========
+        for (Map.Entry<Integer, List<TextPosition>> entry : pageToPositions.entrySet()) {
+            int pageIndex = entry.getKey();
+            List<TextPosition> positionsForPage = entry.getValue();
+
+            PDPage page = doc.getPage(pageIndex);
+            PDRectangle cropBox = page.getCropBox();
+            float pageHeight = cropBox.getHeight();
+
+            // 生成QuadPoints
+            float[] quadPoints = generateQuadPoints(positionsForPage, pageHeight);
+            PDRectangle rect = calculateBoundingBoxFromQuadPoints(quadPoints);
+
+            // 创建高亮注释
+            COSDictionary highlightDict = new COSDictionary();
+            highlightDict.setName(COSName.TYPE, "Annot");
+            highlightDict.setName(COSName.SUBTYPE, "Highlight");
+            PDAnnotationTextMarkup highlight = (PDAnnotationTextMarkup) PDAnnotation.createAnnotation(highlightDict);
+
+            highlight.setQuadPoints(quadPoints);
+            highlight.setRectangle(rect);
+
+            PDColor pdColor = new PDColor(color, PDDeviceRGB.INSTANCE);
+            highlight.setColor(pdColor);
+            highlight.setConstantOpacity(1.0f);
+            highlight.getCOSObject().setFloat(COSName.CA, 0.5f);
+            highlight.setPrinted(true);
+
+            // 设置批注内容
+            highlight.setContents(targetText);
+
+            page.getAnnotations().add(highlight);
+
+            System.out.println("[跨页高亮] 页面 " + (pageIndex + 1) + " 高亮了 " +
+                positionsForPage.size() + " 个字形");
+        }
+
+        return true;
+    }
+
+    /**
      * 在TextPosition列表中查找匹配的文本
      *
      * 算法：
@@ -880,12 +1053,13 @@ public class HighlightByMCID {
         int skipCount = 0;
         int errorCount = 0;
 
+        // 逐个处理每个Target
         for (int i = 0; i < targets.size(); i++) {
             HighlightTarget target = targets.get(i);
 
             // 跳过无效目标
             if (!target.isValid()) {
-                System.out.println("[跳过 #" + (i + 1) + "] " + target.getId() + " - MCID列表为空");
+                System.out.println("[跳过 #" + (i + 1) + "/" + targets.size() + "] " + target.getId() + " - MCID列表为空");
                 skipCount++;
                 continue;
             }
@@ -893,34 +1067,96 @@ public class HighlightByMCID {
             try {
                 System.out.println("\n[处理 #" + (i + 1) + "/" + targets.size() + "] " + target);
 
-                // 转换MCID字符串为整数集合
-                java.util.Set<Integer> mcidInts = target.getMcidIntegers();
+                // 检测是否跨页（通过pageStr和mcidStr字段）
+                boolean isAcrossPages = target.isAcrossPages();
 
-                if (mcidInts.isEmpty()) {
-                    System.out.println("  -> 跳过：MCID解析失败");
-                    skipCount++;
-                    continue;
-                }
+                if (isAcrossPages) {
+                    // 跨页处理
+                    String pageStr = target.getPageStr();
+                    String mcidStr = target.getMcidStr();
 
-                // 判断是否使用字符级别高亮
-                boolean success;
-                if (target.hasText()) {
-                    // 字符级别高亮：在MCID范围内查找文本并高亮
-                    System.out.println("  -> 使用字符级别高亮，目标文本: " + target.getText());
-                    success = highlightByTextInMcids(doc, target.getPage(), mcidInts, target.getPidText(), target.getText(), color, opacity);
+                    // 解析pageStr和mcidStr，构建Map<pageIndex, Set<mcids>>
+                    String[] pageGroups = pageStr.split("\\|");
+                    String[] mcidGroups = mcidStr.split("\\|");
+
+                    Map<Integer, Set<Integer>> pageToMcids = new LinkedHashMap<>();
+                    for (int j = 0; j < pageGroups.length; j++) {
+                        int pageNum = Integer.parseInt(pageGroups[j].trim()) - 1;  // 转换为0-based
+                        String mcidGroup = (j < mcidGroups.length) ? mcidGroups[j].trim() : "";
+
+                        if (!mcidGroup.isEmpty()) {
+                            Set<Integer> mcids = new LinkedHashSet<>();
+                            for (String mcid : mcidGroup.split(",")) {
+                                try {
+                                    mcids.add(Integer.parseInt(mcid.trim()));
+                                } catch (NumberFormatException e) {
+                                    System.err.println("[警告] 无法解析MCID: " + mcid);
+                                }
+                            }
+                            if (!mcids.isEmpty()) {
+                                pageToMcids.put(pageNum, mcids);
+                            }
+                        }
+                    }
+
+                    if (pageToMcids.isEmpty()) {
+                        System.out.println("  -> 跳过：所有页面的MCID解析失败");
+                        skipCount++;
+                        continue;
+                    }
+
+                    // 调用跨页高亮方法
+                    boolean success;
+                    if (target.hasText()) {
+                        System.out.println("  -> 使用跨页字符级别高亮，目标文本: " + target.getText());
+                        success = highlightByTextAcrossPages(doc, pageToMcids, target.getPidText(), target.getText(), color, opacity);
+                    } else {
+                        System.out.println("  -> 使用跨页MCID区域高亮");
+                        // 为每个页面分别高亮
+                        success = true;
+                        for (Map.Entry<Integer, Set<Integer>> pageEntry : pageToMcids.entrySet()) {
+                            highlightByMcid(doc, pageEntry.getKey(), pageEntry.getValue(), color, opacity);
+                        }
+                    }
+
+                    if (success) {
+                        successCount++;
+                        System.out.println("  -> 成功");
+                    } else {
+                        errorCount++;
+                        System.out.println("  -> 失败");
+                    }
+
                 } else {
-                    // MCID区域高亮：高亮整个MCID区域
-                    System.out.println("  -> 使用MCID区域高亮");
-                    highlightByMcid(doc, target.getPage(), mcidInts, color, opacity);
-                    success = true;  // highlightByMcid不返回布尔值，假设成功
-                }
+                    // 单页处理（原逻辑）
+                    Set<Integer> mcidInts = target.getMcidIntegers();
 
-                if (success) {
-                    successCount++;
-                    System.out.println("  -> 成功");
-                } else {
-                    errorCount++;
-                    System.out.println("  -> 失败");
+                    if (mcidInts.isEmpty()) {
+                        System.out.println("  -> 跳过：MCID解析失败");
+                        skipCount++;
+                        continue;
+                    }
+
+                    // 判断是否使用字符级别高亮
+                    boolean success;
+                    if (target.hasText()) {
+                        // 字符级别高亮
+                        System.out.println("  -> 使用字符级别高亮，目标文本: " + target.getText());
+                        success = highlightByTextInMcids(doc, target.getPage(), mcidInts, target.getPidText(), target.getText(), color, opacity);
+                    } else {
+                        // MCID区域高亮
+                        System.out.println("  -> 使用MCID区域高亮");
+                        highlightByMcid(doc, target.getPage(), mcidInts, color, opacity);
+                        success = true;
+                    }
+
+                    if (success) {
+                        successCount++;
+                        System.out.println("  -> 成功");
+                    } else {
+                        errorCount++;
+                        System.out.println("  -> 失败");
+                    }
                 }
 
             } catch (Exception e) {

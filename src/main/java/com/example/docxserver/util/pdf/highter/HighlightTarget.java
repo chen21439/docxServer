@@ -42,6 +42,16 @@ public class HighlightTarget {
     private String text;
 
     /**
+     * 可选：原始page字符串（用于跨页，如 "83|84"）
+     */
+    private String pageStr;
+
+    /**
+     * 可选：原始mcid字符串（用于跨页，如 "146,147,148|0,1,2,3"）
+     */
+    private String mcidStr;
+
+    /**
      * 默认构造函数
      */
     public HighlightTarget() {
@@ -217,6 +227,30 @@ public class HighlightTarget {
         return text != null && !text.trim().isEmpty();
     }
 
+    /**
+     * 是否为跨页（检查pageStr或mcidStr是否包含"|"）
+     */
+    public boolean isAcrossPages() {
+        return (pageStr != null && pageStr.contains("|")) ||
+               (mcidStr != null && mcidStr.contains("|"));
+    }
+
+    public String getPageStr() {
+        return pageStr;
+    }
+
+    public void setPageStr(String pageStr) {
+        this.pageStr = pageStr;
+    }
+
+    public String getMcidStr() {
+        return mcidStr;
+    }
+
+    public void setMcidStr(String mcidStr) {
+        this.mcidStr = mcidStr;
+    }
+
     @Override
     public String toString() {
         return "HighlightTarget{" +
@@ -224,6 +258,7 @@ public class HighlightTarget {
                 ", mcids=" + mcids +
                 ", id='" + id + '\'' +
                 (hasText() ? ", text='" + text + '\'' : "") +
+                (isAcrossPages() ? " [跨页]" : "") +
                 '}';
     }
 }
