@@ -728,28 +728,23 @@ public class HighlightByMCID {
      */
     private static List<TextPosition> findTextPositions(
             List<TextPosition> positions,
-            String fullText,
+            String fullText,       // 保留参数（向后兼容，可用于调试）
             String targetText) {
 
-        List<TextPosition> result = new ArrayList<>();
+        // 使用字形锚点匹配（GlyphMatcher）替代归一化索引切片
+        List<TextPosition> result = GlyphMatcher.matchGlyphSpan(positions, targetText);
 
-        // 归一化文本（去除多余空白符）
-        String normalizedFull = normalizeWhitespace(fullText);
-        String normalizedTarget = normalizeWhitespace(targetText);
+        // 调试：如果未找到匹配，打印归一化文本对比
+        if (result.isEmpty()) {
+            String mcidTextNorm = normalizeWhitespace(fullText);
+            String textNorm = normalizeWhitespace(targetText);
 
-        // 查找匹配位置（在归一化文本中）
-        int matchStart = normalizedFull.indexOf(normalizedTarget);
-        if (matchStart < 0) {
-            System.out.println("[警告] 未找到匹配的文本");
-            return result;
+            System.out.println("[警告] GlyphMatcher未找到匹配");
+            System.out.println("    → MCID文本(归一化): " +
+                (mcidTextNorm.length() > 50 ? mcidTextNorm.substring(0, 50) + "..." : mcidTextNorm));
+            System.out.println("    → target(归一化):   " +
+                (textNorm.length() > 50 ? textNorm.substring(0, 50) + "..." : textNorm));
         }
-
-        int matchEnd = matchStart + normalizedTarget.length();
-
-        // 映射归一化位置到原始TextPosition
-        // 需要建立归一化文本位置 -> 原始TextPosition的映射
-        result = mapNormalizedPositionsToTextPositions(
-            positions, fullText, normalizedFull, matchStart, matchEnd);
 
         return result;
     }
