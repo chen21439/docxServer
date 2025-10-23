@@ -737,12 +737,12 @@ public class ParagraphMapperRefactored {
                     // 打印详细信息
                     System.out.println("\n  [" + targetIndex + "] " + span.pid);
                     System.out.println("    页面: " + pageNum + " | MCID: " + mcidStr);
-                    System.out.println("    → PDF实际文本(归一化): " +
-                        (mcidTextNorm.length() > 80 ? mcidTextNorm.substring(0, 80) + "..." : mcidTextNorm));
-                    System.out.println("    → pidText(归一化):     " +
-                        (pidTextNorm.length() > 80 ? pidTextNorm.substring(0, 80) + "..." : pidTextNorm));
-                    System.out.println("    → 高亮text(归一化):    " +
-                        (textNorm.length() > 80 ? textNorm.substring(0, 80) + "..." : textNorm));
+                    System.out.println("    → PDF实际文本(归一化前50): " +
+                        (mcidTextNorm.length() > 50 ? mcidTextNorm.substring(0, 50) + "..." : mcidTextNorm));
+                    System.out.println("    → pidText(归一化前50):     " +
+                        (pidTextNorm.length() > 50 ? pidTextNorm.substring(0, 50) + "..." : pidTextNorm));
+                    System.out.println("    → 高亮text(归一化前50):    " +
+                        (textNorm.length() > 50 ? textNorm.substring(0, 50) + "..." : textNorm));
                     System.out.println("    → 成功");
 
                     // 统计页面高亮数量

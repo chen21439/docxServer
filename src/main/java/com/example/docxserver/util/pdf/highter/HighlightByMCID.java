@@ -651,26 +651,14 @@ public class HighlightByMCID {
         }
 
         String fullText = extractor.getText();
-        System.out.println("[调试-原始] MCID范围内的完整文本: " + fullText);
-        System.out.println("[调试-原始] 目标文本: " + targetText);
 
         // ========== 阶段2：查找匹配的TextPosition ==========
         List<TextPosition> matchedPositions = findTextPositions(allPositions, fullText, targetText);
 
         if (matchedPositions.isEmpty()) {
             System.out.println("[警告] 未找到匹配的文本");
-            System.out.println("[警告] 在MCID " + mcids + " 中未找到文本: " + targetText);
-
-            // 打印规范化后的对比
-            String mcidTextNorm = normalizeWhitespace(fullText);
-            String targetTextNorm = normalizeWhitespace(targetText);
-            System.out.println("  [MCID文本-norm后] " + mcidTextNorm);
-            System.out.println("  [目标文本-norm后] " + targetTextNorm);
-
             return;
         }
-
-        System.out.println("[调试] 找到 " + matchedPositions.size() + " 个匹配的字符");
 
         // ========== 阶段3：生成QuadPoints并高亮 ==========
         PDRectangle cropBox = page.getCropBox();
@@ -693,6 +681,9 @@ public class HighlightByMCID {
         highlight.setConstantOpacity(1.0f);
         highlight.getCOSObject().setFloat(COSName.CA, 0.5f);
         highlight.setPrinted(true);
+
+        // 设置批注内容为要高亮的文本
+        highlight.setContents(targetText);
 
         page.getAnnotations().add(highlight);
 
@@ -728,9 +719,6 @@ public class HighlightByMCID {
         String normalizedFull = normalizeWhitespace(fullText);
         String normalizedTarget = normalizeWhitespace(targetText);
 
-        System.out.println("[调试] 归一化后的完整文本: " + normalizedFull);
-        System.out.println("[调试] 归一化后的目标文本: " + normalizedTarget);
-
         // 查找匹配位置（在归一化文本中）
         int matchStart = normalizedFull.indexOf(normalizedTarget);
         if (matchStart < 0) {
@@ -739,7 +727,6 @@ public class HighlightByMCID {
         }
 
         int matchEnd = matchStart + normalizedTarget.length();
-        System.out.println("[调试] 匹配位置: " + matchStart + " - " + matchEnd);
 
         // 映射归一化位置到原始TextPosition
         // 需要建立归一化文本位置 -> 原始TextPosition的映射
