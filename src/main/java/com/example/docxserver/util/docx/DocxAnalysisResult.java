@@ -365,14 +365,22 @@ public class DocxAnalysisResult {
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class HeadingCandidate {
-        private String source;       // 检测来源：paragraph-outlineLvl, style-outlineLvl, style-name-map, heuristic
+        private String source;       // 检测来源：paragraph-outlineLvl, style-outlineLvl, cn-regex, heuristic
         private Integer level;       // 候选级别 (1-9)
         private Double confidence;   // 置信度 (0.0-1.0)
+        private Double score;        // 综合分数 (0.0-1.0)
+
+        @JsonProperty("initial_level")
+        private Integer initialLevel; // 初步判定的层级
 
         @JsonProperty("is_candidate")
         private Boolean isCandidate; // 是否为候选标题（待二次确认）
 
+        @JsonProperty("is_toc")
+        private Boolean isToc;       // 是否为目录行
+
         private String evidence;     // 证据/关键词片段
+        private List<String> signals; // 检测信号列表
 
         // Getters and Setters
         public String getSource() { return source; }
@@ -384,11 +392,23 @@ public class DocxAnalysisResult {
         public Double getConfidence() { return confidence; }
         public void setConfidence(Double confidence) { this.confidence = confidence; }
 
+        public Double getScore() { return score; }
+        public void setScore(Double score) { this.score = score; }
+
+        public Integer getInitialLevel() { return initialLevel; }
+        public void setInitialLevel(Integer initialLevel) { this.initialLevel = initialLevel; }
+
         public Boolean getIsCandidate() { return isCandidate; }
         public void setIsCandidate(Boolean isCandidate) { this.isCandidate = isCandidate; }
 
+        public Boolean getIsToc() { return isToc; }
+        public void setIsToc(Boolean isToc) { this.isToc = isToc; }
+
         public String getEvidence() { return evidence; }
         public void setEvidence(String evidence) { this.evidence = evidence; }
+
+        public List<String> getSignals() { return signals; }
+        public void setSignals(List<String> signals) { this.signals = signals; }
     }
 
     /**

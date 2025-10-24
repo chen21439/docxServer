@@ -94,14 +94,15 @@ public class DocxStructureAnalyzer {
     }
 
     /**
-     * 分析docx文件并保存为JSON
+     * 分析docx文件并保存为JSON（通用方法）
      *
      * @param docxFile docx文件
      * @param outputJsonFile 输出的JSON文件（可选，如果为null则自动生成文件名）
+     * @param stepSuffix 步骤后缀（如 "step1"），如果为null则使用 "analysis"
      * @return 分析结果
      * @throws IOException IO异常
      */
-    public static DocxAnalysisResult analyze(File docxFile, File outputJsonFile) throws IOException {
+    public static DocxAnalysisResult analyze(File docxFile, File outputJsonFile, String stepSuffix) throws IOException {
         try (FileInputStream fis = new FileInputStream(docxFile);
              XWPFDocument doc = new XWPFDocument(fis)) {
 
@@ -129,7 +130,8 @@ public class DocxStructureAnalyzer {
             if (outputJsonFile == null) {
                 String baseName = docxFile.getName().replaceAll("\\.docx$", "");
                 String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
-                outputJsonFile = new File(docxFile.getParent(), baseName + "_analysis_" + timestamp + ".json");
+                String suffix = (stepSuffix != null && !stepSuffix.isEmpty()) ? stepSuffix : "analysis";
+                outputJsonFile = new File(docxFile.getParent(), baseName + "_" + suffix + "_" + timestamp + ".json");
             }
 
             JSON_MAPPER.writeValue(outputJsonFile, result);
@@ -137,6 +139,30 @@ public class DocxStructureAnalyzer {
 
             return result;
         }
+    }
+
+    /**
+     * 分析docx文件并保存为JSON（兼容旧版本）
+     *
+     * @param docxFile docx文件
+     * @param outputJsonFile 输出的JSON文件（可选，如果为null则自动生成文件名）
+     * @return 分析结果
+     * @throws IOException IO异常
+     */
+    public static DocxAnalysisResult analyze(File docxFile, File outputJsonFile) throws IOException {
+        return analyze(docxFile, outputJsonFile, null);
+    }
+
+    /**
+     * Step 1: 头次标题判定（一次性打分）
+     * 输出文件名格式：{filename}_step1_YYYYMMDD_HHMMSS.json
+     *
+     * @param docxFile docx文件
+     * @return 分析结果
+     * @throws IOException IO异常
+     */
+    public static DocxAnalysisResult analyzeStep1(File docxFile) throws IOException {
+        return analyze(docxFile, null, "step1");
     }
 
     /**
@@ -320,12 +346,12 @@ public class DocxStructureAnalyzer {
     /**
      * 增强的标题检测方法（支持多源检测和置信度计算）
      *
-     * 检测优先级：
-     * 1. 段落直接声明的 outlineLvl (confidence=1.0)
-     * 2. 样式链中的 outlineLvl (confidence=0.9)
-     * 3. 样式名映射 (confidence=0.85)
-     * 4. 编号辅助信息 (仅加权，不单独定级)
-     * 5. 启发式判断 (confidence≤0.6，标记为候选)
+     * 检测优先级（Step 1 实现）：
+     * 0. 黑名单检测（目录、封面、页眉页脚） - 直接过滤
+     * 1. style-outlineLvl (score=1.0)
+     * 2. paragraph-outlineLvl (score=0.95)
+     * 3. 中文规范标题正则 (score=0.70-0.90)
+     * 4. 启发式判断 (score≤0.70)
      *
      * @param para 段落对象
      * @param doc 文档对象（可选，用于样式链解析）
@@ -340,40 +366,64 @@ public class DocxStructureAnalyzer {
             return null;
         }
 
-        // 1. 段落直接声明的 outlineLvl (优先级最高)
-        CTPPr pPr = para.getCTP().getPPr();
-        if (pPr != null && pPr.isSetOutlineLvl()) {
-            BigInteger outlineLvl = pPr.getOutlineLvl().getVal();
-            int level = outlineLvl.intValue() + 1; // 0-based → 1-based
-
-            HeadingInfo info = new HeadingInfo(level, "paragraph-outlineLvl", 1.0);
-            info.setOutlineLvlRaw(outlineLvl.intValue());
-            info.setStyleId(styleId);
-            return info;
+        // 0. 黑名单检测（目录、封面、页眉页脚）
+        if (ChineseHeadingDetector.isBlacklisted(text)) {
+            // 返回一个标记为 TOC 的 HeadingInfo，但不作为候选标题
+            HeadingInfo blacklisted = new HeadingInfo(0, "blacklist", 0.0);
+            blacklisted.setToc(true);
+            blacklisted.setCandidate(false);
+            blacklisted.setScore(0.0);
+            blacklisted.setInitialLevel(0);
+            blacklisted.addSignal("blacklist");
+            blacklisted.setEvidence("blacklisted: TOC/cover/header-footer");
+            return null;  // 直接返回 null，不处理黑名单段落
         }
 
-        // 2. 样式链中的 outlineLvl（需要沿 basedOn 链查找）
+        // 1. 样式链中的 outlineLvl（优先级最高）
+        CTPPr pPr = para.getCTP().getPPr();
         if (doc != null && styleId != null) {
             HeadingInfo styleInfo = detectHeadingFromStyleChain(doc, styleId);
             if (styleInfo != null) {
                 styleInfo.setStyleId(styleId);
+                styleInfo.setScore(1.0);
+                styleInfo.setInitialLevel(styleInfo.getLevel());
+                styleInfo.addSignal("style-outlineLvl:" + styleInfo.getOutlineLvlRaw());
                 return styleInfo;
             }
         }
 
-        // 3. 样式名映射（本地化支持）
-        if (styleId != null) {
-            String styleIdLower = styleId.toLowerCase();
-            Integer levelFromMap = STYLE_NAME_TO_LEVEL.get(styleIdLower);
-            if (levelFromMap != null) {
-                HeadingInfo info = new HeadingInfo(levelFromMap, "style-name-map", 0.85);
-                info.setStyleId(styleId);
-                info.setStyleName(styleId);
-                return info;
-            }
+        // 2. 段落直接声明的 outlineLvl（优先级第二）
+        if (pPr != null && pPr.isSetOutlineLvl()) {
+            BigInteger outlineLvl = pPr.getOutlineLvl().getVal();
+            int level = outlineLvl.intValue() + 1; // 0-based → 1-based
+
+            HeadingInfo info = new HeadingInfo(level, "paragraph-outlineLvl", 0.95);
+            info.setOutlineLvlRaw(outlineLvl.intValue());
+            info.setStyleId(styleId);
+            info.setScore(0.95);
+            info.setInitialLevel(level);
+            info.addSignal("paragraph-outlineLvl:" + outlineLvl.intValue());
+            return info;
         }
 
-        // 4. 编号级别（辅助信息，不单独定级，但可以增强启发式判断的置信度）
+        // 3. 中文规范标题正则匹配（优先级第三）
+        String normalizedText = ChineseHeadingDetector.normalizeCnTitle(text);
+        ChineseHeadingDetector.RegexHit regexHit = ChineseHeadingDetector.matchCnRegex(normalizedText);
+        if (regexHit != null) {
+            int level = regexHit.getLevel();
+            double score = 0.90 - (level - 1) * 0.05;  // L1=0.90, L2=0.85, L3=0.80, L4=0.75, L5=0.70
+            score = Math.max(score, 0.70);
+
+            HeadingInfo info = new HeadingInfo(level, "cn-regex", score);
+            info.setScore(score);
+            info.setInitialLevel(level);
+            info.setStyleId(styleId);
+            info.addSignal("cn-regex:" + regexHit.getPatternId());
+            info.setEvidence("cn-regex: " + regexHit.getPatternId());
+            return info;
+        }
+
+        // 4. 编号级别（辅助信息，用于增强启发式）
         Integer numberingIlvl = null;
         Integer numberingId = null;
         if (pPr != null && pPr.isSetNumPr() && pPr.getNumPr().isSetIlvl()) {
@@ -384,21 +434,33 @@ public class DocxStructureAnalyzer {
         }
 
         // 5. 启发式判断（兜底方案）
-        HeadingInfo heuristicInfo = detectHeadingHeuristic(para, text);
-        if (heuristicInfo != null) {
-            heuristicInfo.setStyleId(styleId);
-            heuristicInfo.setNumberingIlvl(numberingIlvl);
-            heuristicInfo.setNumberingId(numberingId);
+        ChineseHeadingDetector.HeadingInfo heuristicInfo =
+            ChineseHeadingDetector.detectHeuristicEnhanced(para, text, normalizedText, null);
 
-            // 如果有编号信息，可以提升置信度
+        if (heuristicInfo != null) {
+            // 转换为 DocxStructureAnalyzer.HeadingInfo
+            HeadingInfo info = new HeadingInfo(
+                heuristicInfo.getLevel(),
+                heuristicInfo.getSource(),
+                heuristicInfo.getConfidence()
+            );
+            info.setScore(heuristicInfo.getScore());
+            info.setInitialLevel(heuristicInfo.getInitialLevel());
+            info.setStyleId(styleId);
+            info.setNumberingIlvl(numberingIlvl);
+            info.setNumberingId(numberingId);
+            info.setCandidate(heuristicInfo.isCandidate());
+            info.setSignals(heuristicInfo.getSignals());
+            info.setEvidence(heuristicInfo.getEvidence());
+
+            // 如果有编号信息，可以提升分数
             if (numberingIlvl != null) {
-                double confidence = heuristicInfo.getConfidence();
-                heuristicInfo.setConfidence(Math.min(0.75, confidence + 0.1));
-                heuristicInfo.setEvidence((heuristicInfo.getEvidence() != null ? heuristicInfo.getEvidence() + "; " : "")
-                    + "numbering-ilvl=" + numberingIlvl);
+                double score = info.getScore();
+                info.setScore(Math.min(0.75, score + 0.05));
+                info.addSignal("numbering-ilvl=" + numberingIlvl);
             }
 
-            return heuristicInfo;
+            return info;
         }
 
         return null;
@@ -574,8 +636,12 @@ public class DocxStructureAnalyzer {
             candidate.setSource(headingInfo.getSource());
             candidate.setLevel(headingInfo.getLevel());
             candidate.setConfidence(headingInfo.getConfidence());
+            candidate.setScore(headingInfo.getScore());  // 新增：综合分数
+            candidate.setInitialLevel(headingInfo.getInitialLevel());  // 新增：初步层级
             candidate.setIsCandidate(headingInfo.isCandidate());
+            candidate.setIsToc(headingInfo.isToc());  // 新增：TOC标记
             candidate.setEvidence(headingInfo.getEvidence());
+            candidate.setSignals(headingInfo.getSignals());  // 新增：信号列表
             block.setHeadingCandidate(candidate);
         }
 
@@ -1076,11 +1142,15 @@ public class DocxStructureAnalyzer {
             return;
         }
 
-        System.out.println("======== Starting Analysis ========");
+        System.out.println("======== Starting Step 1 Analysis ========");
+        System.out.println("Step: 头次标题判定（一次性打分）");
         System.out.println("Input file: " + docxFile.getAbsolutePath());
         System.out.println();
 
-        DocxAnalysisResult result = analyze(docxFile, outputFile);
+        // 使用 Step 1 分析方法（输出文件名带 step1 标识）
+        DocxAnalysisResult result = outputFile != null ?
+            analyze(docxFile, outputFile, "step1") :
+            analyzeStep1(docxFile);
 
         System.out.println();
         System.out.println("======== Analysis Summary ========");
@@ -1176,21 +1246,29 @@ public class DocxStructureAnalyzer {
      */
     private static class HeadingInfo {
         private Integer level;          // 标题级别 (1-9)
-        private String source;          // 来源: "paragraph-outlineLvl", "style-outlineLvl", "style-name-map", "heuristic", "numbering-aux"
+        private String source;          // 来源: "paragraph-outlineLvl", "style-outlineLvl", "cn-regex", "heuristic"
         private double confidence;      // 置信度 (0.0-1.0)
+        private double score;           // 综合分数 (0.0-1.0)
+        private Integer initialLevel;   // 初步判定的层级
         private String styleId;         // 样式ID
         private String styleName;       // 样式显示名
         private Integer outlineLvlRaw;  // 原始 outlineLvl 值 (0-based)
         private Integer numberingId;    // 编号ID
         private Integer ilvl;           // 编号级别
         private boolean isCandidate;    // 是否为候选标题（待二次确认）
+        private boolean isToc;          // 是否为目录行
         private String evidence;        // 证据/关键词片段
+        private List<String> signals;   // 检测信号列表
 
         public HeadingInfo(Integer level, String source, double confidence) {
             this.level = level;
             this.source = source;
             this.confidence = confidence;
+            this.score = confidence;  // 默认 score = confidence
+            this.initialLevel = level;
             this.isCandidate = false;
+            this.isToc = false;
+            this.signals = new ArrayList<>();
         }
 
         // Getters and Setters
@@ -1202,6 +1280,12 @@ public class DocxStructureAnalyzer {
 
         public double getConfidence() { return confidence; }
         public void setConfidence(double confidence) { this.confidence = confidence; }
+
+        public double getScore() { return score; }
+        public void setScore(double score) { this.score = score; }
+
+        public Integer getInitialLevel() { return initialLevel; }
+        public void setInitialLevel(Integer initialLevel) { this.initialLevel = initialLevel; }
 
         public String getStyleId() { return styleId; }
         public void setStyleId(String styleId) { this.styleId = styleId; }
@@ -1223,7 +1307,33 @@ public class DocxStructureAnalyzer {
         public boolean isCandidate() { return isCandidate; }
         public void setCandidate(boolean candidate) { isCandidate = candidate; }
 
+        public boolean isToc() { return isToc; }
+        public void setToc(boolean toc) { isToc = toc; }
+
         public String getEvidence() { return evidence; }
         public void setEvidence(String evidence) { this.evidence = evidence; }
+
+        public List<String> getSignals() { return signals; }
+        public void setSignals(List<String> signals) { this.signals = signals; }
+        public void addSignal(String signal) {
+            if (this.signals == null) this.signals = new ArrayList<>();
+            this.signals.add(signal);
+        }
+    }
+
+    /**
+     * 中文正则匹配结果
+     */
+    private static class RegexHit {
+        private int level;
+        private String patternId;
+
+        public RegexHit(int level, String patternId) {
+            this.level = level;
+            this.patternId = patternId;
+        }
+
+        public int getLevel() { return level; }
+        public String getPatternId() { return patternId; }
     }
 }
