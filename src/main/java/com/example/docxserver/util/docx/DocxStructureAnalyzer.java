@@ -166,6 +166,663 @@ public class DocxStructureAnalyzer {
     }
 
     /**
+     * Step 2: 章节栈建树（降噪、纠偏）
+     * 输出文件名格式：{filename}_step2_YYYYMMDD_HHMMSS.json
+     *
+     * @param docxFile docx文件
+     * @return 分析结果
+     * @throws IOException IO异常
+     */
+    public static DocxAnalysisResult analyzeStep2(File docxFile) throws IOException {
+        try (FileInputStream fis = new FileInputStream(docxFile);
+             XWPFDocument doc = new XWPFDocument(fis)) {
+
+            DocxAnalysisResult result = new DocxAnalysisResult();
+
+            // 1. 提取文档元数据
+            result.setDocMeta(extractDocMeta(doc, docxFile.getName()));
+
+            // 2. 统计布局信息
+            result.setLayoutStats(calculateLayoutStats(doc));
+
+            // 3. 构建文档块流（平铺结构）- Step 1
+            result.setBlocks(buildBlockStream(doc));
+
+            // 4. 构建章节树（树形结构）- Step 2
+            List<DocxAnalysisResult.Section> sections = SectionTreeBuilder.buildSectionTree(result.getBlocks());
+            result.setSections(sections);
+
+            // 5. 保存为JSON
+            String baseName = docxFile.getName().replaceAll("\\.docx$", "");
+            String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+            File outputFile = new File(docxFile.getParent(), baseName + "_step2_" + timestamp + ".json");
+
+            JSON_MAPPER.writeValue(outputFile, result);
+            System.out.println("Analysis result saved to: " + outputFile.getAbsolutePath());
+
+            // 6. 打印树统计信息
+            Map<String, Object> treeStats = SectionTreeBuilder.getTreeStats(sections);
+            System.out.println();
+            System.out.println("======== Section Tree Stats ========");
+            System.out.println("  - Total sections: " + treeStats.get("total_sections"));
+            System.out.println("  - Total blocks (tables/paragraphs): " + treeStats.get("total_blocks"));
+            System.out.println("  - Max depth: " + treeStats.get("max_depth"));
+
+            return result;
+        }
+    }
+
+    /**
+     * Step 3: 合成嵌套表检测（伪子表切块）
+     * 输出文件名格式：{filename}_step3_YYYYMMDD_HHMMSS.json
+     *
+     * @param docxFile docx文件
+     * @return 分析结果
+     * @throws IOException IO异常
+     */
+    public static DocxAnalysisResult analyzeStep3(File docxFile) throws IOException {
+        try (FileInputStream fis = new FileInputStream(docxFile);
+             XWPFDocument doc = new XWPFDocument(fis)) {
+
+            DocxAnalysisResult result = new DocxAnalysisResult();
+
+            // 1. 提取文档元数据
+            result.setDocMeta(extractDocMeta(doc, docxFile.getName()));
+
+            // 2. 统计布局信息
+            result.setLayoutStats(calculateLayoutStats(doc));
+
+            // 3. 构建文档块流（平铺结构）- Step 1
+            //    需要保留对原始 XWPFTable 的引用，用于 Step 3 的子表检测
+            result.setBlocks(buildBlockStreamWithTableRefs(doc));
+
+            // 4. 构建章节树（树形结构）- Step 2
+            List<DocxAnalysisResult.Section> sections = SectionTreeBuilder.buildSectionTree(result.getBlocks());
+            result.setSections(sections);
+
+            // 5. 合成嵌套表检测 - Step 3
+            int syntheticTableCount = detectAndAttachSyntheticTables(result.getBlocks(), doc);
+
+            // 6. 保存为JSON
+            String baseName = docxFile.getName().replaceAll("\\.docx$", "");
+            String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+            File outputFile = new File(docxFile.getParent(), baseName + "_step3_" + timestamp + ".json");
+
+            JSON_MAPPER.writeValue(outputFile, result);
+            System.out.println("Analysis result saved to: " + outputFile.getAbsolutePath());
+
+            // 7. 打印统计信息
+            Map<String, Object> treeStats = SectionTreeBuilder.getTreeStats(sections);
+            System.out.println();
+            System.out.println("======== Step 3 Analysis Stats ========");
+            System.out.println("  - Total sections: " + treeStats.get("total_sections"));
+            System.out.println("  - Total blocks: " + treeStats.get("total_blocks"));
+            System.out.println("  - Max depth: " + treeStats.get("max_depth"));
+            System.out.println("  - Synthetic sub-tables detected: " + syntheticTableCount);
+
+            return result;
+        }
+    }
+
+    /**
+     * Step 4: 弱标题后判定（邻域确认）
+     * 输出文件名格式：{filename}_step4_YYYYMMDD_HHMMSS.json
+     *
+     * @param docxFile docx文件
+     * @return 分析结果
+     * @throws IOException IO异常
+     */
+    public static DocxAnalysisResult analyzeStep4(File docxFile) throws IOException {
+        try (FileInputStream fis = new FileInputStream(docxFile);
+             XWPFDocument doc = new XWPFDocument(fis)) {
+
+            DocxAnalysisResult result = new DocxAnalysisResult();
+
+            // 1. 提取文档元数据
+            result.setDocMeta(extractDocMeta(doc, docxFile.getName()));
+
+            // 2. 统计布局信息
+            result.setLayoutStats(calculateLayoutStats(doc));
+
+            // 3. 构建文档块流（平铺结构）- Step 1
+            result.setBlocks(buildBlockStreamWithTableRefs(doc));
+
+            // 4. 弱标题验证 - Step 4（在建树之前）
+            WeakHeadingValidator.ValidationResult validationResult =
+                WeakHeadingValidator.validateWeakHeadings(result.getBlocks());
+
+            // 5. 构建章节树（树形结构）- Step 2（使用验证后的标题）
+            List<DocxAnalysisResult.Section> sections = SectionTreeBuilder.buildSectionTree(result.getBlocks());
+            result.setSections(sections);
+
+            // 6. 合成嵌套表检测 - Step 3
+            int syntheticTableCount = detectAndAttachSyntheticTables(result.getBlocks(), doc);
+
+            // 7. 保存为JSON
+            String baseName = docxFile.getName().replaceAll("\\.docx$", "");
+            String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+            File outputFile = new File(docxFile.getParent(), baseName + "_step4_" + timestamp + ".json");
+
+            JSON_MAPPER.writeValue(outputFile, result);
+            System.out.println("Analysis result saved to: " + outputFile.getAbsolutePath());
+
+            // 8. 打印统计信息
+            Map<String, Object> treeStats = SectionTreeBuilder.getTreeStats(sections);
+            System.out.println();
+            System.out.println("======== Step 4 Analysis Stats ========");
+            System.out.println("  - Total sections: " + treeStats.get("total_sections"));
+            System.out.println("  - Total blocks: " + treeStats.get("total_blocks"));
+            System.out.println("  - Max depth: " + treeStats.get("max_depth"));
+            System.out.println("  - Synthetic sub-tables detected: " + syntheticTableCount);
+            System.out.println();
+            System.out.println("  - Weak heading candidates: " + validationResult.getTotalWeakHeadings());
+            System.out.println("  - Upgraded to strong headings: " + validationResult.getUpgradedCount());
+            System.out.println("  - Demoted to paragraphs: " + validationResult.getDemotedCount());
+
+            // 打印升级的弱标题详情
+            if (!validationResult.getUpgradedHeadings().isEmpty()) {
+                System.out.println();
+                System.out.println("  Upgraded headings:");
+                for (WeakHeadingValidator.HeadingDecision decision : validationResult.getUpgradedHeadings()) {
+                    System.out.println("    - " + decision.getId() + ": \"" +
+                        (decision.getText().length() > 40 ? decision.getText().substring(0, 40) + "..." : decision.getText()) + "\"");
+                    System.out.println("      Signals: " + decision.getSignals());
+                }
+            }
+
+            return result;
+        }
+    }
+
+    /**
+     * Step 5: 模型辅助判定（灰区决策）
+     * 输出文件名格式：{filename}_step5_YYYYMMDD_HHMMSS.json
+     *
+     * 功能：
+     * - 对 Step 4 中分数在灰区的弱标题进行模型辅助判定
+     * - 对 Step 3 中置信度在 0.65~0.75 的子表进行模型辅助判定
+     * - 严格控制模型调用次数（最多 3-5 次）
+     *
+     * @param docxFile docx文件
+     * @return 分析结果
+     * @throws IOException IO异常
+     */
+    public static DocxAnalysisResult analyzeStep5(File docxFile) throws IOException {
+        try (FileInputStream fis = new FileInputStream(docxFile);
+             XWPFDocument doc = new XWPFDocument(fis)) {
+
+            DocxAnalysisResult result = new DocxAnalysisResult();
+
+            // 1. 提取文档元数据
+            result.setDocMeta(extractDocMeta(doc, docxFile.getName()));
+
+            // 2. 统计布局信息
+            result.setLayoutStats(calculateLayoutStats(doc));
+
+            // 3. 构建文档块流（平铺结构）- Step 1
+            result.setBlocks(buildBlockStreamWithTableRefs(doc));
+
+            // 4. 弱标题验证 - Step 4（在建树之前）
+            WeakHeadingValidator.ValidationResult validationResult =
+                WeakHeadingValidator.validateWeakHeadings(result.getBlocks());
+
+            // 5. 收集灰区弱标题（需要模型辅助）
+            List<ModelAssistant.WeakHeadingDecision> grayZoneHeadings = collectGrayZoneWeakHeadings(result.getBlocks());
+
+            int modelAssistedHeadingCount = 0;
+            if (!grayZoneHeadings.isEmpty()) {
+                System.out.println("Found " + grayZoneHeadings.size() + " gray-zone weak headings, calling model for assistance...");
+
+                // 调用模型判定
+                Map<String, Boolean> modelDecisions = ModelAssistant.judgeWeakHeadings(grayZoneHeadings);
+
+                // 根据模型判定结果更新 heading_candidate
+                modelAssistedHeadingCount = applyModelDecisionsToHeadings(result.getBlocks(), modelDecisions);
+
+                System.out.println("Model upgraded " + modelAssistedHeadingCount + " headings based on context analysis.");
+            } else {
+                System.out.println("No gray-zone weak headings found, skipping model assistance.");
+            }
+
+            // 6. 构建章节树（树形结构）- Step 2（使用验证后的标题）
+            List<DocxAnalysisResult.Section> sections = SectionTreeBuilder.buildSectionTree(result.getBlocks());
+            result.setSections(sections);
+
+            // 7. 合成嵌套表检测 - Step 3
+            int syntheticTableCount = detectAndAttachSyntheticTables(result.getBlocks(), doc);
+
+            // 8. 收集灰区子表（需要模型辅助）
+            List<ModelAssistant.SubTableDecision> grayZoneSubTables = collectGrayZoneSubTables(result.getBlocks());
+
+            int modelAssistedSubTableCount = 0;
+            if (!grayZoneSubTables.isEmpty()) {
+                System.out.println("Found " + grayZoneSubTables.size() + " gray-zone sub-tables, calling model for assistance...");
+
+                // 调用模型判定
+                Map<String, Boolean> modelDecisions = ModelAssistant.judgeSubTables(grayZoneSubTables);
+
+                // 根据模型判定结果更新子表（移除不确定的子表）
+                modelAssistedSubTableCount = applyModelDecisionsToSubTables(result.getBlocks(), modelDecisions);
+
+                System.out.println("Model confirmed " + modelAssistedSubTableCount + " sub-tables, removed others.");
+            } else {
+                System.out.println("No gray-zone sub-tables found, skipping model assistance.");
+            }
+
+            // 9. 保存为JSON
+            String baseName = docxFile.getName().replaceAll("\\.docx$", "");
+            String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+            File outputFile = new File(docxFile.getParent(), baseName + "_step5_" + timestamp + ".json");
+
+            JSON_MAPPER.writeValue(outputFile, result);
+            System.out.println("Analysis result saved to: " + outputFile.getAbsolutePath());
+
+            // 10. 打印统计信息
+            Map<String, Object> treeStats = SectionTreeBuilder.getTreeStats(sections);
+            System.out.println();
+            System.out.println("======== Step 5 Analysis Stats ========");
+            System.out.println("  - Total sections: " + treeStats.get("total_sections"));
+            System.out.println("  - Total blocks: " + treeStats.get("total_blocks"));
+            System.out.println("  - Max depth: " + treeStats.get("max_depth"));
+            System.out.println("  - Synthetic sub-tables detected: " + syntheticTableCount);
+            System.out.println();
+            System.out.println("  - Weak heading candidates: " + validationResult.getTotalWeakHeadings());
+            System.out.println("  - Upgraded to strong headings: " + validationResult.getUpgradedCount());
+            System.out.println("  - Demoted to paragraphs: " + validationResult.getDemotedCount());
+            System.out.println();
+            System.out.println("  - Model-assisted headings: " + modelAssistedHeadingCount);
+            System.out.println("  - Model-confirmed sub-tables: " + modelAssistedSubTableCount);
+
+            return result;
+        }
+    }
+
+    /**
+     * 收集灰区弱标题（分数在 0.60~0.75 之间且有信号冲突）
+     *
+     * @param blocks 块列表
+     * @return 灰区弱标题列表
+     */
+    private static List<ModelAssistant.WeakHeadingDecision> collectGrayZoneWeakHeadings(
+            List<DocxAnalysisResult.Block> blocks) {
+
+        List<ModelAssistant.WeakHeadingDecision> grayZone = new ArrayList<>();
+
+        for (DocxAnalysisResult.Block block : blocks) {
+            if (!(block instanceof DocxAnalysisResult.ParagraphBlock)) {
+                continue;
+            }
+
+            DocxAnalysisResult.ParagraphBlock para = (DocxAnalysisResult.ParagraphBlock) block;
+            DocxAnalysisResult.HeadingCandidate candidate = para.getHeadingCandidate();
+
+            if (candidate == null) {
+                continue;
+            }
+
+            Double score = candidate.getScore();
+            if (score == null) {
+                continue;
+            }
+
+            // 灰区判定：0.60 ~ 0.75（不包括已经升级的 0.75）
+            if (score >= 0.60 && score < 0.75) {
+                // 检查是否有信号冲突（有正面信号也有负面信号）
+                List<String> signals = candidate.getSignals();
+                if (signals != null && signals.size() >= 2) {
+                    // 获取上下文（前后 200 字）
+                    String context = extractContext(blocks, para, 200);
+
+                    grayZone.add(new ModelAssistant.WeakHeadingDecision(
+                        para.getId(),
+                        para.getText(),
+                        context,
+                        score,
+                        new ArrayList<>(signals)
+                    ));
+                }
+            }
+        }
+
+        return grayZone;
+    }
+
+    /**
+     * 收集灰区子表（置信度在 0.65~0.75）
+     *
+     * @param blocks 块列表
+     * @return 灰区子表列表
+     */
+    private static List<ModelAssistant.SubTableDecision> collectGrayZoneSubTables(
+            List<DocxAnalysisResult.Block> blocks) {
+
+        List<ModelAssistant.SubTableDecision> grayZone = new ArrayList<>();
+
+        for (DocxAnalysisResult.Block block : blocks) {
+            if (!(block instanceof DocxAnalysisResult.TableBlock)) {
+                continue;
+            }
+
+            DocxAnalysisResult.TableBlock table = (DocxAnalysisResult.TableBlock) block;
+
+            // 遍历所有行的嵌套表
+            if (table.getRows() != null) {
+                for (DocxAnalysisResult.TableRow row : table.getRows()) {
+                    if (row.getCells() != null) {
+                        for (DocxAnalysisResult.TableCell cell : row.getCells()) {
+                            if (cell.getNestedTables() != null) {
+                                for (DocxAnalysisResult.TableBlock subTable : cell.getNestedTables()) {
+                                    if (subTable.getSynthetic() != null && subTable.getSynthetic()) {
+                                        Double confidence = subTable.getConfidence();
+                                        if (confidence != null && confidence >= 0.65 && confidence <= 0.75) {
+                                            // 提取列头
+                                            List<String> columnHeaders = new ArrayList<>();
+                                            if (subTable.getColumns() != null) {
+                                                for (DocxAnalysisResult.TableColumn col : subTable.getColumns()) {
+                                                    columnHeaders.add(col.getLabel());
+                                                }
+                                            }
+
+                                            int mainTableColCount = table.getColumns() != null ? table.getColumns().size() : 0;
+                                            int subTableColCount = subTable.getColumns() != null ? subTable.getColumns().size() : 0;
+
+                                            grayZone.add(new ModelAssistant.SubTableDecision(
+                                                subTable.getId(),
+                                                columnHeaders,
+                                                mainTableColCount,
+                                                subTableColCount,
+                                                confidence
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return grayZone;
+    }
+
+    /**
+     * 提取段落上下文（前后 N 个字符）
+     *
+     * @param blocks 块列表
+     * @param targetPara 目标段落
+     * @param contextSize 上下文大小（字符数）
+     * @return 上下文文本
+     */
+    private static String extractContext(List<DocxAnalysisResult.Block> blocks,
+                                        DocxAnalysisResult.ParagraphBlock targetPara,
+                                        int contextSize) {
+        StringBuilder context = new StringBuilder();
+        boolean found = false;
+        int beforeChars = 0;
+        int afterChars = 0;
+
+        // 找到目标段落的位置
+        int targetIndex = -1;
+        for (int i = 0; i < blocks.size(); i++) {
+            if (blocks.get(i) == targetPara) {
+                targetIndex = i;
+                break;
+            }
+        }
+
+        if (targetIndex == -1) {
+            return targetPara.getText();  // 找不到就返回段落本身
+        }
+
+        // 向前收集上下文
+        for (int i = targetIndex - 1; i >= 0 && beforeChars < contextSize; i--) {
+            DocxAnalysisResult.Block block = blocks.get(i);
+            if (block instanceof DocxAnalysisResult.ParagraphBlock) {
+                String text = ((DocxAnalysisResult.ParagraphBlock) block).getText();
+                if (text != null) {
+                    context.insert(0, text + " ");
+                    beforeChars += text.length();
+                }
+            }
+        }
+
+        // 添加目标段落
+        context.append("[当前段落: ").append(targetPara.getText()).append("] ");
+
+        // 向后收集上下文
+        for (int i = targetIndex + 1; i < blocks.size() && afterChars < contextSize; i++) {
+            DocxAnalysisResult.Block block = blocks.get(i);
+            if (block instanceof DocxAnalysisResult.ParagraphBlock) {
+                String text = ((DocxAnalysisResult.ParagraphBlock) block).getText();
+                if (text != null) {
+                    context.append(text).append(" ");
+                    afterChars += text.length();
+                }
+            } else if (block instanceof DocxAnalysisResult.TableBlock) {
+                context.append("[表格] ");
+                break;  // 遇到表格就停止
+            }
+        }
+
+        return context.toString().trim();
+    }
+
+    /**
+     * 应用模型判定结果到弱标题
+     *
+     * @param blocks 块列表
+     * @param modelDecisions 模型判定结果（id -> 是否升级）
+     * @return 升级的标题数量
+     */
+    private static int applyModelDecisionsToHeadings(List<DocxAnalysisResult.Block> blocks,
+                                                     Map<String, Boolean> modelDecisions) {
+        int upgradedCount = 0;
+
+        for (DocxAnalysisResult.Block block : blocks) {
+            if (!(block instanceof DocxAnalysisResult.ParagraphBlock)) {
+                continue;
+            }
+
+            DocxAnalysisResult.ParagraphBlock para = (DocxAnalysisResult.ParagraphBlock) block;
+            Boolean shouldUpgrade = modelDecisions.get(para.getId());
+
+            if (shouldUpgrade != null && shouldUpgrade) {
+                DocxAnalysisResult.HeadingCandidate candidate = para.getHeadingCandidate();
+                if (candidate != null) {
+                    candidate.setScore(0.75);  // 升级为强标题
+                    if (candidate.getSignals() == null) {
+                        candidate.setSignals(new ArrayList<>());
+                    }
+                    candidate.getSignals().add("model-assisted:upgraded");
+                    upgradedCount++;
+                }
+            }
+        }
+
+        return upgradedCount;
+    }
+
+    /**
+     * 应用模型判定结果到子表（移除不确定的子表）
+     *
+     * @param blocks 块列表
+     * @param modelDecisions 模型判定结果（tableId -> 是否为子表）
+     * @return 确认的子表数量
+     */
+    private static int applyModelDecisionsToSubTables(List<DocxAnalysisResult.Block> blocks,
+                                                       Map<String, Boolean> modelDecisions) {
+        int confirmedCount = 0;
+
+        for (DocxAnalysisResult.Block block : blocks) {
+            if (!(block instanceof DocxAnalysisResult.TableBlock)) {
+                continue;
+            }
+
+            DocxAnalysisResult.TableBlock table = (DocxAnalysisResult.TableBlock) block;
+
+            // 遍历所有行的嵌套表
+            if (table.getRows() != null) {
+                for (DocxAnalysisResult.TableRow row : table.getRows()) {
+                    if (row.getCells() != null) {
+                        for (DocxAnalysisResult.TableCell cell : row.getCells()) {
+                            if (cell.getNestedTables() != null) {
+                                // 使用迭代器安全删除
+                                Iterator<DocxAnalysisResult.TableBlock> iterator =
+                                    cell.getNestedTables().iterator();
+
+                                while (iterator.hasNext()) {
+                                    DocxAnalysisResult.TableBlock subTable = iterator.next();
+                                    Boolean isSubTable = modelDecisions.get(subTable.getId());
+
+                                    if (isSubTable != null) {
+                                        if (isSubTable) {
+                                            // 模型确认为子表，添加信号
+                                            DocxAnalysisResult.TableMetadata metadata = subTable.getMetadata();
+                                            if (metadata == null) {
+                                                metadata = new DocxAnalysisResult.TableMetadata();
+                                                subTable.setMetadata(metadata);
+                                            }
+                                            if (metadata.getHeaderSignals() == null) {
+                                                metadata.setHeaderSignals(new ArrayList<>());
+                                            }
+
+                                            DocxAnalysisResult.HeaderSignal signal = new DocxAnalysisResult.HeaderSignal();
+                                            signal.setType("model-confirmed");
+                                            signal.setConfidence(0.85);
+                                            metadata.getHeaderSignals().add(signal);
+
+                                            confirmedCount++;
+                                        } else {
+                                            // 模型判定为非子表，移除
+                                            iterator.remove();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return confirmedCount;
+    }
+
+    /**
+     * 构建文档块流，并保留对原始 XWPFTable 的引用（用于 Step 3）
+     * TODO: 这是一个简化版本，实际上应该重构 buildBlockStream 来支持返回额外的元数据
+     *
+     * @param doc XWPF文档
+     * @return 块列表
+     */
+    private static List<DocxAnalysisResult.Block> buildBlockStreamWithTableRefs(XWPFDocument doc) {
+        // 目前先使用原来的方法，后续可以优化
+        return buildBlockStream(doc);
+    }
+
+    /**
+     * 检测并附加合成嵌套表到各个 TableBlock
+     *
+     * @param blocks 块列表
+     * @param doc XWPF文档（用于获取原始表格对象）
+     * @return 检测到的合成子表总数
+     */
+    private static int detectAndAttachSyntheticTables(List<DocxAnalysisResult.Block> blocks, XWPFDocument doc) {
+        int totalSyntheticTables = 0;
+
+        // 获取文档中的所有表格（按顺序）
+        List<XWPFTable> xwpfTables = doc.getTables();
+        int tableIndex = 0;
+
+        for (DocxAnalysisResult.Block block : blocks) {
+            if (block instanceof DocxAnalysisResult.TableBlock) {
+                DocxAnalysisResult.TableBlock tableBlock = (DocxAnalysisResult.TableBlock) block;
+
+                // 只对顶层表格检测合成子表（level=1）
+                if (tableBlock.getLevel() != null && tableBlock.getLevel() == 1 && tableIndex < xwpfTables.size()) {
+                    XWPFTable xwpfTable = xwpfTables.get(tableIndex);
+
+                    // 执行合成子表检测
+                    List<SyntheticTableDetector.SyntheticSubTable> syntheticTables =
+                        SyntheticTableDetector.detectSyntheticTables(
+                            xwpfTable, tableBlock.getId(), tableBlock.getColumns());
+
+                    if (!syntheticTables.isEmpty()) {
+                        // 将合成子表转换为 TableBlock 并附加到行的 nested_tables
+                        attachSyntheticTablesToRows(tableBlock, syntheticTables);
+                        totalSyntheticTables += syntheticTables.size();
+                    }
+
+                    tableIndex++;
+                }
+            }
+        }
+
+        return totalSyntheticTables;
+    }
+
+    /**
+     * 将合成子表附加到对应的表格行
+     *
+     * @param parentTable 父表格块
+     * @param syntheticTables 检测到的合成子表列表
+     */
+    private static void attachSyntheticTablesToRows(
+            DocxAnalysisResult.TableBlock parentTable,
+            List<SyntheticTableDetector.SyntheticSubTable> syntheticTables) {
+
+        if (parentTable.getRows() == null || parentTable.getRows().isEmpty()) {
+            return;  // 没有行数据，无法附加
+        }
+
+        for (SyntheticTableDetector.SyntheticSubTable syntheticTable : syntheticTables) {
+            // 创建 TableBlock 表示合成子表
+            DocxAnalysisResult.TableBlock subTableBlock = new DocxAnalysisResult.TableBlock();
+            subTableBlock.setId(syntheticTable.id);
+            subTableBlock.setSynthetic(true);
+            subTableBlock.setSourceRows(syntheticTable.sourceRows);
+            subTableBlock.setConfidence(syntheticTable.confidence);
+            subTableBlock.setColumns(syntheticTable.columns);
+            subTableBlock.setParentTableId(parentTable.getId());
+
+            // 添加检测信号到 metadata
+            DocxAnalysisResult.TableMetadata metadata = new DocxAnalysisResult.TableMetadata();
+            List<DocxAnalysisResult.HeaderSignal> headerSignals = new ArrayList<>();
+            DocxAnalysisResult.HeaderSignal signal = new DocxAnalysisResult.HeaderSignal();
+            signal.setType("syntheticHeaderMatch");
+            signal.setRows(Arrays.asList(syntheticTable.headerRowIndex));
+            signal.setConfidence(syntheticTable.confidence);
+            headerSignals.add(signal);
+            metadata.setHeaderSignals(headerSignals);
+            metadata.setHeaderRows(Arrays.asList(syntheticTable.headerRowIndex - syntheticTable.startRowIndex));
+            subTableBlock.setMetadata(metadata);
+
+            // 找到对应的行（使用表头行之前的一行，通常是分组标记行）
+            // 如果表头行是第一个数据行，则附加到第一行
+            int attachRowIndex = syntheticTable.headerRowIndex > 0 ? syntheticTable.headerRowIndex - 1 : 0;
+
+            // 调整索引（rows 数组不包含主表头，所以需要减1）
+            int rowsArrayIndex = attachRowIndex - 1;  // 因为 rows 数组从第2行开始（索引0 = 第2行）
+
+            if (rowsArrayIndex >= 0 && rowsArrayIndex < parentTable.getRows().size()) {
+                DocxAnalysisResult.TableRow targetRow = parentTable.getRows().get(rowsArrayIndex);
+
+                // 附加到第一个单元格的 nested_tables
+                if (targetRow.getCells() != null && !targetRow.getCells().isEmpty()) {
+                    DocxAnalysisResult.TableCell firstCell = targetRow.getCells().get(0);
+
+                    if (firstCell.getNestedTables() == null) {
+                        firstCell.setNestedTables(new ArrayList<>());
+                    }
+
+                    firstCell.getNestedTables().add(subTableBlock);
+                }
+            }
+        }
+    }
+
+    /**
      * 提取文档元数据
      */
     private static DocxAnalysisResult.DocMeta extractDocMeta(XWPFDocument doc, String filename) {
@@ -411,8 +1068,25 @@ public class DocxStructureAnalyzer {
         ChineseHeadingDetector.RegexHit regexHit = ChineseHeadingDetector.matchCnRegex(normalizedText);
         if (regexHit != null) {
             int level = regexHit.getLevel();
-            double score = 0.90 - (level - 1) * 0.05;  // L1=0.90, L2=0.85, L3=0.80, L4=0.75, L5=0.70
-            score = Math.max(score, 0.70);
+
+            // 调整后的评分策略：
+            // L1（第X章/卷/册）: 0.90 → 强标题
+            // L2（第X节/常见大标题）: 0.85 → 强标题
+            // L3（第X条/1./1、）: 0.75 → 强标题（临界值）
+            // L4（（一）/（1））: 0.65 → 弱标题（降低，避免误识别列表项）
+            // L5（1.1/1.2.3）: 0.60 → 弱标题（降低）
+            double score;
+            if (level == 1) {
+                score = 0.90;
+            } else if (level == 2) {
+                score = 0.85;
+            } else if (level == 3) {
+                score = 0.75;
+            } else if (level == 4) {
+                score = 0.65;  // 降低 L4（一）的分数
+            } else {
+                score = 0.60;  // L5
+            }
 
             HeadingInfo info = new HeadingInfo(level, "cn-regex", score);
             info.setScore(score);
@@ -1105,6 +1779,12 @@ public class DocxStructureAnalyzer {
 
     /**
      * 测试入口
+     *
+     * 用法：
+     * - java DocxStructureAnalyzer                      # 使用默认文件，运行所有步骤
+     * - java DocxStructureAnalyzer <file>               # 运行所有步骤
+     * - java DocxStructureAnalyzer <file> step1         # 只运行 Step 1
+     * - java DocxStructureAnalyzer <file> step2         # 只运行 Step 2
      */
     public static void main(String[] args) throws Exception {
         // 默认测试文件
@@ -1115,7 +1795,7 @@ public class DocxStructureAnalyzer {
         // defaultFile = ParagraphMapperRefactored.taskId + ".docx";
 
         File docxFile;
-        File outputFile = null;
+        String step = "all";  // 默认运行所有步骤
 
         if (args.length < 1) {
             // 如果没有参数，使用默认路径
@@ -1127,14 +1807,27 @@ public class DocxStructureAnalyzer {
             if (!docxFile.exists()) {
                 System.err.println("Error: Default file does not exist!");
                 System.out.println();
-                System.out.println("Usage: java DocxStructureAnalyzer <docx-file> [output-json]");
-                System.out.println("Example: java DocxStructureAnalyzer test.docx");
-                System.out.println("         java DocxStructureAnalyzer test.docx output.json");
+                System.out.println("Usage:");
+                System.out.println("  java DocxStructureAnalyzer <docx-file> [step]");
+                System.out.println();
+                System.out.println("Parameters:");
+                System.out.println("  <docx-file>  : Path to the DOCX file");
+                System.out.println("  [step]       : Optional. Which step to run: 'step1', 'step2', 'step3', 'step4', 'step5', or 'all' (default: all)");
+                System.out.println();
+                System.out.println("Examples:");
+                System.out.println("  java DocxStructureAnalyzer test.docx           # Run all steps");
+                System.out.println("  java DocxStructureAnalyzer test.docx step1     # Run Step 1 only");
+                System.out.println("  java DocxStructureAnalyzer test.docx step2     # Run Step 2 only");
+                System.out.println("  java DocxStructureAnalyzer test.docx step3     # Run Step 3 only");
+                System.out.println("  java DocxStructureAnalyzer test.docx step4     # Run Step 4 only");
+                System.out.println("  java DocxStructureAnalyzer test.docx step5     # Run Step 5 only");
                 return;
             }
         } else {
             docxFile = new File(args[0]);
-            outputFile = args.length > 1 ? new File(args[1]) : null;
+            if (args.length > 1) {
+                step = args[1].toLowerCase();
+            }
         }
 
         if (!docxFile.exists()) {
@@ -1142,15 +1835,84 @@ public class DocxStructureAnalyzer {
             return;
         }
 
-        System.out.println("======== Starting Step 1 Analysis ========");
-        System.out.println("Step: 头次标题判定（一次性打分）");
-        System.out.println("Input file: " + docxFile.getAbsolutePath());
-        System.out.println();
+        // 根据参数运行不同的步骤
+        DocxAnalysisResult result = null;
 
-        // 使用 Step 1 分析方法（输出文件名带 step1 标识）
-        DocxAnalysisResult result = outputFile != null ?
-            analyze(docxFile, outputFile, "step1") :
+        if ("step1".equals(step)) {
+            // 只运行 Step 1
+            System.out.println("======== Starting Step 1 Analysis ========");
+            System.out.println("Step: 头次标题判定（一次性打分）");
+            System.out.println("Input file: " + docxFile.getAbsolutePath());
+            System.out.println();
+
+            result = analyzeStep1(docxFile);
+
+        } else if ("step2".equals(step)) {
+            // 只运行 Step 2
+            System.out.println("======== Starting Step 2 Analysis ========");
+            System.out.println("Step: 章节栈建树（降噪、纠偏）");
+            System.out.println("Input file: " + docxFile.getAbsolutePath());
+            System.out.println();
+
+            result = analyzeStep2(docxFile);
+
+        } else if ("step3".equals(step)) {
+            // 只运行 Step 3
+            System.out.println("======== Starting Step 3 Analysis ========");
+            System.out.println("Step: 合成嵌套表检测（伪子表切块）");
+            System.out.println("Input file: " + docxFile.getAbsolutePath());
+            System.out.println();
+
+            result = analyzeStep3(docxFile);
+
+        } else if ("step4".equals(step)) {
+            // 只运行 Step 4
+            System.out.println("======== Starting Step 4 Analysis ========");
+            System.out.println("Step: 弱标题后判定（邻域确认）");
+            System.out.println("Input file: " + docxFile.getAbsolutePath());
+            System.out.println();
+
+            result = analyzeStep4(docxFile);
+
+        } else if ("step5".equals(step)) {
+            // 只运行 Step 5
+            System.out.println("======== Starting Step 5 Analysis ========");
+            System.out.println("Step: 模型辅助判定（灰区决策）");
+            System.out.println("Input file: " + docxFile.getAbsolutePath());
+            System.out.println();
+
+            result = analyzeStep5(docxFile);
+
+        } else {
+            // 运行所有步骤（step1 -> step2 -> step3 -> step4 -> step5）
+            System.out.println("======== Starting Multi-Step Analysis ========");
+            System.out.println("Input file: " + docxFile.getAbsolutePath());
+            System.out.println();
+
+            // Step 1: 头次标题判定
+            System.out.println(">>> Step 1: 头次标题判定（一次性打分）");
             analyzeStep1(docxFile);
+            System.out.println();
+
+            // Step 2: 章节栈建树
+            System.out.println(">>> Step 2: 章节栈建树（降噪、纠偏）");
+            analyzeStep2(docxFile);
+            System.out.println();
+
+            // Step 3: 合成嵌套表检测
+            System.out.println(">>> Step 3: 合成嵌套表检测（伪子表切块）");
+            analyzeStep3(docxFile);
+            System.out.println();
+
+            // Step 4: 弱标题后判定
+            System.out.println(">>> Step 4: 弱标题后判定（邻域确认）");
+            analyzeStep4(docxFile);
+            System.out.println();
+
+            // Step 5: 模型辅助判定
+            System.out.println(">>> Step 5: 模型辅助判定（灰区决策）");
+            result = analyzeStep5(docxFile);
+        }
 
         System.out.println();
         System.out.println("======== Analysis Summary ========");

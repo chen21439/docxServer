@@ -219,10 +219,17 @@ public class DocxAnalysisResult {
 
         // 标题检测元数据
         @JsonProperty("heading_source")
-        private String headingSource;       // 来源: "paragraph-outlineLvl", "style-outlineLvl", "style-name-map", "heuristic", "numbering-aux"
+        private String headingSource;       // 来源: "paragraph-outlineLvl", "style-outlineLvl", "cn-regex", "heuristic"
 
         @JsonProperty("heading_confidence")
         private Double headingConfidence;   // 置信度 (0.0-1.0)
+
+        private Double score;               // 综合分数 (0.0-1.0) - Step 2 使用
+
+        @JsonProperty("initial_level")
+        private Integer initialLevel;       // 初步层级 - Step 2 使用
+
+        private List<String> signals;       // 检测信号列表 - Step 2 使用
 
         @JsonProperty("style_id")
         private String styleId;             // 样式ID
@@ -245,8 +252,8 @@ public class DocxAnalysisResult {
         private String evidence;            // 证据/关键词片段
 
         private Map<String, Object> features;
-        private List<Block> blocks;
-        private List<Section> children;
+        private List<Block> blocks;        // 挂载的块（表格、段落）
+        private List<Section> children;     // 子章节
 
         public Section() {
             setType("section");
@@ -273,6 +280,15 @@ public class DocxAnalysisResult {
 
         public Double getHeadingConfidence() { return headingConfidence; }
         public void setHeadingConfidence(Double headingConfidence) { this.headingConfidence = headingConfidence; }
+
+        public Double getScore() { return score; }
+        public void setScore(Double score) { this.score = score; }
+
+        public Integer getInitialLevel() { return initialLevel; }
+        public void setInitialLevel(Integer initialLevel) { this.initialLevel = initialLevel; }
+
+        public List<String> getSignals() { return signals; }
+        public void setSignals(List<String> signals) { this.signals = signals; }
 
         public String getStyleId() { return styleId; }
         public void setStyleId(String styleId) { this.styleId = styleId; }
@@ -542,6 +558,13 @@ public class DocxAnalysisResult {
         @JsonProperty("parent_table_id")
         private String parentTableId;  // 父表格ID（仅嵌套表有值）
 
+        private Boolean synthetic;  // 是否为合成子表（Step 3 新增）
+
+        @JsonProperty("source_rows")
+        private List<Integer> sourceRows;  // 合成子表的源行范围（Step 3 新增）
+
+        private Double confidence;  // 合成子表的置信度（Step 3 新增）
+
         private List<TableColumn> columns;
 
         @JsonProperty("body_row_count")
@@ -574,6 +597,15 @@ public class DocxAnalysisResult {
 
         public String getParentTableId() { return parentTableId; }
         public void setParentTableId(String parentTableId) { this.parentTableId = parentTableId; }
+
+        public Boolean getSynthetic() { return synthetic; }
+        public void setSynthetic(Boolean synthetic) { this.synthetic = synthetic; }
+
+        public List<Integer> getSourceRows() { return sourceRows; }
+        public void setSourceRows(List<Integer> sourceRows) { this.sourceRows = sourceRows; }
+
+        public Double getConfidence() { return confidence; }
+        public void setConfidence(Double confidence) { this.confidence = confidence; }
 
         public List<TableColumn> getColumns() { return columns; }
         public void setColumns(List<TableColumn> columns) { this.columns = columns; }
