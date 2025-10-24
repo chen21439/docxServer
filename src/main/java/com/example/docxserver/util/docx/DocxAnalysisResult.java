@@ -25,8 +25,11 @@ public class DocxAnalysisResult {
     @JsonProperty("toc")
     private List<TocEntry> toc;
 
-    @JsonProperty("tree")
-    private List<Section> tree;
+    @JsonProperty("blocks")
+    private List<Block> blocks;
+
+    @JsonProperty("sections")
+    private List<Section> sections;  // 二次解析产物（当前为空）
 
     @JsonProperty("derived_features")
     private DerivedFeatures derivedFeatures;
@@ -44,8 +47,11 @@ public class DocxAnalysisResult {
     public List<TocEntry> getToc() { return toc; }
     public void setToc(List<TocEntry> toc) { this.toc = toc; }
 
-    public List<Section> getTree() { return tree; }
-    public void setTree(List<Section> tree) { this.tree = tree; }
+    public List<Block> getBlocks() { return blocks; }
+    public void setBlocks(List<Block> blocks) { this.blocks = blocks; }
+
+    public List<Section> getSections() { return sections; }
+    public void setSections(List<Section> sections) { this.sections = sections; }
 
     public DerivedFeatures getDerivedFeatures() { return derivedFeatures; }
     public void setDerivedFeatures(DerivedFeatures derivedFeatures) { this.derivedFeatures = derivedFeatures; }
@@ -211,6 +217,33 @@ public class DocxAnalysisResult {
         private String text;
         private String normalized;
 
+        // 标题检测元数据
+        @JsonProperty("heading_source")
+        private String headingSource;       // 来源: "paragraph-outlineLvl", "style-outlineLvl", "style-name-map", "heuristic", "numbering-aux"
+
+        @JsonProperty("heading_confidence")
+        private Double headingConfidence;   // 置信度 (0.0-1.0)
+
+        @JsonProperty("style_id")
+        private String styleId;             // 样式ID
+
+        @JsonProperty("style_name")
+        private String styleName;           // 样式显示名
+
+        @JsonProperty("outline_lvl_raw")
+        private Integer outlineLvlRaw;      // 原始 outlineLvl 值 (0-based)
+
+        @JsonProperty("numbering_id")
+        private Integer numberingId;        // 编号ID
+
+        @JsonProperty("numbering_ilvl")
+        private Integer numberingIlvl;      // 编号级别
+
+        @JsonProperty("is_candidate")
+        private Boolean isCandidate;        // 是否为候选标题（待二次确认）
+
+        private String evidence;            // 证据/关键词片段
+
         private Map<String, Object> features;
         private List<Block> blocks;
         private List<Section> children;
@@ -235,6 +268,33 @@ public class DocxAnalysisResult {
         public String getNormalized() { return normalized; }
         public void setNormalized(String normalized) { this.normalized = normalized; }
 
+        public String getHeadingSource() { return headingSource; }
+        public void setHeadingSource(String headingSource) { this.headingSource = headingSource; }
+
+        public Double getHeadingConfidence() { return headingConfidence; }
+        public void setHeadingConfidence(Double headingConfidence) { this.headingConfidence = headingConfidence; }
+
+        public String getStyleId() { return styleId; }
+        public void setStyleId(String styleId) { this.styleId = styleId; }
+
+        public String getStyleName() { return styleName; }
+        public void setStyleName(String styleName) { this.styleName = styleName; }
+
+        public Integer getOutlineLvlRaw() { return outlineLvlRaw; }
+        public void setOutlineLvlRaw(Integer outlineLvlRaw) { this.outlineLvlRaw = outlineLvlRaw; }
+
+        public Integer getNumberingId() { return numberingId; }
+        public void setNumberingId(Integer numberingId) { this.numberingId = numberingId; }
+
+        public Integer getNumberingIlvl() { return numberingIlvl; }
+        public void setNumberingIlvl(Integer numberingIlvl) { this.numberingIlvl = numberingIlvl; }
+
+        public Boolean getIsCandidate() { return isCandidate; }
+        public void setIsCandidate(Boolean candidate) { isCandidate = candidate; }
+
+        public String getEvidence() { return evidence; }
+        public void setEvidence(String evidence) { this.evidence = evidence; }
+
         public Map<String, Object> getFeatures() { return features; }
         public void setFeatures(Map<String, Object> features) { this.features = features; }
 
@@ -243,6 +303,124 @@ public class DocxAnalysisResult {
 
         public List<Section> getChildren() { return children; }
         public void setChildren(List<Section> children) { this.children = children; }
+    }
+
+    /**
+     * 标题原始特征（无决策，纯输入证据）
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class HeadingFeatures {
+        @JsonProperty("style_id")
+        private String styleId;
+
+        @JsonProperty("style_name")
+        private String styleName;
+
+        @JsonProperty("outline_lvl_raw")
+        private Integer outlineLvlRaw;
+
+        @JsonProperty("numbering_id")
+        private Integer numberingId;
+
+        @JsonProperty("numbering_ilvl")
+        private Integer numberingIlvl;
+
+        @JsonProperty("font_max_size")
+        private Integer fontMaxSize;
+
+        @JsonProperty("is_bold")
+        private Boolean isBold;
+
+        @JsonProperty("text_length")
+        private Integer textLength;
+
+        // Getters and Setters
+        public String getStyleId() { return styleId; }
+        public void setStyleId(String styleId) { this.styleId = styleId; }
+
+        public String getStyleName() { return styleName; }
+        public void setStyleName(String styleName) { this.styleName = styleName; }
+
+        public Integer getOutlineLvlRaw() { return outlineLvlRaw; }
+        public void setOutlineLvlRaw(Integer outlineLvlRaw) { this.outlineLvlRaw = outlineLvlRaw; }
+
+        public Integer getNumberingId() { return numberingId; }
+        public void setNumberingId(Integer numberingId) { this.numberingId = numberingId; }
+
+        public Integer getNumberingIlvl() { return numberingIlvl; }
+        public void setNumberingIlvl(Integer numberingIlvl) { this.numberingIlvl = numberingIlvl; }
+
+        public Integer getFontMaxSize() { return fontMaxSize; }
+        public void setFontMaxSize(Integer fontMaxSize) { this.fontMaxSize = fontMaxSize; }
+
+        public Boolean getIsBold() { return isBold; }
+        public void setIsBold(Boolean isBold) { this.isBold = isBold; }
+
+        public Integer getTextLength() { return textLength; }
+        public void setTextLength(Integer textLength) { this.textLength = textLength; }
+    }
+
+    /**
+     * 标题候选判断（一次解析产物）
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class HeadingCandidate {
+        private String source;       // 检测来源：paragraph-outlineLvl, style-outlineLvl, style-name-map, heuristic
+        private Integer level;       // 候选级别 (1-9)
+        private Double confidence;   // 置信度 (0.0-1.0)
+
+        @JsonProperty("is_candidate")
+        private Boolean isCandidate; // 是否为候选标题（待二次确认）
+
+        private String evidence;     // 证据/关键词片段
+
+        // Getters and Setters
+        public String getSource() { return source; }
+        public void setSource(String source) { this.source = source; }
+
+        public Integer getLevel() { return level; }
+        public void setLevel(Integer level) { this.level = level; }
+
+        public Double getConfidence() { return confidence; }
+        public void setConfidence(Double confidence) { this.confidence = confidence; }
+
+        public Boolean getIsCandidate() { return isCandidate; }
+        public void setIsCandidate(Boolean isCandidate) { this.isCandidate = isCandidate; }
+
+        public String getEvidence() { return evidence; }
+        public void setEvidence(String evidence) { this.evidence = evidence; }
+    }
+
+    /**
+     * 标题最终决策（二次解析产物）
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class HeadingDecision {
+        @JsonProperty("is_heading")
+        private Boolean isHeading;   // 最终是否为标题
+
+        private Integer level;       // 最终层级
+        private Double confidence;   // 融合后的最终置信度
+        private String rationale;    // 简短说明（供可观测性）
+
+        @JsonProperty("section_id")
+        private String sectionId;    // 该段作为标题时，绑定的 Section 节点 id
+
+        // Getters and Setters
+        public Boolean getIsHeading() { return isHeading; }
+        public void setIsHeading(Boolean isHeading) { this.isHeading = isHeading; }
+
+        public Integer getLevel() { return level; }
+        public void setLevel(Integer level) { this.level = level; }
+
+        public Double getConfidence() { return confidence; }
+        public void setConfidence(Double confidence) { this.confidence = confidence; }
+
+        public String getRationale() { return rationale; }
+        public void setRationale(String rationale) { this.rationale = rationale; }
+
+        public String getSectionId() { return sectionId; }
+        public void setSectionId(String sectionId) { this.sectionId = sectionId; }
     }
 
     /**
@@ -267,6 +445,16 @@ public class DocxAnalysisResult {
         private String style;
         private List<Run> runs;
 
+        // 标题相关字段
+        @JsonProperty("heading_features")
+        private HeadingFeatures headingFeatures;        // A. 原始版式/样式特征
+
+        @JsonProperty("heading_candidate")
+        private HeadingCandidate headingCandidate;      // B. 一次解析的候选判断
+
+        @JsonProperty("heading_decision")
+        private HeadingDecision headingDecision;        // C. 二次解析结果（当前为空）
+
         public ParagraphBlock() {
             setType("paragraph");
         }
@@ -283,6 +471,15 @@ public class DocxAnalysisResult {
 
         public List<Run> getRuns() { return runs; }
         public void setRuns(List<Run> runs) { this.runs = runs; }
+
+        public HeadingFeatures getHeadingFeatures() { return headingFeatures; }
+        public void setHeadingFeatures(HeadingFeatures headingFeatures) { this.headingFeatures = headingFeatures; }
+
+        public HeadingCandidate getHeadingCandidate() { return headingCandidate; }
+        public void setHeadingCandidate(HeadingCandidate headingCandidate) { this.headingCandidate = headingCandidate; }
+
+        public HeadingDecision getHeadingDecision() { return headingDecision; }
+        public void setHeadingDecision(HeadingDecision headingDecision) { this.headingDecision = headingDecision; }
     }
 
     /**
@@ -336,6 +533,11 @@ public class DocxAnalysisResult {
         @JsonProperty("evidence_terms")
         private List<String> evidenceTerms;
 
+        @JsonProperty("rows")
+        private List<TableRow> rows;  // 仅包含数据行（不包含表头行）
+
+        private TableMetadata metadata;
+
         public TableBlock() {
             setType("table");
         }
@@ -358,6 +560,83 @@ public class DocxAnalysisResult {
 
         public List<String> getEvidenceTerms() { return evidenceTerms; }
         public void setEvidenceTerms(List<String> evidenceTerms) { this.evidenceTerms = evidenceTerms; }
+
+        public List<TableRow> getRows() { return rows; }
+        public void setRows(List<TableRow> rows) { this.rows = rows; }
+
+        public TableMetadata getMetadata() { return metadata; }
+        public void setMetadata(TableMetadata metadata) { this.metadata = metadata; }
+    }
+
+    /**
+     * 表格元数据
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class TableMetadata {
+        @JsonProperty("header_rows")
+        private List<Integer> headerRows;  // 表头行索引（0-based）
+
+        @JsonProperty("header_signals")
+        private List<HeaderSignal> headerSignals;  // 表头检测信号
+
+        // Getters and Setters
+        public List<Integer> getHeaderRows() { return headerRows; }
+        public void setHeaderRows(List<Integer> headerRows) { this.headerRows = headerRows; }
+
+        public List<HeaderSignal> getHeaderSignals() { return headerSignals; }
+        public void setHeaderSignals(List<HeaderSignal> headerSignals) { this.headerSignals = headerSignals; }
+    }
+
+    /**
+     * 表头检测信号
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class HeaderSignal {
+        private String type;  // "tblHeader" 或 "firstRowStyle"
+        private List<Integer> rows;  // 影响的行索引（0-based）
+        private Double confidence;  // 置信度（0.0-1.0，预留字段）
+
+        // Getters and Setters
+        public String getType() { return type; }
+        public void setType(String type) { this.type = type; }
+
+        public List<Integer> getRows() { return rows; }
+        public void setRows(List<Integer> rows) { this.rows = rows; }
+
+        public Double getConfidence() { return confidence; }
+        public void setConfidence(Double confidence) { this.confidence = confidence; }
+    }
+
+    /**
+     * 表格行
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class TableRow {
+        private String id;
+        private List<TableCell> cells;
+
+        // Getters and Setters
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+
+        public List<TableCell> getCells() { return cells; }
+        public void setCells(List<TableCell> cells) { this.cells = cells; }
+    }
+
+    /**
+     * 表格单元格
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class TableCell {
+        private String id;
+        private String text;
+
+        // Getters and Setters
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+
+        public String getText() { return text; }
+        public void setText(String text) { this.text = text; }
     }
 
     /**

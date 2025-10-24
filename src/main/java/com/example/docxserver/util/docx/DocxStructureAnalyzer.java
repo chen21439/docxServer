@@ -1,11 +1,14 @@
 package com.example.docxserver.util.docx;
 
 import com.example.docxserver.util.common.FileUtils;
-import com.example.docxserver.util.taggedPDF.ParagraphMapperRefactored;
+// import com.example.docxserver.util.taggedPDF.ParagraphMapperRefactored;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.apache.poi.ooxml.POIXMLProperties;
 import org.apache.poi.xwpf.usermodel.*;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.*;
+
+import java.math.BigInteger;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -36,6 +39,56 @@ public class DocxStructureAnalyzer {
             .enable(SerializationFeature.INDENT_OUTPUT);
 
     /**
+     * 样式名到标题级别的映射表（支持中英文本地化）
+     */
+    private static final Map<String, Integer> STYLE_NAME_TO_LEVEL = createStyleNameMap();
+
+    private static Map<String, Integer> createStyleNameMap() {
+        Map<String, Integer> map = new HashMap<>();
+        // 英文标准样式
+        map.put("heading1", 1);
+        map.put("heading 1", 1);
+        map.put("heading2", 2);
+        map.put("heading 2", 2);
+        map.put("heading3", 3);
+        map.put("heading 3", 3);
+        map.put("heading4", 4);
+        map.put("heading 4", 4);
+        map.put("heading5", 5);
+        map.put("heading 5", 5);
+        map.put("heading6", 6);
+        map.put("heading 6", 6);
+        map.put("heading7", 7);
+        map.put("heading 7", 7);
+        map.put("heading8", 8);
+        map.put("heading 8", 8);
+        map.put("heading9", 9);
+        map.put("heading 9", 9);
+
+        // 中文本地化样式
+        map.put("标题1", 1);
+        map.put("标题 1", 1);
+        map.put("标题2", 2);
+        map.put("标题 2", 2);
+        map.put("标题3", 3);
+        map.put("标题 3", 3);
+        map.put("标题4", 4);
+        map.put("标题 4", 4);
+        map.put("标题5", 5);
+        map.put("标题 5", 5);
+        map.put("标题6", 6);
+        map.put("标题 6", 6);
+        map.put("标题7", 7);
+        map.put("标题 7", 7);
+        map.put("标题8", 8);
+        map.put("标题 8", 8);
+        map.put("标题9", 9);
+        map.put("标题 9", 9);
+
+        return map;
+    }
+
+    /**
      * 分析docx文件并保存为JSON
      *
      * @param docxFile docx文件
@@ -55,8 +108,8 @@ public class DocxStructureAnalyzer {
             // 2. 统计布局信息
             result.setLayoutStats(calculateLayoutStats(doc));
 
-            // 3. 构建文档树
-            result.setTree(buildDocumentTree(doc));
+            // 3. 构建文档块流（平铺结构）
+            result.setBlocks(buildBlockStream(doc));
 
             // 4. 扩展点：实体提取（暂未实现）
             // result.setEntities(extractEntities(doc));
@@ -206,122 +259,205 @@ public class DocxStructureAnalyzer {
     }
 
     /**
-     * 构建文档层次树
+     * 构建文档块流（平铺结构）
+     * 所有段落和表格按顺序平铺，不构建层级结构
      */
-    private static List<DocxAnalysisResult.Section> buildDocumentTree(XWPFDocument doc) {
-        List<DocxAnalysisResult.Section> rootSections = new ArrayList<>();
-        Stack<DocxAnalysisResult.Section> sectionStack = new Stack<>();
-        DocxAnalysisResult.Section currentSection = null;
+    private static List<DocxAnalysisResult.Block> buildBlockStream(XWPFDocument doc) {
+        List<DocxAnalysisResult.Block> blocks = new ArrayList<>();
 
         // ID 计数器
-        int sectionCounter = 0;
         int paragraphCounter = 0;
         int tableCounter = 0;
 
         for (IBodyElement element : doc.getBodyElements()) {
             if (element instanceof XWPFParagraph) {
                 XWPFParagraph para = (XWPFParagraph) element;
-                String style = para.getStyle();
                 String text = para.getText();
 
-                // 判断是否是标题（标准样式或启发式判断）
-                Integer headingLevel = detectHeadingLevel(para);
-
-                if (headingLevel != null) {
-                    // 创建新的section
-                    sectionCounter++;
-                    DocxAnalysisResult.Section section = new DocxAnalysisResult.Section();
-                    section.setId(String.format("s-%03d", sectionCounter));
-                    section.setLevel(headingLevel);
-                    section.setStyle(style != null ? style : "detected-heading");
-                    section.setText(text);
-                    section.setNormalized(normalize(text));
-                    section.setBlocks(new ArrayList<>());
-                    section.setChildren(new ArrayList<>());
-
-                    // 调整section层次
-                    while (!sectionStack.isEmpty() && sectionStack.peek().getLevel() >= headingLevel) {
-                        sectionStack.pop();
-                    }
-
-                    if (sectionStack.isEmpty()) {
-                        rootSections.add(section);
-                    } else {
-                        sectionStack.peek().getChildren().add(section);
-                    }
-
-                    sectionStack.push(section);
-                    currentSection = section;
-
-                } else {
-                    // 非标题段落，添加到当前section的blocks中
-                    // 如果没有section，创建一个默认的根section
-                    if (currentSection == null) {
-                        sectionCounter++;
-                        DocxAnalysisResult.Section defaultSection = new DocxAnalysisResult.Section();
-                        defaultSection.setId(String.format("s-%03d", sectionCounter));
-                        defaultSection.setLevel(1);
-                        defaultSection.setStyle("document-body");
-                        defaultSection.setText("文档内容");
-                        defaultSection.setNormalized("文档内容");
-                        defaultSection.setBlocks(new ArrayList<>());
-                        defaultSection.setChildren(new ArrayList<>());
-                        rootSections.add(defaultSection);
-                        currentSection = defaultSection;
-                    }
-
-                    paragraphCounter++;
-                    DocxAnalysisResult.ParagraphBlock block = createParagraphBlock(para, paragraphCounter);
-                    currentSection.getBlocks().add(block);
+                // 跳过空段落
+                if (text == null || text.trim().isEmpty()) {
+                    continue;
                 }
+
+                paragraphCounter++;
+
+                // 检测标题信息
+                HeadingInfo headingInfo = detectHeadingInfoEnhanced(para, doc);
+
+                // 创建段落块并填充标题特征
+                DocxAnalysisResult.ParagraphBlock block = createParagraphBlock(para, paragraphCounter, headingInfo, doc);
+                blocks.add(block);
 
             } else if (element instanceof XWPFTable) {
                 // 表格块
-                // 如果没有section，创建一个默认的根section
-                if (currentSection == null) {
-                    sectionCounter++;
-                    DocxAnalysisResult.Section defaultSection = new DocxAnalysisResult.Section();
-                    defaultSection.setId(String.format("s-%03d", sectionCounter));
-                    defaultSection.setLevel(1);
-                    defaultSection.setStyle("document-body");
-                    defaultSection.setText("文档内容");
-                    defaultSection.setNormalized("文档内容");
-                    defaultSection.setBlocks(new ArrayList<>());
-                    defaultSection.setChildren(new ArrayList<>());
-                    rootSections.add(defaultSection);
-                    currentSection = defaultSection;
-                }
-
                 tableCounter++;
                 DocxAnalysisResult.TableBlock block = createTableBlock((XWPFTable) element, tableCounter);
-                currentSection.getBlocks().add(block);
+                blocks.add(block);
             }
         }
 
-        return rootSections;
+        return blocks;
     }
 
     /**
      * 检测标题级别（支持标准样式和启发式判断）
+     * 这是旧版本的简化接口，内部调用增强版检测方法
      *
      * @param para 段落
      * @return 标题级别（1-9），如果不是标题返回 null
      */
     private static Integer detectHeadingLevel(XWPFParagraph para) {
-        String style = para.getStyle();
+        HeadingInfo info = detectHeadingInfoEnhanced(para, null);
+        return info != null ? info.getLevel() : null;
+    }
+
+    /**
+     * 增强的标题检测方法（支持多源检测和置信度计算）
+     *
+     * 检测优先级：
+     * 1. 段落直接声明的 outlineLvl (confidence=1.0)
+     * 2. 样式链中的 outlineLvl (confidence=0.9)
+     * 3. 样式名映射 (confidence=0.85)
+     * 4. 编号辅助信息 (仅加权，不单独定级)
+     * 5. 启发式判断 (confidence≤0.6，标记为候选)
+     *
+     * @param para 段落对象
+     * @param doc 文档对象（可选，用于样式链解析）
+     * @return HeadingInfo 对象，如果不是标题返回 null
+     */
+    private static HeadingInfo detectHeadingInfoEnhanced(XWPFParagraph para, XWPFDocument doc) {
         String text = para.getText();
+        String styleId = para.getStyle();
 
-        // 1. 标准 Heading 样式
-        if (style != null && style.toLowerCase().startsWith("heading")) {
-            return parseHeadingLevel(style);
-        }
-
-        // 2. 启发式判断：通过格式特征识别标题
         // 跳过空段落
         if (text == null || text.trim().isEmpty()) {
             return null;
         }
 
+        // 1. 段落直接声明的 outlineLvl (优先级最高)
+        CTPPr pPr = para.getCTP().getPPr();
+        if (pPr != null && pPr.isSetOutlineLvl()) {
+            BigInteger outlineLvl = pPr.getOutlineLvl().getVal();
+            int level = outlineLvl.intValue() + 1; // 0-based → 1-based
+
+            HeadingInfo info = new HeadingInfo(level, "paragraph-outlineLvl", 1.0);
+            info.setOutlineLvlRaw(outlineLvl.intValue());
+            info.setStyleId(styleId);
+            return info;
+        }
+
+        // 2. 样式链中的 outlineLvl（需要沿 basedOn 链查找）
+        if (doc != null && styleId != null) {
+            HeadingInfo styleInfo = detectHeadingFromStyleChain(doc, styleId);
+            if (styleInfo != null) {
+                styleInfo.setStyleId(styleId);
+                return styleInfo;
+            }
+        }
+
+        // 3. 样式名映射（本地化支持）
+        if (styleId != null) {
+            String styleIdLower = styleId.toLowerCase();
+            Integer levelFromMap = STYLE_NAME_TO_LEVEL.get(styleIdLower);
+            if (levelFromMap != null) {
+                HeadingInfo info = new HeadingInfo(levelFromMap, "style-name-map", 0.85);
+                info.setStyleId(styleId);
+                info.setStyleName(styleId);
+                return info;
+            }
+        }
+
+        // 4. 编号级别（辅助信息，不单独定级，但可以增强启发式判断的置信度）
+        Integer numberingIlvl = null;
+        Integer numberingId = null;
+        if (pPr != null && pPr.isSetNumPr() && pPr.getNumPr().isSetIlvl()) {
+            numberingIlvl = pPr.getNumPr().getIlvl().getVal().intValue();
+            if (pPr.getNumPr().isSetNumId()) {
+                numberingId = pPr.getNumPr().getNumId().getVal().intValue();
+            }
+        }
+
+        // 5. 启发式判断（兜底方案）
+        HeadingInfo heuristicInfo = detectHeadingHeuristic(para, text);
+        if (heuristicInfo != null) {
+            heuristicInfo.setStyleId(styleId);
+            heuristicInfo.setNumberingIlvl(numberingIlvl);
+            heuristicInfo.setNumberingId(numberingId);
+
+            // 如果有编号信息，可以提升置信度
+            if (numberingIlvl != null) {
+                double confidence = heuristicInfo.getConfidence();
+                heuristicInfo.setConfidence(Math.min(0.75, confidence + 0.1));
+                heuristicInfo.setEvidence((heuristicInfo.getEvidence() != null ? heuristicInfo.getEvidence() + "; " : "")
+                    + "numbering-ilvl=" + numberingIlvl);
+            }
+
+            return heuristicInfo;
+        }
+
+        return null;
+    }
+
+    /**
+     * 从样式链中检测标题（沿 basedOn 链查找 outlineLvl）
+     */
+    private static HeadingInfo detectHeadingFromStyleChain(XWPFDocument doc, String styleId) {
+        try {
+            XWPFStyles styles = doc.getStyles();
+            if (styles == null) {
+                return null;
+            }
+
+            XWPFStyle style = styles.getStyle(styleId);
+            if (style == null) {
+                return null;
+            }
+
+            // 沿 basedOn 链查找 outlineLvl
+            CTStyle ctStyle = style.getCTStyle();
+            String currentStyleId = styleId;
+            int depth = 0;
+            final int MAX_DEPTH = 10; // 防止循环引用
+
+            while (ctStyle != null && depth < MAX_DEPTH) {
+                // 检查当前样式的 outlineLvl
+                if (ctStyle.isSetPPr() && ctStyle.getPPr().isSetOutlineLvl()) {
+                    BigInteger outlineLvl = ctStyle.getPPr().getOutlineLvl().getVal();
+                    int level = outlineLvl.intValue() + 1; // 0-based → 1-based
+
+                    HeadingInfo info = new HeadingInfo(level, "style-outlineLvl", 0.9);
+                    info.setOutlineLvlRaw(outlineLvl.intValue());
+                    info.setStyleName(ctStyle.isSetName() && ctStyle.getName().getVal() != null ?
+                        ctStyle.getName().getVal() : currentStyleId);
+                    return info;
+                }
+
+                // 沿 basedOn 链向上查找
+                if (ctStyle.isSetBasedOn() && ctStyle.getBasedOn().getVal() != null) {
+                    String basedOnId = ctStyle.getBasedOn().getVal();
+                    XWPFStyle basedOnStyle = styles.getStyle(basedOnId);
+                    if (basedOnStyle != null) {
+                        ctStyle = basedOnStyle.getCTStyle();
+                        currentStyleId = basedOnId;
+                        depth++;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            // 忽略样式解析错误
+        }
+
+        return null;
+    }
+
+    /**
+     * 启发式判断标题（兜底方案）
+     */
+    private static HeadingInfo detectHeadingHeuristic(XWPFParagraph para, String text) {
         List<XWPFRun> runs = para.getRuns();
         if (runs.isEmpty()) {
             return null;
@@ -332,29 +468,45 @@ public class DocxStructureAnalyzer {
         boolean isBold = firstRun.isBold();
         int fontSize = firstRun.getFontSize();
 
-        // 启发式规则：
-        // - 加粗 + 字号较大（>= 16） + 文本较短（< 50字符） -> 可能是标题
-        // - 数字开头（如 "1."、"一、"） + 加粗 -> 可能是标题
+        // 启发式规则1：数字编号 + 加粗 + 较短文本
         if (isBold && text.length() < 100) {
             // 检查是否以数字或中文数字开头
-            if (text.matches("^[0-9一二三四五六七八九十]+[、.．].*") ||
-                text.matches("^第[0-9一二三四五六七八九十]+[章节条款部分].*")) {
+            if (text.matches("^第[0-9一二三四五六七八九十百千]+[章节条款部分篇].*")) {
+                HeadingInfo info = new HeadingInfo(1, "heuristic", 0.6);
+                info.setCandidate(true);
+                info.setEvidence("pattern: 第X章/节/部分");
+                return info;
+            }
+            if (text.matches("^[0-9一二三四五六七八九十]+[、.．].*")) {
+                HeadingInfo info = new HeadingInfo(2, "heuristic", 0.55);
+                info.setCandidate(true);
+                info.setEvidence("pattern: 数字编号");
+                return info;
+            }
+        }
 
-                // 根据前缀判断级别
-                if (text.matches("^[0-9一二三四五六七八九十]+[、.．].*")) {
-                    return 2; // 二级标题
-                } else if (text.matches("^第[0-9一二三四五六七八九十]+[章节部分].*")) {
-                    return 1; // 一级标题
-                } else {
-                    return 3; // 三级标题
-                }
+        // 启发式规则2：大字号 + 加粗
+        if (isBold && fontSize >= 16 && text.length() < 80) {
+            int level = 3;
+            if (fontSize >= 22) {
+                level = 1;
+            } else if (fontSize >= 18) {
+                level = 2;
             }
 
-            // 如果字号很大，也认为是标题
-            if (fontSize >= 16) {
-                if (fontSize >= 22) return 1;
-                if (fontSize >= 18) return 2;
-                return 3;
+            HeadingInfo info = new HeadingInfo(level, "heuristic", 0.5);
+            info.setCandidate(true);
+            info.setEvidence("bold + fontSize=" + fontSize);
+            return info;
+        }
+
+        // 启发式规则3：关键词匹配（评标/技术要求等）
+        if (isBold && text.length() < 50) {
+            if (text.matches(".*(评标方法|技术要求|商务要求|项目概况|采购需求|资格要求).*")) {
+                HeadingInfo info = new HeadingInfo(2, "heuristic", 0.6);
+                info.setCandidate(true);
+                info.setEvidence("keyword: " + text.substring(0, Math.min(text.length(), 20)));
+                return info;
             }
         }
 
@@ -374,20 +526,28 @@ public class DocxStructureAnalyzer {
     }
 
     /**
-     * 创建段落块
+     * 创建段落块（带标题检测信息）
      *
      * @param para 段落对象
      * @param paragraphIndex 段落索引（全局计数）
+     * @param headingInfo 标题检测信息（可为null）
+     * @param doc 文档对象（用于提取样式名）
      * @return 段落块
      */
-    private static DocxAnalysisResult.ParagraphBlock createParagraphBlock(XWPFParagraph para, int paragraphIndex) {
+    private static DocxAnalysisResult.ParagraphBlock createParagraphBlock(
+            XWPFParagraph para, int paragraphIndex, HeadingInfo headingInfo, XWPFDocument doc) {
+
         DocxAnalysisResult.ParagraphBlock block = new DocxAnalysisResult.ParagraphBlock();
         block.setId(String.format("p-%05d", paragraphIndex));
         block.setText(para.getText());
         block.setStyle(para.getStyle());
 
+        // 提取 runs
         List<DocxAnalysisResult.Run> runs = new ArrayList<>();
         int runIndex = 0;
+        Integer maxFontSize = null;
+        Boolean hasBold = null;
+
         for (XWPFRun run : para.getRuns()) {
             runIndex++;
             DocxAnalysisResult.Run runObj = new DocxAnalysisResult.Run();
@@ -395,19 +555,95 @@ public class DocxStructureAnalyzer {
             runObj.setText(run.text());
             runObj.setBold(run.isBold());
             runObj.setItalic(run.isItalic());
-            runObj.setFontSize(run.getFontSize());
+
+            int fontSize = run.getFontSize();
+            runObj.setFontSize(fontSize);
+
+            // 统计最大字号和加粗
+            if (fontSize > 0 && (maxFontSize == null || fontSize > maxFontSize)) {
+                maxFontSize = fontSize;
+            }
+            if (run.isBold() && hasBold == null) {
+                hasBold = true;
+            }
+
             runs.add(runObj);
         }
         block.setRuns(runs);
 
+        // 填充标题原始特征（始终填充，无论是否为标题）
+        DocxAnalysisResult.HeadingFeatures features = extractHeadingFeatures(para, doc, maxFontSize, hasBold);
+        block.setHeadingFeatures(features);
+
+        // 填充标题候选判断（仅当检测到标题时）
+        if (headingInfo != null) {
+            DocxAnalysisResult.HeadingCandidate candidate = new DocxAnalysisResult.HeadingCandidate();
+            candidate.setSource(headingInfo.getSource());
+            candidate.setLevel(headingInfo.getLevel());
+            candidate.setConfidence(headingInfo.getConfidence());
+            candidate.setIsCandidate(headingInfo.isCandidate());
+            candidate.setEvidence(headingInfo.getEvidence());
+            block.setHeadingCandidate(candidate);
+        }
+
         return block;
+    }
+
+    /**
+     * 提取标题原始特征
+     */
+    private static DocxAnalysisResult.HeadingFeatures extractHeadingFeatures(
+            XWPFParagraph para, XWPFDocument doc, Integer maxFontSize, Boolean hasBold) {
+
+        DocxAnalysisResult.HeadingFeatures features = new DocxAnalysisResult.HeadingFeatures();
+
+        String styleId = para.getStyle();
+        features.setStyleId(styleId);
+
+        // 提取样式名
+        if (doc != null && styleId != null) {
+            try {
+                XWPFStyles styles = doc.getStyles();
+                if (styles != null) {
+                    XWPFStyle style = styles.getStyle(styleId);
+                    if (style != null && style.getCTStyle().isSetName()) {
+                        features.setStyleName(style.getCTStyle().getName().getVal());
+                    }
+                }
+            } catch (Exception e) {
+                // 忽略
+            }
+        }
+
+        // 提取 outlineLvl
+        CTPPr pPr = para.getCTP().getPPr();
+        if (pPr != null && pPr.isSetOutlineLvl()) {
+            features.setOutlineLvlRaw(pPr.getOutlineLvl().getVal().intValue());
+        }
+
+        // 提取编号信息
+        if (pPr != null && pPr.isSetNumPr()) {
+            if (pPr.getNumPr().isSetNumId()) {
+                features.setNumberingId(pPr.getNumPr().getNumId().getVal().intValue());
+            }
+            if (pPr.getNumPr().isSetIlvl()) {
+                features.setNumberingIlvl(pPr.getNumPr().getIlvl().getVal().intValue());
+            }
+        }
+
+        // 填充格式特征
+        features.setFontMaxSize(maxFontSize);
+        features.setIsBold(hasBold);
+        features.setTextLength(para.getText() != null ? para.getText().length() : 0);
+
+        return features;
     }
 
     /**
      * 创建表格块
      *
      * @param table 表格对象
-     * @param tableIndex 表格索引（全局计数）
+     * @param tableIndex 表格索引（全局计数，从1开始）
      * @return 表格块
      */
     private static DocxAnalysisResult.TableBlock createTableBlock(XWPFTable table, int tableIndex) {
@@ -427,9 +663,193 @@ public class DocxStructureAnalyzer {
             // 扩展点：检测表格类型
             // block.setDetectedKind(detectTableKind(headerRow, table));
             // block.setEvidenceTerms(extractEvidenceTerms(headerRow));
+
+            // 检测表头并填充 metadata
+            DocxAnalysisResult.TableMetadata metadata = detectTableHeaderMetadata(table);
+            block.setMetadata(metadata);
+
+            // 前5张表格：提取数据行的详细信息（不包含表头行）
+            if (tableIndex <= 5) {
+                List<DocxAnalysisResult.TableRow> tableRows = new ArrayList<>();
+
+                // 从第2行开始（索引1），跳过表头行
+                for (int rowIndex = 1; rowIndex < rows.size(); rowIndex++) {
+                    XWPFTableRow xwpfRow = rows.get(rowIndex);
+                    DocxAnalysisResult.TableRow tableRow = new DocxAnalysisResult.TableRow();
+
+                    // 行ID格式：r002, r003...（从2开始，因为跳过了第1行）
+                    tableRow.setId(String.format("r-%03d", rowIndex + 1));
+
+                    List<DocxAnalysisResult.TableCell> tableCells = new ArrayList<>();
+                    List<XWPFTableCell> xwpfCells = xwpfRow.getTableCells();
+
+                    for (int colIndex = 0; colIndex < xwpfCells.size(); colIndex++) {
+                        XWPFTableCell xwpfCell = xwpfCells.get(colIndex);
+                        DocxAnalysisResult.TableCell tableCell = new DocxAnalysisResult.TableCell();
+
+                        // 单元格ID格式：t001-r002-c001（从1开始）
+                        String cellId = String.format("t%03d-r%03d-c%03d",
+                                tableIndex, rowIndex + 1, colIndex + 1);
+                        tableCell.setId(cellId);
+                        tableCell.setText(xwpfCell.getText());
+
+                        tableCells.add(tableCell);
+                    }
+
+                    tableRow.setCells(tableCells);
+                    tableRows.add(tableRow);
+                }
+
+                block.setRows(tableRows);
+            }
         }
 
         return block;
+    }
+
+    /**
+     * 检测表格表头元数据
+     *
+     * @param table 表格对象
+     * @return 表头元数据
+     */
+    private static DocxAnalysisResult.TableMetadata detectTableHeaderMetadata(XWPFTable table) {
+        DocxAnalysisResult.TableMetadata metadata = new DocxAnalysisResult.TableMetadata();
+        List<DocxAnalysisResult.HeaderSignal> headerSignals = new ArrayList<>();
+        List<Integer> headerRows = new ArrayList<>();
+
+        try {
+            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTbl ctTbl = table.getCTTbl();
+            List<XWPFTableRow> rows = table.getRows();
+
+            // 1. 检测表级别的 firstRow 样式（w:tblPr/w:tblLook/@w:firstRow）
+            org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTblPr tblPr = ctTbl.getTblPr();
+            boolean firstRowStyle = false;
+
+            // 1.1 直接从表的 tblLook.firstRow 读取
+            if (tblPr != null) {
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTblLook tblLook = tblPr.getTblLook();
+                if (tblLook != null) {
+                    try {
+                        String xmlText = tblLook.xmlText();
+                        // 检查多种可能的值格式
+                        firstRowStyle = xmlText != null &&
+                            (xmlText.contains("w:firstRow=\"1\"") ||
+                             xmlText.contains("w:firstRow=\"on\"") ||
+                             xmlText.contains("w:firstRow=\"true\""));
+                    } catch (Exception e) {
+                        // 忽略解析错误
+                    }
+                }
+            }
+
+            // 1.2 如果表上未显式设置，尝试从表格样式继承
+            if (!firstRowStyle && tblPr != null && tblPr.isSetTblStyle()) {
+                try {
+                    String styleId = tblPr.getTblStyle().getVal();
+                    XWPFStyles styles = table.getBody().getXWPFDocument().getStyles();
+                    if (styles != null) {
+                        XWPFStyle style = styles.getStyle(styleId);
+                        if (style != null) {
+                            CTStyle ctStyle = style.getCTStyle();
+                            if (ctStyle.isSetTblPr()) {
+                                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTblPrBase styleTblPr = ctStyle.getTblPr();
+                                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTblLook styleLook = styleTblPr.getTblLook();
+                                if (styleLook != null) {
+                                    String xmlText = styleLook.xmlText();
+                                    firstRowStyle = xmlText != null &&
+                                        (xmlText.contains("w:firstRow=\"1\"") ||
+                                         xmlText.contains("w:firstRow=\"on\"") ||
+                                         xmlText.contains("w:firstRow=\"true\""));
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    // 忽略解析错误
+                }
+            }
+
+            // 添加 firstRowStyle 信号
+            if (firstRowStyle) {
+                DocxAnalysisResult.HeaderSignal signal = new DocxAnalysisResult.HeaderSignal();
+                signal.setType("firstRowStyle");
+                signal.setRows(Arrays.asList(0));
+                signal.setConfidence(0.7);  // 表级样式提示，置信度 0.7
+                headerSignals.add(signal);
+
+                if (!headerRows.contains(0)) {
+                    headerRows.add(0);
+                }
+            }
+
+            // 2. 检测行级别的 tblHeader 标记（w:trPr/w:tblHeader）
+            List<Integer> tblHeaderRows = new ArrayList<>();
+            for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+                XWPFTableRow row = rows.get(rowIndex);
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRow ctRow = row.getCtRow();
+
+                org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTrPr trPr = ctRow.getTrPr();
+                if (trPr != null) {
+                    // 检查 tblHeader（通过 XML 文本检查）
+                    try {
+                        String xmlText = trPr.xmlText();
+                        boolean isTblHeader = xmlText != null &&
+                            (xmlText.contains("<w:tblHeader") ||
+                             xmlText.contains("w:tblHeader"));
+
+                        if (isTblHeader) {
+                            // tblHeader 存在即表示是表头行
+                            tblHeaderRows.add(rowIndex);
+
+                            if (!headerRows.contains(rowIndex)) {
+                                headerRows.add(rowIndex);
+                            }
+                        }
+                    } catch (Exception e) {
+                        // 忽略解析错误
+                    }
+                }
+            }
+
+            if (!tblHeaderRows.isEmpty()) {
+                DocxAnalysisResult.HeaderSignal signal = new DocxAnalysisResult.HeaderSignal();
+                signal.setType("tblHeader");
+                signal.setRows(tblHeaderRows);
+                signal.setConfidence(1.0);  // 行级明确标记，置信度 1.0
+                headerSignals.add(signal);
+            }
+
+            // 3. 如果没有检测到任何表头标记，默认第一行为表头
+            if (headerRows.isEmpty() && !rows.isEmpty()) {
+                headerRows.add(0);
+
+                // 添加默认信号
+                DocxAnalysisResult.HeaderSignal defaultSignal = new DocxAnalysisResult.HeaderSignal();
+                defaultSignal.setType("default");
+                defaultSignal.setRows(Arrays.asList(0));
+                defaultSignal.setConfidence(0.5);  // 默认推断，置信度 0.5
+                headerSignals.add(defaultSignal);
+            }
+
+        } catch (Exception e) {
+            // 发生错误时使用默认值
+            if (table.getRows().size() > 0) {
+                headerRows.add(0);
+            }
+        }
+
+        // 排序并去重
+        if (!headerRows.isEmpty()) {
+            headerRows = new ArrayList<>(new java.util.LinkedHashSet<>(headerRows));
+            java.util.Collections.sort(headerRows);
+        }
+
+        metadata.setHeaderRows(headerRows);
+        // 始终设置 headerSignals（即使为空数组），不设置为 null
+        metadata.setHeaderSignals(headerSignals);
+
+        return metadata;
     }
 
     /**
@@ -494,8 +914,8 @@ public class DocxStructureAnalyzer {
         String defaultDir = "E:\\programFile\\AIProgram\\docxServer\\pdf\\task\\1978018096320905217";
         String defaultFile = "1978018096320905217.docx";
 
-        defaultDir = ParagraphMapperRefactored.dir;
-        defaultFile = ParagraphMapperRefactored.taskId + ".docx";
+        // defaultDir = ParagraphMapperRefactored.dir;
+        // defaultFile = ParagraphMapperRefactored.taskId + ".docx";
 
         File docxFile;
         File outputFile = null;
@@ -552,7 +972,7 @@ public class DocxStructureAnalyzer {
         }
         System.out.println();
         System.out.println("Document structure:");
-        System.out.println("  - Root sections: " + result.getTree().size());
+        System.out.println("  - Total blocks (paragraphs + tables): " + (result.getBlocks() != null ? result.getBlocks().size() : 0));
 
         // 验证段落数量（与 tags.txt 文件对比）
         System.out.println();
@@ -617,5 +1037,62 @@ public class DocxStructureAnalyzer {
             System.err.println("验证过程出错: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    /**
+     * 标题信息
+     * 包含标题级别、来源、置信度等元数据
+     */
+    private static class HeadingInfo {
+        private Integer level;          // 标题级别 (1-9)
+        private String source;          // 来源: "paragraph-outlineLvl", "style-outlineLvl", "style-name-map", "heuristic", "numbering-aux"
+        private double confidence;      // 置信度 (0.0-1.0)
+        private String styleId;         // 样式ID
+        private String styleName;       // 样式显示名
+        private Integer outlineLvlRaw;  // 原始 outlineLvl 值 (0-based)
+        private Integer numberingId;    // 编号ID
+        private Integer ilvl;           // 编号级别
+        private boolean isCandidate;    // 是否为候选标题（待二次确认）
+        private String evidence;        // 证据/关键词片段
+
+        public HeadingInfo(Integer level, String source, double confidence) {
+            this.level = level;
+            this.source = source;
+            this.confidence = confidence;
+            this.isCandidate = false;
+        }
+
+        // Getters and Setters
+        public Integer getLevel() { return level; }
+        public void setLevel(Integer level) { this.level = level; }
+
+        public String getSource() { return source; }
+        public void setSource(String source) { this.source = source; }
+
+        public double getConfidence() { return confidence; }
+        public void setConfidence(double confidence) { this.confidence = confidence; }
+
+        public String getStyleId() { return styleId; }
+        public void setStyleId(String styleId) { this.styleId = styleId; }
+
+        public String getStyleName() { return styleName; }
+        public void setStyleName(String styleName) { this.styleName = styleName; }
+
+        public Integer getOutlineLvlRaw() { return outlineLvlRaw; }
+        public void setOutlineLvlRaw(Integer outlineLvlRaw) { this.outlineLvlRaw = outlineLvlRaw; }
+
+        public Integer getNumberingId() { return numberingId; }
+        public void setNumberingId(Integer numberingId) { this.numberingId = numberingId; }
+
+        public Integer getIlvl() { return ilvl; }
+        public void setIlvl(Integer ilvl) { this.ilvl = ilvl; }
+
+        public void setNumberingIlvl(Integer ilvl) { this.ilvl = ilvl; }
+
+        public boolean isCandidate() { return isCandidate; }
+        public void setCandidate(boolean candidate) { isCandidate = candidate; }
+
+        public String getEvidence() { return evidence; }
+        public void setEvidence(String evidence) { this.evidence = evidence; }
     }
 }
