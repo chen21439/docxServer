@@ -443,7 +443,6 @@ public class DocxAnalysisResult {
         private String id;
         private String text;
         private String style;
-        private List<Run> runs;
 
         // 标题相关字段
         @JsonProperty("heading_features")
@@ -468,9 +467,6 @@ public class DocxAnalysisResult {
 
         public String getStyle() { return style; }
         public void setStyle(String style) { this.style = style; }
-
-        public List<Run> getRuns() { return runs; }
-        public void setRuns(List<Run> runs) { this.runs = runs; }
 
         public HeadingFeatures getHeadingFeatures() { return headingFeatures; }
         public void setHeadingFeatures(HeadingFeatures headingFeatures) { this.headingFeatures = headingFeatures; }
@@ -521,8 +517,12 @@ public class DocxAnalysisResult {
         private String id;
         private String caption;
 
-        @JsonProperty("header_row")
-        private List<String> headerRow;
+        private Integer level;  // 嵌套层级：1=顶层，2=二层嵌套，依此类推
+
+        @JsonProperty("parent_table_id")
+        private String parentTableId;  // 父表格ID（仅嵌套表有值）
+
+        private List<TableColumn> columns;
 
         @JsonProperty("body_row_count")
         private Integer bodyRowCount;
@@ -549,8 +549,14 @@ public class DocxAnalysisResult {
         public String getCaption() { return caption; }
         public void setCaption(String caption) { this.caption = caption; }
 
-        public List<String> getHeaderRow() { return headerRow; }
-        public void setHeaderRow(List<String> headerRow) { this.headerRow = headerRow; }
+        public Integer getLevel() { return level; }
+        public void setLevel(Integer level) { this.level = level; }
+
+        public String getParentTableId() { return parentTableId; }
+        public void setParentTableId(String parentTableId) { this.parentTableId = parentTableId; }
+
+        public List<TableColumn> getColumns() { return columns; }
+        public void setColumns(List<TableColumn> columns) { this.columns = columns; }
 
         public Integer getBodyRowCount() { return bodyRowCount; }
         public void setBodyRowCount(Integer bodyRowCount) { this.bodyRowCount = bodyRowCount; }
@@ -566,6 +572,22 @@ public class DocxAnalysisResult {
 
         public TableMetadata getMetadata() { return metadata; }
         public void setMetadata(TableMetadata metadata) { this.metadata = metadata; }
+    }
+
+    /**
+     * 表格列
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class TableColumn {
+        private String id;
+        private String label;
+
+        // Getters and Setters
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+
+        public String getLabel() { return label; }
+        public void setLabel(String label) { this.label = label; }
     }
 
     /**
@@ -631,12 +653,24 @@ public class DocxAnalysisResult {
         private String id;
         private String text;
 
+        @JsonProperty("col_id")
+        private String colId;
+
+        @JsonProperty("nested_tables")
+        private List<TableBlock> nestedTables;  // 单元格内的嵌套表格
+
         // Getters and Setters
         public String getId() { return id; }
         public void setId(String id) { this.id = id; }
 
         public String getText() { return text; }
         public void setText(String text) { this.text = text; }
+
+        public String getColId() { return colId; }
+        public void setColId(String colId) { this.colId = colId; }
+
+        public List<TableBlock> getNestedTables() { return nestedTables; }
+        public void setNestedTables(List<TableBlock> nestedTables) { this.nestedTables = nestedTables; }
     }
 
     /**

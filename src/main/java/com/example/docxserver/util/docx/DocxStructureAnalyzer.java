@@ -39,6 +39,11 @@ public class DocxStructureAnalyzer {
             .enable(SerializationFeature.INDENT_OUTPUT);
 
     /**
+     * 最大嵌套表格深度（防止病态文档导致栈溢出）
+     */
+    private static final int MAX_TABLE_NESTING_DEPTH = 5;
+
+    /**
      * 样式名到标题级别的映射表（支持中英文本地化）
      */
     private static final Map<String, Integer> STYLE_NAME_TO_LEVEL = createStyleNameMap();
@@ -289,9 +294,10 @@ public class DocxStructureAnalyzer {
                 blocks.add(block);
 
             } else if (element instanceof XWPFTable) {
-                // 表格块
+                // 表格块（顶层表格，level=1）
                 tableCounter++;
-                DocxAnalysisResult.TableBlock block = createTableBlock((XWPFTable) element, tableCounter);
+                String tableId = String.format("t%03d", tableCounter);
+                DocxAnalysisResult.TableBlock block = processTable((XWPFTable) element, tableId, 1, null, tableCounter);
                 blocks.add(block);
             }
         }
@@ -542,22 +548,12 @@ public class DocxStructureAnalyzer {
         block.setText(para.getText());
         block.setStyle(para.getStyle());
 
-        // 提取 runs
-        List<DocxAnalysisResult.Run> runs = new ArrayList<>();
-        int runIndex = 0;
+        // 统计 runs 的格式信息（用于 heading features，但不输出 runs 到 JSON）
         Integer maxFontSize = null;
         Boolean hasBold = null;
 
         for (XWPFRun run : para.getRuns()) {
-            runIndex++;
-            DocxAnalysisResult.Run runObj = new DocxAnalysisResult.Run();
-            runObj.setId(String.format("p-%05d-r-%03d", paragraphIndex, runIndex));
-            runObj.setText(run.text());
-            runObj.setBold(run.isBold());
-            runObj.setItalic(run.isItalic());
-
             int fontSize = run.getFontSize();
-            runObj.setFontSize(fontSize);
 
             // 统计最大字号和加粗
             if (fontSize > 0 && (maxFontSize == null || fontSize > maxFontSize)) {
@@ -566,10 +562,7 @@ public class DocxStructureAnalyzer {
             if (run.isBold() && hasBold == null) {
                 hasBold = true;
             }
-
-            runs.add(runObj);
         }
-        block.setRuns(runs);
 
         // 填充标题原始特征（始终填充，无论是否为标题）
         DocxAnalysisResult.HeadingFeatures features = extractHeadingFeatures(para, doc, maxFontSize, hasBold);
@@ -640,24 +633,159 @@ public class DocxStructureAnalyzer {
     }
 
     /**
-     * 创建表格块
+     * 递归处理表格（支持嵌套表格）
+     *
+     * @param table 表格对象
+     * @param tableId 路径式表格ID（如 "t001" 或 "t001.r002.c003.t001"）
+     * @param level 嵌套层级（1=顶层，2=二级嵌套...）
+     * @param parentTableId 父表格ID（顶层表格为null）
+     * @param topLevelIndex 顶层表格索引（用于判断是否提取详细数据）
+     * @return 表格块
+     */
+    private static DocxAnalysisResult.TableBlock processTable(
+            XWPFTable table, String tableId, int level, String parentTableId, int topLevelIndex) {
+
+        DocxAnalysisResult.TableBlock block = new DocxAnalysisResult.TableBlock();
+        block.setId(tableId);
+        block.setLevel(level);
+        block.setParentTableId(parentTableId);
+
+        List<XWPFTableRow> rows = table.getRows();
+        if (rows.isEmpty()) {
+            return block;
+        }
+
+        // 提取表头列（第一行）
+        List<DocxAnalysisResult.TableColumn> columns = new ArrayList<>();
+        List<XWPFTableCell> headerCells = rows.get(0).getTableCells();
+        for (int colIndex = 0; colIndex < headerCells.size(); colIndex++) {
+            DocxAnalysisResult.TableColumn column = new DocxAnalysisResult.TableColumn();
+            column.setId(String.format("c%d", colIndex + 1));  // c1, c2, c3...
+            column.setLabel(headerCells.get(colIndex).getText());
+            columns.add(column);
+        }
+        block.setColumns(columns);
+        block.setBodyRowCount(rows.size() - 1);
+
+        // 检测表头并填充 metadata
+        DocxAnalysisResult.TableMetadata metadata = detectTableHeaderMetadata(table);
+        block.setMetadata(metadata);
+
+        // 前5张顶层表格：提取数据行的详细信息（不包含表头行）
+        if (topLevelIndex <= 5) {
+            List<DocxAnalysisResult.TableRow> tableRows = new ArrayList<>();
+
+            // 从第2行开始（索引1），跳过表头行
+            for (int rowIndex = 1; rowIndex < rows.size(); rowIndex++) {
+                XWPFTableRow xwpfRow = rows.get(rowIndex);
+                DocxAnalysisResult.TableRow tableRow = new DocxAnalysisResult.TableRow();
+
+                // 行ID格式：r-002, r-003...
+                tableRow.setId(String.format("r-%03d", rowIndex + 1));
+
+                List<DocxAnalysisResult.TableCell> tableCells = new ArrayList<>();
+                List<XWPFTableCell> xwpfCells = xwpfRow.getTableCells();
+
+                for (int colIndex = 0; colIndex < xwpfCells.size(); colIndex++) {
+                    XWPFTableCell xwpfCell = xwpfCells.get(colIndex);
+                    DocxAnalysisResult.TableCell tableCell = new DocxAnalysisResult.TableCell();
+
+                    // 单元格ID格式：t001-r002-c001
+                    String cellId = String.format("%s-r%03d-c%03d",
+                            tableId, rowIndex + 1, colIndex + 1);
+                    tableCell.setId(cellId);
+                    tableCell.setText(xwpfCell.getText());
+                    tableCell.setColId(String.format("c%d", colIndex + 1));
+
+                    // ★ 递归处理嵌套表格（如果未超过最大深度）
+                    if (level < MAX_TABLE_NESTING_DEPTH) {
+                        List<DocxAnalysisResult.TableBlock> nestedTables = extractNestedTables(
+                                xwpfCell, tableId, rowIndex, colIndex, level, topLevelIndex);
+                        if (nestedTables != null && !nestedTables.isEmpty()) {
+                            tableCell.setNestedTables(nestedTables);
+                        }
+                    }
+
+                    tableCells.add(tableCell);
+                }
+
+                tableRow.setCells(tableCells);
+                tableRows.add(tableRow);
+            }
+
+            block.setRows(tableRows);
+        }
+
+        return block;
+    }
+
+    /**
+     * 从单元格中提取嵌套表格
+     *
+     * @param cell 单元格对象
+     * @param parentTableId 父表格ID
+     * @param rowIndex 行索引（0-based，在rows数组中）
+     * @param colIndex 列索引（0-based）
+     * @param parentLevel 父表格层级
+     * @param topLevelIndex 顶层表格索引
+     * @return 嵌套表格列表（如果有）
+     */
+    private static List<DocxAnalysisResult.TableBlock> extractNestedTables(
+            XWPFTableCell cell, String parentTableId, int rowIndex, int colIndex, int parentLevel, int topLevelIndex) {
+
+        List<DocxAnalysisResult.TableBlock> nestedTables = new ArrayList<>();
+
+        try {
+            // 遍历单元格中的所有 body elements
+            int nestedTableIndex = 0;
+            for (IBodyElement element : cell.getBodyElements()) {
+                if (element instanceof XWPFTable) {
+                    nestedTableIndex++;
+
+                    // 生成路径式 table_id: t001.r002.c003.t001
+                    String nestedTableId = String.format("%s.r%03d.c%03d.t%03d",
+                            parentTableId, rowIndex + 1, colIndex + 1, nestedTableIndex);
+
+                    // 递归处理嵌套表格
+                    DocxAnalysisResult.TableBlock nestedBlock = processTable(
+                            (XWPFTable) element, nestedTableId, parentLevel + 1, parentTableId, topLevelIndex);
+
+                    nestedTables.add(nestedBlock);
+                }
+            }
+        } catch (Exception e) {
+            // 忽略嵌套表格提取错误，继续处理其他部分
+            System.err.println("Warning: Failed to extract nested tables from cell: " + e.getMessage());
+        }
+
+        return nestedTables;
+    }
+
+    /**
+     * 创建表格块（旧方法，保留用于兼容性，但已被 processTable 替代）
+     * @deprecated 使用 processTable 替代
      *
      * @param table 表格对象
      * @param tableIndex 表格索引（全局计数，从1开始）
      * @return 表格块
      */
+    @Deprecated
     private static DocxAnalysisResult.TableBlock createTableBlock(XWPFTable table, int tableIndex) {
         DocxAnalysisResult.TableBlock block = new DocxAnalysisResult.TableBlock();
         block.setId(String.format("t-%03d", tableIndex));
 
         List<XWPFTableRow> rows = table.getRows();
         if (!rows.isEmpty()) {
-            // 提取表头（第一行）
-            List<String> headerRow = new ArrayList<>();
-            for (XWPFTableCell cell : rows.get(0).getTableCells()) {
-                headerRow.add(cell.getText());
+            // 提取表头列（第一行）
+            List<DocxAnalysisResult.TableColumn> columns = new ArrayList<>();
+            List<XWPFTableCell> headerCells = rows.get(0).getTableCells();
+            for (int colIndex = 0; colIndex < headerCells.size(); colIndex++) {
+                DocxAnalysisResult.TableColumn column = new DocxAnalysisResult.TableColumn();
+                column.setId(String.format("c%d", colIndex + 1));  // c1, c2, c3...
+                column.setLabel(headerCells.get(colIndex).getText());
+                columns.add(column);
             }
-            block.setHeaderRow(headerRow);
+            block.setColumns(columns);
             block.setBodyRowCount(rows.size() - 1);
 
             // 扩展点：检测表格类型
@@ -692,6 +820,9 @@ public class DocxStructureAnalyzer {
                                 tableIndex, rowIndex + 1, colIndex + 1);
                         tableCell.setId(cellId);
                         tableCell.setText(xwpfCell.getText());
+
+                        // 列ID格式：c1, c2, c3...
+                        tableCell.setColId(String.format("c%d", colIndex + 1));
 
                         tableCells.add(tableCell);
                     }
