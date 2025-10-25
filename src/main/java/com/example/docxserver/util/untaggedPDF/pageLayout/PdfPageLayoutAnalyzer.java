@@ -535,8 +535,13 @@ public class PdfPageLayoutAnalyzer extends PDFGraphicsStreamEngine {
      * 测试入口
      */
     public static void main(String[] args) {
-        String pdfPath = "path/to/your/file.pdf";
-        String outputPath = "output_tables.json";
+        String pdfPath = "E:\\programFile\\AIProgram\\docxServer\\pdf\\task\\1979102567573037058\\1979102567573037058.pdf";
+
+        // 生成与PDF相同目录的输出路径
+        java.io.File pdfFile = new java.io.File(pdfPath);
+        String pdfDir = pdfFile.getParent();
+        String pdfName = pdfFile.getName().replaceFirst("[.][^.]+$", "");  // 去除扩展名
+        String outputPath = pdfDir + java.io.File.separator + pdfName + "_tables.json";
 
         try {
             // 方式1：打印到控制台（调试用）

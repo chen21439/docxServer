@@ -52,6 +52,21 @@ public class HighlightTarget {
     private String mcidStr;
 
     /**
+     * 可选：JSON中的唯一标识（用于区分同一pid的不同span）
+     */
+    private String uniqueId;
+
+    /**
+     * 可选：实际高亮的QuadPoints坐标（从PDF生成后获取）
+     */
+    private float[] quadPoints;
+
+    /**
+     * 可选：实际高亮的Rectangle边界框（从PDF生成后获取）
+     */
+    private org.apache.pdfbox.pdmodel.common.PDRectangle rectangle;
+
+    /**
      * 默认构造函数
      */
     public HighlightTarget() {
@@ -251,12 +266,37 @@ public class HighlightTarget {
         this.mcidStr = mcidStr;
     }
 
+    public String getUniqueId() {
+        return uniqueId;
+    }
+
+    public void setUniqueId(String uniqueId) {
+        this.uniqueId = uniqueId;
+    }
+
+    public float[] getQuadPoints() {
+        return quadPoints;
+    }
+
+    public void setQuadPoints(float[] quadPoints) {
+        this.quadPoints = quadPoints;
+    }
+
+    public org.apache.pdfbox.pdmodel.common.PDRectangle getRectangle() {
+        return rectangle;
+    }
+
+    public void setRectangle(org.apache.pdfbox.pdmodel.common.PDRectangle rectangle) {
+        this.rectangle = rectangle;
+    }
+
     @Override
     public String toString() {
         return "HighlightTarget{" +
                 "page=" + (page + 1) +  // 显示1-based页码
                 ", mcids=" + mcids +
                 ", id='" + id + '\'' +
+                (uniqueId != null ? ", uniqueId='" + uniqueId + '\'' : "") +
                 (hasText() ? ", text='" + text + '\'' : "") +
                 (isAcrossPages() ? " [跨页]" : "") +
                 '}';

@@ -55,6 +55,33 @@ import java.util.*;
 public class HighlightByMCID {
 
     /**
+     * 注释信息数据类（用于导出JSON）
+     */
+    public static class AnnotationInfo {
+        public String uniqueId;
+        public String pid;
+        public int page;
+        public float[][] quadPoints;  // 多行，每行8个坐标
+        public RectangleInfo rectangle;
+        public String targetText;
+        public String pidText;
+
+        public static class RectangleInfo {
+            public float x;
+            public float y;
+            public float width;
+            public float height;
+
+            public RectangleInfo(float x, float y, float width, float height) {
+                this.x = x;
+                this.y = y;
+                this.width = width;
+                this.height = height;
+            }
+        }
+    }
+
+    /**
      * 生成QuadPoints数组（用于高亮注释）- 必过版
      *
      * 修复内容：
@@ -625,6 +652,8 @@ public class HighlightByMCID {
      * @param targetText 要高亮的文本内容
      * @param color RGB颜色数组
      * @param opacity 透明度（0.0-1.0）
+     * @param uniqueId 唯一标识（可选，用于标记注释）
+     * @param target HighlightTarget对象（可选，用于回写quadPoints和rectangle）
      * @return 是否成功高亮（true=成功，false=失败）
      * @throws IOException 文件操作异常
      */
@@ -635,7 +664,26 @@ public class HighlightByMCID {
             String pidText,
             String targetText,
             float[] color,
-            float opacity) throws IOException {
+            float opacity,
+            String uniqueId,
+            HighlightTarget target) throws IOException {
+
+        // 【调试】检查是否是我们关注的 uniqueId（在方法开始时就打印）
+        boolean isTargetUniqueId = uniqueId != null && (
+            uniqueId.equals("1978018618843103244") ||
+            uniqueId.equals("1978018618838908945") ||
+            uniqueId.equals("1978018618838908940")
+        );
+
+        if (isTargetUniqueId) {
+            System.out.println("\n========== 【开始处理】目标uniqueId ==========");
+            System.out.println("uniqueId: " + uniqueId);
+            System.out.println("页面: " + (pageIndex + 1));
+            System.out.println("MCID: " + mcids);
+            System.out.println("pidText: " + (pidText != null ? pidText.substring(0, Math.min(50, pidText.length())) + "..." : "null"));
+            System.out.println("targetText: " + (targetText != null ? targetText.substring(0, Math.min(50, targetText.length())) + "..." : "null"));
+            System.out.println("==============================================\n");
+        }
 
         if (targetText == null || targetText.trim().isEmpty()) {
             System.out.println("[警告] 目标文本为空，跳过高亮");
@@ -664,16 +712,48 @@ public class HighlightByMCID {
             String pidTextNorm = pidText != null ? com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(pidText) : "";
             String textNorm = com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(targetText);
 
-            // 打印前50个字符
-            System.out.println("[警告] 未找到匹配的文本");
-            System.out.println("    → MCID文本(归一化前50): " +
-                (mcidTextNorm.length() > 50 ? mcidTextNorm.substring(0, 50) + "..." : mcidTextNorm));
-            if (pidText != null && !pidText.trim().isEmpty()) {
-                System.out.println("    → pidText(前50):       " +
-                    (pidText.length() > 50 ? pidText.substring(0, 50) + "..." : pidText));
+            // 使用方法开始时定义的 isTargetUniqueId 变量
+            if (isTargetUniqueId) {
+                System.out.println("\n========== 【重点调试】未找到匹配文本 ==========");
+                System.out.println("uniqueId: " + uniqueId);
+                System.out.println("页面: " + (pageIndex + 1));
+                System.out.println("MCID: " + mcids);
+                System.out.println("\n--- MCID实际提取的文本（完整） ---");
+                System.out.println(fullText);
+                System.out.println("\n--- MCID文本（归一化） ---");
+                System.out.println(mcidTextNorm);
+
+                if (pidText != null && !pidText.trim().isEmpty()) {
+                    System.out.println("\n--- pidText（完整） ---");
+                    System.out.println(pidText);
+                    System.out.println("\n--- pidText（归一化） ---");
+                    System.out.println(pidTextNorm);
+                }
+
+                System.out.println("\n--- 要查找的text（完整） ---");
+                System.out.println(targetText);
+                System.out.println("\n--- 要查找的text（归一化） ---");
+                System.out.println(textNorm);
+
+                System.out.println("\n--- 匹配分析 ---");
+                System.out.println("text 是否在 MCID文本 中: " + fullText.contains(targetText));
+                System.out.println("text(归一化) 是否在 MCID文本(归一化) 中: " + mcidTextNorm.contains(textNorm));
+                System.out.println("MCID文本长度: " + fullText.length());
+                System.out.println("targetText长度: " + targetText.length());
+                System.out.println("===============================================\n");
+            } else {
+                // 普通日志（简化版）
+                System.out.println("[警告] 未找到匹配的文本 (uniqueId: " + uniqueId + ")");
+                System.out.println("    → MCID文本(归一化前50): " +
+                    (mcidTextNorm.length() > 50 ? mcidTextNorm.substring(0, 50) + "..." : mcidTextNorm));
+                if (pidText != null && !pidText.trim().isEmpty()) {
+                    System.out.println("    → pidText(前50):       " +
+                        (pidText.length() > 50 ? pidText.substring(0, 50) + "..." : pidText));
+                }
+                System.out.println("    → text(前50):          " +
+                    (targetText.length() > 50 ? targetText.substring(0, 50) + "..." : targetText));
             }
-            System.out.println("    → text(前50):          " +
-                (targetText.length() > 50 ? targetText.substring(0, 50) + "..." : targetText));
+
             return false;
         }
 
@@ -683,6 +763,12 @@ public class HighlightByMCID {
 
         float[] quadPoints = generateQuadPoints(matchedPositions, pageHeight);
         PDRectangle rect = calculateBoundingBoxFromQuadPoints(quadPoints);
+
+        // 将quadPoints和rectangle写回到target对象（如果提供）
+        if (target != null) {
+            target.setQuadPoints(quadPoints);
+            target.setRectangle(rect);
+        }
 
         // 创建高亮注释
         COSDictionary highlightDict = new COSDictionary();
@@ -702,6 +788,11 @@ public class HighlightByMCID {
         // 设置批注内容为要高亮的文本
         highlight.setContents(targetText);
 
+        // 设置uniqueId（使用PDF注释的NM字段）
+        if (uniqueId != null && !uniqueId.trim().isEmpty()) {
+            highlight.getCOSObject().setString(COSName.NM, uniqueId);
+        }
+
         page.getAnnotations().add(highlight);
 
         System.out.println("[成功] 页面 " + (pageIndex + 1) + " 高亮了 " +
@@ -717,6 +808,7 @@ public class HighlightByMCID {
      * 2. 合并所有TextPosition，在完整文本中查找目标文本
      * 3. 根据匹配结果，按页面分组TextPosition
      * 4. 为每个页面生成高亮注释
+     * 5. 将所有页面的quadPoints合并后写回到target对象
      *
      * 使用场景：
      * - 段落跨越多页（如page="83|84", mcid="146,147,148|0,1,2,..."）
@@ -728,6 +820,7 @@ public class HighlightByMCID {
      * @param targetText 要高亮的文本内容
      * @param color RGB颜色数组
      * @param opacity 透明度（0.0-1.0）
+     * @param target HighlightTarget对象（可选，用于回写quadPoints和rectangle）
      * @return 是否成功高亮（true=成功，false=失败）
      * @throws IOException 文件操作异常
      */
@@ -737,14 +830,39 @@ public class HighlightByMCID {
             String pidText,
             String targetText,
             float[] color,
-            float opacity) throws IOException {
+            float opacity,
+            HighlightTarget target) throws IOException {
+
+        // 【调试】检查是否是我们关注的 uniqueId（在方法开始时就打印）
+        String uniqueId = target != null ? target.getUniqueId() : null;
+        boolean isTargetUniqueId = uniqueId != null && (
+            uniqueId.equals("1978018618843103244") ||
+            uniqueId.equals("1978018618838908945") ||
+            uniqueId.equals("1978018618838908940")
+        );
+
+        if (isTargetUniqueId) {
+            System.out.println("\n========== 【跨页处理开始】目标uniqueId ==========");
+            System.out.println("uniqueId: " + uniqueId);
+            System.out.println("pidText: " + (pidText != null ? pidText.substring(0, Math.min(50, pidText.length())) + "..." : "null"));
+            System.out.println("targetText: " + (targetText != null ? targetText.substring(0, Math.min(50, targetText.length())) + "..." : "null"));
+            System.out.println("pageToMcids: " + pageToMcids);
+            System.out.println("target当前quadPoints: " + (target.getQuadPoints() != null ? "已有(" + target.getQuadPoints().length + "个点)" : "null"));
+            System.out.println("=================================================\n");
+        }
 
         if (targetText == null || targetText.trim().isEmpty()) {
+            if (isTargetUniqueId) {
+                System.out.println("【跨页处理】目标文本为空，跳过 uniqueId=" + uniqueId);
+            }
             System.out.println("[警告] 目标文本为空，跳过高亮");
             return false;
         }
 
         if (pageToMcids == null || pageToMcids.isEmpty()) {
+            if (isTargetUniqueId) {
+                System.out.println("【跨页处理】页面MCID映射为空，跳过 uniqueId=" + uniqueId);
+            }
             System.out.println("[警告] 页面MCID映射为空，跳过高亮");
             return false;
         }
@@ -813,12 +931,42 @@ public class HighlightByMCID {
         if (matchedPositions.isEmpty()) {
             String fullTextNorm = com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(fullText);
             String targetTextNorm = com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(targetText);
+            String pidTextNorm = pidText != null ? com.example.docxserver.util.taggedPDF.TextUtils.normalizeText(pidText) : "";
 
-            System.out.println("[警告] 跨页匹配失败");
-            System.out.println("    → 合并文本(归一化前50): " +
-                (fullTextNorm.length() > 50 ? fullTextNorm.substring(0, 50) + "..." : fullTextNorm));
-            System.out.println("    → 目标文本(归一化前50): " +
-                (targetTextNorm.length() > 50 ? targetTextNorm.substring(0, 50) + "..." : targetTextNorm));
+            if (isTargetUniqueId) {
+                System.out.println("\n========== 【跨页重点调试】未找到匹配文本 ==========");
+                System.out.println("uniqueId: " + uniqueId);
+                System.out.println("页面范围: " + pageToMcids.keySet());
+                System.out.println("\n--- 合并后的完整文本（原始） ---");
+                System.out.println(fullText);
+                System.out.println("\n--- 合并后的完整文本（归一化） ---");
+                System.out.println(fullTextNorm);
+
+                if (pidText != null && !pidText.trim().isEmpty()) {
+                    System.out.println("\n--- pidText（原始） ---");
+                    System.out.println(pidText);
+                    System.out.println("\n--- pidText（归一化） ---");
+                    System.out.println(pidTextNorm);
+                }
+
+                System.out.println("\n--- 要查找的targetText（原始） ---");
+                System.out.println(targetText);
+                System.out.println("\n--- 要查找的targetText（归一化） ---");
+                System.out.println(targetTextNorm);
+
+                System.out.println("\n--- 匹配分析 ---");
+                System.out.println("targetText 是否在 合并文本 中: " + fullText.contains(targetText));
+                System.out.println("targetText(归一化) 是否在 合并文本(归一化) 中: " + fullTextNorm.contains(targetTextNorm));
+                System.out.println("合并文本长度: " + fullText.length());
+                System.out.println("targetText长度: " + targetText.length());
+                System.out.println("=====================================================\n");
+            } else {
+                System.out.println("[警告] 跨页匹配失败 (uniqueId: " + uniqueId + ")");
+                System.out.println("    → 合并文本(归一化前50): " +
+                    (fullTextNorm.length() > 50 ? fullTextNorm.substring(0, 50) + "..." : fullTextNorm));
+                System.out.println("    → 目标文本(归一化前50): " +
+                    (targetTextNorm.length() > 50 ? targetTextNorm.substring(0, 50) + "..." : targetTextNorm));
+            }
             return false;
         }
 
@@ -843,6 +991,9 @@ public class HighlightByMCID {
         System.out.println("[跨页高亮] 匹配文本分布在 " + pageToPositions.size() + " 个页面");
 
         // ========== 阶段4：为每个页面创建高亮注释 ==========
+        // 用于合并所有页面的quadPoints（写回target）
+        List<Float> allQuadPointsList = new ArrayList<>();
+
         for (Map.Entry<Integer, List<TextPosition>> entry : pageToPositions.entrySet()) {
             int pageIndex = entry.getKey();
             List<TextPosition> positionsForPage = entry.getValue();
@@ -854,6 +1005,11 @@ public class HighlightByMCID {
             // 生成QuadPoints
             float[] quadPoints = generateQuadPoints(positionsForPage, pageHeight);
             PDRectangle rect = calculateBoundingBoxFromQuadPoints(quadPoints);
+
+            // 收集quadPoints（用于合并）
+            for (float qp : quadPoints) {
+                allQuadPointsList.add(qp);
+            }
 
             // 创建高亮注释
             COSDictionary highlightDict = new COSDictionary();
@@ -877,6 +1033,32 @@ public class HighlightByMCID {
 
             System.out.println("[跨页高亮] 页面 " + (pageIndex + 1) + " 高亮了 " +
                 positionsForPage.size() + " 个字形");
+        }
+
+        // ========== 阶段5：将合并后的quadPoints写回到target对象 ==========
+        if (target != null && !allQuadPointsList.isEmpty()) {
+            // 转换为数组
+            float[] mergedQuadPoints = new float[allQuadPointsList.size()];
+            for (int i = 0; i < allQuadPointsList.size(); i++) {
+                mergedQuadPoints[i] = allQuadPointsList.get(i);
+            }
+
+            // 计算合并后的边界框
+            PDRectangle mergedRect = calculateBoundingBoxFromQuadPoints(mergedQuadPoints);
+
+            // 写回到target
+            target.setQuadPoints(mergedQuadPoints);
+            target.setRectangle(mergedRect);
+
+            if (isTargetUniqueId) {
+                System.out.println("\n【跨页处理成功】uniqueId=" + uniqueId);
+                System.out.println("生成的quadPoints数量: " + (mergedQuadPoints.length / 8) + "个四边形");
+                System.out.println("已成功写回到target对象");
+                System.out.println("=================================================\n");
+            }
+
+            System.out.println("[跨页高亮] 已将合并后的quadPoints写回target（共" +
+                (mergedQuadPoints.length / 8) + "个四边形）");
         }
 
         return true;
@@ -1105,11 +1287,11 @@ public class HighlightByMCID {
                         continue;
                     }
 
-                    // 调用跨页高亮方法
+                    // 调用跨页高亮方法（传入target以便写回quadPoints）
                     boolean success;
                     if (target.hasText()) {
                         System.out.println("  -> 使用跨页字符级别高亮，目标文本: " + target.getText());
-                        success = highlightByTextAcrossPages(doc, pageToMcids, target.getPidText(), target.getText(), color, opacity);
+                        success = highlightByTextAcrossPages(doc, pageToMcids, target.getPidText(), target.getText(), color, opacity, target);
                     } else {
                         System.out.println("  -> 使用跨页MCID区域高亮");
                         // 为每个页面分别高亮
@@ -1142,7 +1324,7 @@ public class HighlightByMCID {
                     if (target.hasText()) {
                         // 字符级别高亮
                         System.out.println("  -> 使用字符级别高亮，目标文本: " + target.getText());
-                        success = highlightByTextInMcids(doc, target.getPage(), mcidInts, target.getPidText(), target.getText(), color, opacity);
+                        success = highlightByTextInMcids(doc, target.getPage(), mcidInts, target.getPidText(), target.getText(), color, opacity, target.getUniqueId(), target);
                     } else {
                         // MCID区域高亮
                         System.out.println("  -> 使用MCID区域高亮");

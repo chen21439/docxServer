@@ -336,12 +336,14 @@ public class ParagraphMapperRefactored {
             String pidText;
             String text;  // 需要高亮的文本（pidText的子串）
             int index;  // span的序号（从1开始）
+            String uniqueId;  // JSON中的唯一标识
 
-            SpanData(String pid, String pidText, String text, int index) {
+            SpanData(String pid, String pidText, String text, int index, String uniqueId) {
                 this.pid = pid;
                 this.pidText = pidText;
                 this.text = text;
                 this.index = index;
+                this.uniqueId = uniqueId;
             }
         }
 
@@ -349,49 +351,117 @@ public class ParagraphMapperRefactored {
 
         String jsonContent = new String(Files.readAllBytes(Paths.get(jsonPath)), StandardCharsets.UTF_8);
 
-        // 使用字符串解析JSON（简单粗暴但有效）
-        // 查找所有 "pid": "xxx" 和对应的 "pidText": "yyy" 以及 "text": "zzz"
+        // 修复后的JSON解析逻辑：先找uniqueId，再找它的spanList
         int pos = 0;
         int spanIndex = 1;
-        while ((pos = jsonContent.indexOf("\"pid\":", pos)) != -1) {
-            // 提取pid值
-            int pidStart = jsonContent.indexOf("\"", pos + 6) + 1;
-            int pidEnd = jsonContent.indexOf("\"", pidStart);
-            String pid = jsonContent.substring(pidStart, pidEnd);
 
-            // 查找下一个pid的位置（用于限定查找范围）
-            int nextPidPos = jsonContent.indexOf("\"pid\":", pidEnd + 1);
-            int searchEnd = (nextPidPos == -1) ? jsonContent.length() : nextPidPos;
+        // 逐个查找 dataList 中的每个元素（每个元素包含 uniqueId 和 spanList）
+        while ((pos = jsonContent.indexOf("\"uniqueId\":", pos)) != -1) {
+            // 提取 uniqueId
+            int uniqueIdStart = jsonContent.indexOf("\"", pos + 11) + 1;
+            int uniqueIdEnd = jsonContent.indexOf("\"", uniqueIdStart);
+            String uniqueId = jsonContent.substring(uniqueIdStart, uniqueIdEnd);
 
-            // 查找对应的pidText值（在当前pid和下一个pid之间）
-            int pidTextPos = jsonContent.indexOf("\"pidText\":", pidEnd);
-            String pidText = "";
-            if (pidTextPos != -1 && pidTextPos < searchEnd) {
-                int pidTextStart = jsonContent.indexOf("\"", pidTextPos + 10) + 1;
-                int pidTextEnd = jsonContent.indexOf("\"", pidTextStart);
-                pidText = jsonContent.substring(pidTextStart, pidTextEnd);
-                // 反转义JSON字符串
-                pidText = pidText.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"");
+            // 查找这个 uniqueId 对应的 spanList 数组
+            int spansPos = jsonContent.indexOf("\"spanList\":", uniqueIdEnd);
+            if (spansPos == -1) {
+                pos = uniqueIdEnd;
+                continue;
             }
 
-            // 查找对应的text值（在当前pid和下一个pid之间）
-            int textFieldPos = jsonContent.indexOf("\"text\":", pidEnd);
-            String text = "";
-            if (textFieldPos != -1 && textFieldPos < searchEnd) {
-                int textStart = jsonContent.indexOf("\"", textFieldPos + 7) + 1;
-                int textEnd = jsonContent.indexOf("\"", textStart);
-                text = jsonContent.substring(textStart, textEnd);
-                // 反转义JSON字符串
-                text = text.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"");
+            // 查找 spanList 数组的结束位置（找到下一个 uniqueId 或文件末尾）
+            int nextUniqueIdPos = jsonContent.indexOf("\"uniqueId\":", uniqueIdEnd + 1);
+            int spansEnd = (nextUniqueIdPos == -1) ? jsonContent.length() : nextUniqueIdPos;
+
+            // 在 spanList 数组范围内查找所有的 pid
+            int spanPos = spansPos;
+            while ((spanPos = jsonContent.indexOf("\"pid\":", spanPos)) != -1 && spanPos < spansEnd) {
+                // 提取 pid
+                int pidStart = jsonContent.indexOf("\"", spanPos + 6) + 1;
+                int pidEnd = jsonContent.indexOf("\"", pidStart);
+                String pid = jsonContent.substring(pidStart, pidEnd);
+
+                // 查找下一个 pid 的位置（用于限定当前 span 的搜索范围）
+                int nextPidPos = jsonContent.indexOf("\"pid\":", pidEnd + 1);
+                int spanSearchEnd = (nextPidPos == -1 || nextPidPos >= spansEnd) ? spansEnd : nextPidPos;
+
+                // 查找对应的 pidText（在当前 pid 和下一个 pid 之间）
+                int pidTextPos = jsonContent.indexOf("\"pidText\":", pidEnd);
+                String pidText = "";
+                if (pidTextPos != -1 && pidTextPos < spanSearchEnd) {
+                    int pidTextStart = jsonContent.indexOf("\"", pidTextPos + 10) + 1;
+                    int pidTextEnd = jsonContent.indexOf("\"", pidTextStart);
+                    pidText = jsonContent.substring(pidTextStart, pidTextEnd);
+                    // 反转义JSON字符串
+                    pidText = pidText.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"");
+                }
+
+                // 查找对应的 text（在当前 pid 和下一个 pid 之间）
+                int textFieldPos = jsonContent.indexOf("\"text\":", pidEnd);
+                String text = "";
+                if (textFieldPos != -1 && textFieldPos < spanSearchEnd) {
+                    int textStart = jsonContent.indexOf("\"", textFieldPos + 7) + 1;
+                    int textEnd = jsonContent.indexOf("\"", textStart);
+                    text = jsonContent.substring(textStart, textEnd);
+                    // 反转义JSON字符串
+                    text = text.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"");
+                }
+
+                // 不去重：为每个 span 创建一条记录，使用当前 uniqueId
+                spanList.add(new SpanData(pid, pidText, text, spanIndex++, uniqueId));
+
+                // 【调试】检查是否是我们关注的 uniqueId
+                if (uniqueId != null && (
+                    uniqueId.equals("1978018618843103244") ||
+                    uniqueId.equals("1978018618838908945") ||
+                    uniqueId.equals("1978018618838908940")
+                )) {
+                    System.out.println("\n========== 【JSON解析】发现目标uniqueId ==========");
+                    System.out.println("uniqueId: " + uniqueId);
+                    System.out.println("pid: " + pid);
+                    System.out.println("pidText: " + pidText);
+                    System.out.println("text: " + text);
+                    System.out.println("spanIndex: " + spanIndex);
+                    System.out.println("=================================================\n");
+                }
+
+                spanPos = pidEnd;
             }
 
-            // 不去重：为每个span都创建一条记录
-            spanList.add(new SpanData(pid, pidText, text, spanIndex++));
-
-            pos = pidEnd;
+            pos = uniqueIdEnd;
         }
 
         System.out.println("从JSON文件中读取到 " + spanList.size() + " 个span\n");
+
+        // ===== 调试：统计JSON中每个PID的出现次数 =====
+        Map<String, Integer> jsonPidCount = new HashMap<String, Integer>();
+        for (SpanData span : spanList) {
+            jsonPidCount.put(span.pid, jsonPidCount.getOrDefault(span.pid, 0) + 1);
+        }
+
+        // 找出JSON中重复的PID
+        List<String> jsonDuplicatePids = new ArrayList<String>();
+        for (Map.Entry<String, Integer> entry : jsonPidCount.entrySet()) {
+            if (entry.getValue() > 1) {
+                jsonDuplicatePids.add(entry.getKey());
+            }
+        }
+
+        if (!jsonDuplicatePids.isEmpty()) {
+            System.out.println("=== JSON中的重复PID统计 ===");
+            System.out.println("共 " + jsonDuplicatePids.size() + " 个PID在JSON中出现多次：");
+
+            // 只打印前10个
+            int printLimit = Math.min(10, jsonDuplicatePids.size());
+            for (int i = 0; i < printLimit; i++) {
+                String pid = jsonDuplicatePids.get(i);
+                System.out.println("  " + pid + ": " + jsonPidCount.get(pid) + " 次");
+            }
+            if (jsonDuplicatePids.size() > printLimit) {
+                System.out.println("  ... 还有 " + (jsonDuplicatePids.size() - printLimit) + " 个");
+            }
+            System.out.println();
+        }
 
         if (spanList.isEmpty()) {
             System.out.println("JSON文件中没有找到pid，退出");
@@ -696,6 +766,46 @@ public class ParagraphMapperRefactored {
             allMatchedSpans.addAll(exactMatchSpans);
             allMatchedSpans.addAll(fallbackMatchSpans);
 
+            // ===== 统计每个PID的出现次数 =====
+            Map<String, Integer> pidCount = new HashMap<String, Integer>();
+            for (SpanData span : allMatchedSpans) {
+                pidCount.put(span.pid, pidCount.getOrDefault(span.pid, 0) + 1);
+            }
+
+            // 找出重复的PID（出现次数>1）
+            List<String> duplicatePids = new ArrayList<String>();
+            for (Map.Entry<String, Integer> entry : pidCount.entrySet()) {
+                if (entry.getValue() > 1) {
+                    duplicatePids.add(entry.getKey());
+                }
+            }
+
+            // 打印重复统计
+            if (!duplicatePids.isEmpty()) {
+                System.out.println("\n=== 【警告】发现重复的PID ===");
+                System.out.println("共 " + duplicatePids.size() + " 个PID出现了多次：");
+
+                // 按出现次数排序
+                java.util.Collections.sort(duplicatePids, new java.util.Comparator<String>() {
+                    @Override
+                    public int compare(String pid1, String pid2) {
+                        return pidCount.get(pid2) - pidCount.get(pid1);  // 降序
+                    }
+                });
+
+                // 打印前20个重复最多的
+                int printLimit = Math.min(20, duplicatePids.size());
+                for (int i = 0; i < printLimit; i++) {
+                    String pid = duplicatePids.get(i);
+                    System.out.println("  " + pid + ": 出现 " + pidCount.get(pid) + " 次");
+                }
+                if (duplicatePids.size() > printLimit) {
+                    System.out.println("  ... 还有 " + (duplicatePids.size() - printLimit) + " 个重复PID未显示");
+                }
+            } else {
+                System.out.println("\n=== 【正常】没有发现重复的PID ===");
+            }
+
             // 转换为HighlightTarget列表（每个span一个target，带text字段）
             List<com.example.docxserver.util.pdf.highter.HighlightTarget> targets =
                 new ArrayList<com.example.docxserver.util.pdf.highter.HighlightTarget>();
@@ -727,16 +837,18 @@ public class ParagraphMapperRefactored {
                     String firstMcids = isAcrossPages ? mcidStr.split("\\|")[0] : mcidStr;
                     int pageNum = Integer.parseInt(firstPage.trim());
 
-                    // 打印详细信息
-                    System.out.println("\n  [" + targetIndex + "] " + span.pid + (isAcrossPages ? " [跨页]" : ""));
-                    System.out.println("    页面: " + pageStr + " | MCID: " + mcidStr);
-                    System.out.println("    → PDF实际文本(归一化前50): " +
-                        (mcidTextNorm.length() > 50 ? mcidTextNorm.substring(0, 50) + "..." : mcidTextNorm));
-                    System.out.println("    → pidText(归一化前50):     " +
-                        (pidTextNorm.length() > 50 ? pidTextNorm.substring(0, 50) + "..." : pidTextNorm));
-                    System.out.println("    → 高亮text(归一化前50):    " +
-                        (textNorm.length() > 50 ? textNorm.substring(0, 50) + "..." : textNorm));
-                    System.out.println("    → 成功");
+                    // 只打印Page为20的日志
+                    if (pageNum == 20) {
+                        System.out.println("\n  [" + targetIndex + "] " + span.pid + (isAcrossPages ? " [跨页]" : ""));
+                        System.out.println("    页面: " + pageStr + " | MCID: " + mcidStr);
+                        System.out.println("    → PDF实际文本(归一化前50): " +
+                            (mcidTextNorm.length() > 50 ? mcidTextNorm.substring(0, 50) + "..." : mcidTextNorm));
+                        System.out.println("    → pidText(归一化前50):     " +
+                            (pidTextNorm.length() > 50 ? pidTextNorm.substring(0, 50) + "..." : pidTextNorm));
+                        System.out.println("    → 高亮text(归一化前50):    " +
+                            (textNorm.length() > 50 ? textNorm.substring(0, 50) + "..." : textNorm));
+                        System.out.println("    → 成功");
+                    }
 
                     // 统计页面高亮数量（跨页情况统计所有页面）
                     if (isAcrossPages) {
@@ -758,6 +870,9 @@ public class ParagraphMapperRefactored {
                             span.pidText,  // pidText
                             span.text  // text
                         );
+
+                    // 设置uniqueId
+                    target.setUniqueId(span.uniqueId);
 
                     // 设置原始的跨页信息
                     if (isAcrossPages) {
@@ -797,6 +912,9 @@ public class ParagraphMapperRefactored {
                     doc.save(outputPdfPath);
                     System.out.println("\n高亮PDF已保存到: " + outputPdfPath);
 
+                    // 导出注释信息到JSON
+                    exportAnnotationsToJson(targets, dir + taskId + "_pdf_annotations.json");
+
                 } catch (Exception e) {
                     System.err.println("高亮失败: " + e.getMessage());
                     e.printStackTrace();
@@ -806,5 +924,151 @@ public class ParagraphMapperRefactored {
             System.out.println("\n=== 跳过高亮 ===");
             System.out.println("没有匹配成功的项，跳过高亮");
         }
+    }
+
+    /**
+     * 导出注释信息到JSON文件
+     *
+     * @param targets 高亮目标列表
+     * @param jsonPath JSON文件路径
+     */
+    private static void exportAnnotationsToJson(
+            List<com.example.docxserver.util.pdf.highter.HighlightTarget> targets,
+            String jsonPath) {
+        try {
+            System.out.println("\n=== 导出注释信息到JSON ===");
+
+            // 按uniqueId分组
+            Map<String, List<com.example.docxserver.util.pdf.highter.HighlightTarget>> groupedByUniqueId =
+                new java.util.LinkedHashMap<String, List<com.example.docxserver.util.pdf.highter.HighlightTarget>>();
+
+            for (com.example.docxserver.util.pdf.highter.HighlightTarget target : targets) {
+                String uniqueId = target.getUniqueId();
+                if (uniqueId == null || uniqueId.trim().isEmpty()) {
+                    uniqueId = "unknown_" + target.getId();  // 没有uniqueId时使用pid
+                }
+
+                if (!groupedByUniqueId.containsKey(uniqueId)) {
+                    groupedByUniqueId.put(uniqueId, new ArrayList<com.example.docxserver.util.pdf.highter.HighlightTarget>());
+                }
+                groupedByUniqueId.get(uniqueId).add(target);
+            }
+
+            // 构建JSON
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+            json.append("  \"annotations\": [\n");
+
+            int annotationIndex = 0;
+            for (Map.Entry<String, List<com.example.docxserver.util.pdf.highter.HighlightTarget>> entry :
+                 groupedByUniqueId.entrySet()) {
+
+                String uniqueId = entry.getKey();
+                List<com.example.docxserver.util.pdf.highter.HighlightTarget> targetList = entry.getValue();
+
+                if (annotationIndex > 0) {
+                    json.append(",\n");
+                }
+
+                json.append("    {\n");
+                json.append("      \"uniqueId\": \"").append(escapeJson(uniqueId)).append("\",\n");
+                json.append("      \"spanList\": [\n");
+
+                for (int i = 0; i < targetList.size(); i++) {
+                    com.example.docxserver.util.pdf.highter.HighlightTarget target = targetList.get(i);
+
+                    if (i > 0) {
+                        json.append(",\n");
+                    }
+
+                    json.append("        {\n");
+
+                    // pid在span内部
+                    String pid = target.getId() != null ? target.getId() : "";
+                    json.append("          \"pid\": \"").append(escapeJson(pid)).append("\",\n");
+
+                    json.append("          \"page\": ").append(target.getPage() + 1).append(",\n");  // 转换为1-based
+
+                    // MCID列表
+                    json.append("          \"mcids\": [");
+                    List<String> mcids = target.getMcids();
+                    for (int j = 0; j < mcids.size(); j++) {
+                        if (j > 0) json.append(", ");
+                        json.append(mcids.get(j));
+                    }
+                    json.append("],\n");
+
+                    // quadPoints（从target获取，保留原始精度）
+                    float[] quadPoints = target.getQuadPoints();
+                    json.append("          \"quadPoints\": ");
+                    if (quadPoints != null && quadPoints.length > 0) {
+                        json.append("[");
+                        for (int j = 0; j < quadPoints.length; j++) {
+                            if (j > 0) json.append(", ");
+                            json.append(quadPoints[j]);  // 直接输出，保留原始精度
+                        }
+                        json.append("]");
+                    } else {
+                        json.append("null");
+                    }
+                    json.append(",\n");
+
+                    // rectangle（从target获取，保留原始精度）
+                    org.apache.pdfbox.pdmodel.common.PDRectangle rectangle = target.getRectangle();
+                    json.append("          \"rectangle\": ");
+                    if (rectangle != null) {
+                        json.append("{\n");
+                        json.append("            \"x\": ").append(rectangle.getLowerLeftX()).append(",\n");
+                        json.append("            \"y\": ").append(rectangle.getLowerLeftY()).append(",\n");
+                        json.append("            \"width\": ").append(rectangle.getWidth()).append(",\n");
+                        json.append("            \"height\": ").append(rectangle.getHeight()).append("\n");
+                        json.append("          }");
+                    } else {
+                        json.append("null");
+                    }
+                    json.append(",\n");
+
+                    // targetText
+                    String targetText = target.getText() != null ? target.getText() : "";
+                    json.append("          \"targetText\": \"").append(escapeJson(targetText)).append("\",\n");
+
+                    // pidText
+                    String pidText = target.getPidText() != null ? target.getPidText() : "";
+                    json.append("          \"pidText\": \"").append(escapeJson(pidText)).append("\"\n");
+
+                    json.append("        }");
+                }
+
+                json.append("\n      ]\n");
+                json.append("    }");
+
+                annotationIndex++;
+            }
+
+            json.append("\n  ]\n");
+            json.append("}\n");
+
+            // 写入文件
+            Files.write(Paths.get(jsonPath), json.toString().getBytes(StandardCharsets.UTF_8));
+
+            System.out.println("注释信息已导出到: " + jsonPath);
+            System.out.println("共导出 " + annotationIndex + " 个uniqueId，" + targets.size() + " 个span");
+
+        } catch (Exception e) {
+            System.err.println("导出JSON失败: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * JSON字符串转义
+     */
+    private static String escapeJson(String str) {
+        if (str == null) return "";
+        return str.replace("\\", "\\\\")
+                  .replace("\"", "\\\"")
+                  .replace("\n", "\\n")
+                  .replace("\r", "\\r")
+                  .replace("\t", "\\t");
     }
 }
