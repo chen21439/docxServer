@@ -1,0 +1,24 @@
+{
+  "_comment": "PDF表格解析配置文件 - 支持热更新，修改后无需重新编译",
+
+  "WORD_GAP_EM": 0.3,
+  "LINE_GAP_EM": 0.5,
+  "X_BACKTRACK_EM": 0.4,
+
+  "COORD_MERGE_EPS": 2.0,
+  "MIN_LINE_LENGTH": 5.0,
+
+  "MERGE_SCORE_THRESHOLD": 0.80,
+  "EDGE_ALIGN_TOL_PT": 3.0,
+  "BASELINE_GAP_EM_MIN": 1.0,
+  "BASELINE_GAP_EM_MAX": 2.0,
+  "ROW_EMPTY_RATIO": 0.80,
+
+  "weights": {
+    "no_hline_between": 1.00,
+    "edge_align_sim": 0.80,
+    "baseline_gap_em": 0.60,
+    "row_rplus1_empty_ratio": 0.50,
+    "style_match": 0.30
+  }
+}
