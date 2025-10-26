@@ -14,7 +14,7 @@ import java.util.*;
  * Docx转HTML处理工具类
  * 用于将docx文件转换为HTML并注入ID标签
  */
-public class DocxHtmlProcessorUtil {
+public class DocxProcessorUtil {
 
     /**
      * Span类：表示文档中的一个文本片段
