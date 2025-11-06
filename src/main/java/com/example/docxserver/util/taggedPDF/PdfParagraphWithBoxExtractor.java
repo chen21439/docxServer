@@ -64,6 +64,7 @@ public class PdfParagraphWithBoxExtractor {
         double[] bbox; // [x0, y0, x1, y1] PDF坐标系
         int pageIndex; // 页面索引（0-based）
         String structType; // 结构类型（用于映射category_id）
+        List<TextPosition> positions; // 字形列表（用于生成 words 和 bbox_glyph_norm）
 
         // 调试信息
         double yDirAdj_raw;  // 原始YDirAdj（第一个TextPosition的）
@@ -90,6 +91,97 @@ public class PdfParagraphWithBoxExtractor {
             this.cocoImage = cocoImage;
             this.annotations = annotations;
         }
+    }
+
+    /**
+     * 判断字符是否为零宽字符或特殊空格
+     * 与 TextUtils.removeZeroWidthChars() 的字符列表保持一致
+     *
+     * @param unicode 字符串
+     * @return 是否为零宽字符或特殊空格
+     */
+    private static boolean isZeroWidthChar(String unicode) {
+        if (unicode == null || unicode.isEmpty()) {
+            return false;
+        }
+
+        char ch = unicode.charAt(0);
+
+        // 零宽字符
+        if (ch == '\u200B' ||  // Zero Width Space
+            ch == '\u200C' ||  // Zero Width Non-Joiner
+            ch == '\u200D' ||  // Zero Width Joiner
+            ch == '\uFEFF') {  // Zero Width No-Break Space
+            return true;
+        }
+
+        // 特殊空格（与 TextUtils.removeZeroWidthChars() 保持一致）
+        if (ch == '\u00A0' ||  // No-Break Space
+            ch == '\u1680' ||
+            (ch >= '\u2000' && ch <= '\u200A') ||
+            ch == '\u202F' ||
+            ch == '\u205F' ||
+            ch == '\u3000') {  // Ideographic Space
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 计算单个字形的像素坐标
+     *
+     * @param tp        TextPosition 对象
+     * @param pdfHeight PDF 页面高度
+     * @param scaleX    X 方向缩放比例
+     * @param scaleY    Y 方向缩放比例
+     * @return 像素坐标 [x, y, w, h]
+     */
+    private static double[] computeGlyphPixelBox(TextPosition tp, float pdfHeight, double scaleX, double scaleY) {
+        // 使用 DirAdj 方法计算 PDF 坐标
+        double x0_pdf = tp.getXDirAdj();
+        double width_pdf = tp.getWidthDirAdj();
+        double height_pdf = tp.getHeightDir();
+        double yBase = Math.abs(tp.getYDirAdj());
+        double y1_pdf = yBase + height_pdf;  // 顶部
+        double y0_pdf = yBase;                // 底部
+
+        // 转换到像素坐标（左上角为原点）
+        double x = x0_pdf * scaleX;
+        double y = (pdfHeight - y1_pdf) * scaleY;
+        double w = width_pdf * scaleX;
+        double h = (y1_pdf - y0_pdf) * scaleY;
+
+        return new double[]{x, y, w, h};
+    }
+
+    /**
+     * 归一化坐标（LayoutLMv3 格式）
+     *
+     * @param pixelBox    像素坐标 [x, y, w, h]
+     * @param imageWidth  图像宽度
+     * @param imageHeight 图像高度
+     * @return 归一化坐标 [x0, y0, x1, y1]，范围 0~1000，整数
+     */
+    private static List<Integer> normalizeBox(double[] pixelBox, int imageWidth, int imageHeight) {
+        double x = pixelBox[0];
+        double y = pixelBox[1];
+        double w = pixelBox[2];
+        double h = pixelBox[3];
+
+        // 归一化到 0~1000，左上角为原点
+        // x0, y0 向下取整，x1, y1 向上取整（保留更大的框）
+        int x0_norm = (int) Math.floor((x / imageWidth) * 1000.0);
+        int y0_norm = (int) Math.floor((y / imageHeight) * 1000.0);
+        int x1_norm = (int) Math.ceil(((x + w) / imageWidth) * 1000.0);
+        int y1_norm = (int) Math.ceil(((y + h) / imageHeight) * 1000.0);
+
+        List<Integer> result = new ArrayList<>();
+        result.add(x0_norm);
+        result.add(y0_norm);
+        result.add(x1_norm);
+        result.add(y1_norm);
+        return result;
     }
 
     /**
@@ -274,17 +366,36 @@ public class PdfParagraphWithBoxExtractor {
                 annotation.setScaleY(scaleY);
 
                 // ==== 计算归一化坐标 bbox_norm ====
-                // 格式：[[x0, y0, x1, y1]]，范围0~1000，左上角为原点
-                // 从像素坐标 [x, y, w, h] 转换为 [x0, y0, x1, y1]
-                double x0_norm = (x / imageWidth) * 1000.0;
-                double y0_norm = (y / imageHeight) * 1000.0;
-                double x1_norm = ((x + w) / imageWidth) * 1000.0;
-                double y1_norm = ((y + h) / imageHeight) * 1000.0;
-
-                double[][] bboxNorm = new double[][] {
-                    {x0_norm, y0_norm, x1_norm, y1_norm}
-                };
+                // LayoutLMv3格式：[x0, y0, x1, y1]
+                List<Integer> bboxNorm = normalizeBox(pixelBox, imageWidth, imageHeight);
                 annotation.setBbox_norm(bboxNorm);
+
+                // ==== 处理字形数据 words 和 bbox_glyph_norm ====
+                if (para.positions != null && !para.positions.isEmpty()) {
+                    List<String> words = new ArrayList<>();
+                    List<List<Integer>> bboxGlyphNormList = new ArrayList<>();
+
+                    for (TextPosition tp : para.positions) {
+                        String glyph = tp.getUnicode();
+
+                        // 跳过零宽字符和特殊空格
+                        if (isZeroWidthChar(glyph)) {
+                            continue;
+                        }
+
+                        // 添加字形文本
+                        words.add(glyph);
+
+                        // 计算字形的像素坐标并归一化（LayoutLMv3格式）
+                        double[] glyphPixelBox = computeGlyphPixelBox(tp, pdfHeight, scaleX, scaleY);
+                        List<Integer> glyphNormBox = normalizeBox(glyphPixelBox, imageWidth, imageHeight);
+                        bboxGlyphNormList.add(glyphNormBox);
+                    }
+
+                    // 设置字形数据
+                    annotation.setWords(words);
+                    annotation.setBbox_glyph_norm(bboxGlyphNormList);
+                }
 
                 annotations.add(annotation);
             }
@@ -590,6 +701,9 @@ public class PdfParagraphWithBoxExtractor {
         // 添加到段落列表（带结构类型信息和调试信息）
         String structType = element.getStructureType();
         ParagraphWithPageInfo paraInfo = new ParagraphWithPageInfo(text, box, pageIndex, structType);
+
+        // 保存TextPosition列表（用于生成words和bbox_glyph_norm）
+        paraInfo.positions = positions;
 
         // 添加调试信息：记录第一个TextPosition的YDirAdj
         if (!positions.isEmpty()) {
