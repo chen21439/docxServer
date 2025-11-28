@@ -1,14 +1,14 @@
 package com.example.docxserver.util.taggedPDF;
 
 import com.example.docxserver.util.MCIDTextExtractor;
+import com.example.docxserver.util.taggedPDF.dto.TextWithPositions;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement;
+import org.apache.pdfbox.text.TextPosition;
 
 import java.io.IOException;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
  * PDF文本提取器
@@ -185,5 +185,73 @@ public class PdfTextExtractor {
         Set<Integer> result = new HashSet<>();
         McidCollector.collectAllMcidsRecursive(element, result);
         return result;
+    }
+
+    /**
+     * 从结构元素中提取文本及其TextPosition列表（包含坐标信息）
+     *
+     * 用于需要同时获取文本和边界框坐标的场景
+     *
+     * @param element 结构元素
+     * @param doc PDF文档
+     * @return TextWithPositions对象（包含文本和TextPosition列表）
+     * @throws IOException IO异常
+     */
+    public static TextWithPositions extractTextWithPositions(
+            PDStructureElement element,
+            PDDocument doc) throws IOException {
+
+        // 1. 优先使用 /ActualText
+        String actualText = element.getActualText();
+        if (actualText != null && !actualText.isEmpty()) {
+            // ActualText没有位置信息，返回空列表
+            return new TextWithPositions(actualText, new ArrayList<TextPosition>());
+        }
+
+        // 2. 收集该元素后代的MCID，按页分桶
+        Map<PDPage, Set<Integer>> mcidsByPage = McidCollector.collectMcidsByPage(element, doc, false);
+
+        if (mcidsByPage.isEmpty()) {
+            // 没有MCID，尝试递归提取子元素的ActualText
+            String text = extractTextFromChildrenActualText(element);
+            return new TextWithPositions(text, new ArrayList<TextPosition>());
+        }
+
+        // 3. 按页提取文本和位置
+        StringBuilder resultText = new StringBuilder();
+        List<TextPosition> allPositions = new ArrayList<>();
+
+        try {
+            // 按文档页序遍历（确保文本顺序正确）
+            for (int i = 0; i < doc.getNumberOfPages(); i++) {
+                PDPage page = doc.getPage(i);
+                Set<Integer> mcids = mcidsByPage.get(page);
+
+                if (mcids != null && !mcids.isEmpty()) {
+                    // 使用MCIDTextExtractor提取该页该元素的文本和位置
+                    MCIDTextExtractor extractor = new MCIDTextExtractor(mcids);
+                    extractor.processPage(page);
+
+                    String pageText = extractor.getText().trim();
+                    List<TextPosition> pagePositions = extractor.getTextPositions();
+
+                    if (!pageText.isEmpty()) {
+                        if (resultText.length() > 0) {
+                            resultText.append(" ");
+                        }
+                        resultText.append(pageText);
+                    }
+
+                    // 收集所有TextPosition
+                    allPositions.addAll(pagePositions);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("      [错误] MCID文本提取失败: " + e.getMessage());
+            e.printStackTrace();
+            return new TextWithPositions("", new ArrayList<TextPosition>());
+        }
+
+        return new TextWithPositions(resultText.toString().trim(), allPositions);
     }
 }

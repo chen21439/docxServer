@@ -37,35 +37,35 @@ import java.util.Map;
  */
 public class ParagraphMapperRefactored {
 
-    public static String dir = "E:\\programFile\\AIProgram\\docxServer\\pdf\\task\\1978018096320905217\\";
-    public static String taskId = "1978018096320905217";
+    public static String dir = "E:\\programFile\\AIProgram\\docxServer\\pdf\\task\\1980815235174494210\\";
+    public static String taskId = "1980815235174494210";
 
     public static void main(String[] args) throws Exception {
 
         String pdfPath = dir + taskId + "_A2b.pdf";
         String docxTxtPath = dir + taskId + "_docx.txt";
 
-        // 步骤1: 从PDF独立提取表格结构到XML格式TXT（全量处理）
+        // 步骤1: 读取PDF文本层,生成pdf_paragraph.txt 和 pdf_table.txt
 //        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT（全量处理）===");
 //        extractPdfToXml(taskId, pdfPath);
 //        System.out.println();
 
-        // 步骤2: 从DOCX.txt提取文本到ID的映射，并与PDF段落进行匹配验证
+//        // 步骤2: 从DOCX.txt提取文本到ID的映射，并与PDF段落进行匹配验证----验证使用
 //        System.out.println("=== 从DOCX.txt提取文本到ID的映射，并与PDF段落进行匹配验证 ===");
 //        extractTextToIdMapFromDocx(docxTxtPath, taskId);
 //        System.out.println();
-
-        // 步骤3: 使用ID直接匹配，生成映射结果
+//
+//        // 步骤3: 使用ID直接匹配，生成映射结果----验证使用
 //         System.out.println("=== 使用ID直接匹配，生成匹配结果 ===");
 //         buildMappingById(docxTxtPath, pdfPath);
 //         System.out.println();
-
-        // 步骤4: 使用PDFTextStripper提取PDF全文到txt
+//
+//        // 步骤4: 使用PDFTextStripper提取PDF全文到txt
 //         System.out.println("=== 使用PDFTextStripper提取PDF全文 ===");
 //         extractPdfTextWithStripper(pdfPath);
 //         System.out.println();
-
-        // 步骤5: 从JSON文件验证PDF文本提取的准确性
+//
+//        // 步骤5: 从JSON文件验证PDF文本提取的准确性
         System.out.println("=== 从JSON文件验证PDF文本提取的准确性 ===");
         validatePdfTextByJson(taskId);
         System.out.println();
@@ -873,6 +873,22 @@ public class ParagraphMapperRefactored {
 
                     // 设置uniqueId
                     target.setUniqueId(span.uniqueId);
+
+                    // 【调试】对特定uniqueId打印构造信息
+                    if (span.uniqueId != null && (
+                        span.uniqueId.equals("1978018618843103244") ||
+                        span.uniqueId.equals("1978018618838908945") ||
+                        span.uniqueId.equals("1978018618838908940")
+                    )) {
+                        System.out.println("\n【构造HighlightTarget】uniqueId=" + span.uniqueId);
+                        System.out.println("  pageStr: " + pageStr + " (原始)");
+                        System.out.println("  mcidStr: " + mcidStr + " (原始)");
+                        System.out.println("  isAcrossPages: " + isAcrossPages);
+                        System.out.println("  firstPage: " + firstPage);
+                        System.out.println("  pageNum: " + pageNum + " (1-based)");
+                        System.out.println("  target.page: " + target.getPage() + " (0-based)");
+                        System.out.println("  target.mcids: " + target.getMcids());
+                    }
 
                     // 设置原始的跨页信息
                     if (isAcrossPages) {
