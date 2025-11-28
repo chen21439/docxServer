@@ -409,6 +409,85 @@ public class PdfPageLayoutAnalyzer {
         return sb.toString();
     }
 
+    /**
+     * 输出为扁平化的 JSON 格式（每个 table 对象包含 pageIndex 和 tableCount）
+     */
+    private static String tablesToJsonFlat(List<TableWithMeta> tablesWithMeta) {
+        // 统计每页的表格数量
+        Map<Integer, Integer> pageTableCounts = new HashMap<>();
+        for (TableWithMeta tm : tablesWithMeta) {
+            pageTableCounts.put(tm.pageIndex,
+                pageTableCounts.getOrDefault(tm.pageIndex, 0) + 1);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\n  \"tables\": [\n");
+
+        for (int i = 0; i < tablesWithMeta.size(); i++) {
+            TableWithMeta tm = tablesWithMeta.get(i);
+            Table table = tm.table;
+            int tableCount = pageTableCounts.get(tm.pageIndex);
+
+            if (i > 0) sb.append(",\n");
+            sb.append("    {\n");
+
+            // 添加页面信息
+            sb.append("      \"pageIndex\": ").append(tm.pageIndex).append(",\n");
+            sb.append("      \"tableCount\": ").append(tableCount).append(",\n");
+
+            // 表格边界框
+            sb.append("      \"bbox\": [").append(table.bbox.x).append(", ")
+              .append(table.bbox.y).append(", ")
+              .append(table.bbox.x + table.bbox.width).append(", ")
+              .append(table.bbox.y + table.bbox.height).append("],\n");
+
+            // 表格行
+            sb.append("      \"rows\": [\n");
+
+            for (int r = 0; r < table.rows.size(); r++) {
+                List<Cell> row = table.rows.get(r);
+                if (r > 0) sb.append(",\n");
+                sb.append("        {\"cells\": [");
+
+                for (int c = 0; c < row.size(); c++) {
+                    Cell cell = row.get(c);
+                    if (c > 0) sb.append(", ");
+                    sb.append("{\"text\": \"").append(escapeJson(cell.text))
+                      .append("\", \"bbox\": [")
+                      .append(cell.bbox.x).append(", ")
+                      .append(cell.bbox.y).append(", ")
+                      .append(cell.bbox.x + cell.bbox.width).append(", ")
+                      .append(cell.bbox.y + cell.bbox.height).append("]");
+
+                    // 仅当 possibleRowspan > 1 时输出
+                    if (cell.possibleRowspan > 1) {
+                        sb.append(", \"rowspan_hint\": ").append(cell.possibleRowspan);
+                        if (cell.rowspanHintReason != null) {
+                            sb.append(", \"rowspan_hint_reason\": \"").append(escapeJson(cell.rowspanHintReason)).append("\"");
+                        }
+                    }
+
+                    // 仅当 possibleColspan > 1 时输出
+                    if (cell.possibleColspan > 1) {
+                        sb.append(", \"colspan_hint\": ").append(cell.possibleColspan);
+                        if (cell.colspanHintReason != null) {
+                            sb.append(", \"colspan_hint_reason\": \"").append(escapeJson(cell.colspanHintReason)).append("\"");
+                        }
+                    }
+
+                    sb.append("}");
+                }
+
+                sb.append("]}");
+            }
+
+            sb.append("\n      ]\n    }");
+        }
+
+        sb.append("\n  ]\n}");
+        return sb.toString();
+    }
+
     private static String escapeJson(String str) {
         if (str == null) return "";
         return str.replace("\\", "\\\\")
@@ -428,14 +507,18 @@ public class PdfPageLayoutAnalyzer {
      */
     public static String extractTablesFromPdf(String pdfPath) throws IOException {
         try (PDDocument document = Loader.loadPDF(new File(pdfPath))) {
-            StringBuilder allTablesJson = new StringBuilder();
-            allTablesJson.append("{\n  \"pages\": [\n");
+            List<TableWithMeta> allTables = new ArrayList<>();
 
             for (int pageIndex = 0; pageIndex < document.getNumberOfPages(); pageIndex++) {
                 System.out.println("\n========== 处理页面 " + pageIndex + " ==========");
 
                 // 使用 Tabula 提取表格
                 List<Table> tables = extractTablesWithTabula(document, pageIndex);
+
+                if (tables.isEmpty()) {
+                    System.out.println("Page " + pageIndex + ": 未检测到表格，跳过");
+                    continue;
+                }
 
                 // 后处理：单元格内段落合并
                 for (Table table : tables) {
@@ -448,21 +531,30 @@ public class PdfPageLayoutAnalyzer {
                     mergeInterRowContinuation(table);
                 }
 
-                if (pageIndex > 0) {
-                    allTablesJson.append(",\n");
+                // 将表格添加到结果列表，附带页面信息
+                for (int i = 0; i < tables.size(); i++) {
+                    allTables.add(new TableWithMeta(tables.get(i), pageIndex, i));
                 }
-
-                allTablesJson.append("    {\n");
-                allTablesJson.append("      \"pageIndex\": ").append(pageIndex).append(",\n");
-                allTablesJson.append("      \"tableCount\": ").append(tables.size()).append(",\n");
-                allTablesJson.append("      \"tables\": ").append(tablesToJson(tables)).append("\n");
-                allTablesJson.append("    }");
 
                 System.out.println("Page " + pageIndex + ": found " + tables.size() + " tables");
             }
 
-            allTablesJson.append("\n  ]\n}");
-            return allTablesJson.toString();
+            return tablesToJsonFlat(allTables);
+        }
+    }
+
+    /**
+     * 带元信息的表格（包含 pageIndex 和 tableIndex）
+     */
+    private static class TableWithMeta {
+        Table table;
+        int pageIndex;
+        int tableIndexInPage;
+
+        TableWithMeta(Table table, int pageIndex, int tableIndexInPage) {
+            this.table = table;
+            this.pageIndex = pageIndex;
+            this.tableIndexInPage = tableIndexInPage;
         }
     }
 

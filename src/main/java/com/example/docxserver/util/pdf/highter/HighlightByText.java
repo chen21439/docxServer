@@ -1,20 +1,18 @@
 package com.example.docxserver.util.pdf.highter;
 
 import com.example.docxserver.util.pdf.highter.dto.HighlightRequest;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import static com.example.docxserver.util.pdf.highter.PageTripletExtractor.extractPageTriplet;
 
 public class HighlightByText {
 
-    public static void main(String[] args) {
-        // 1) 解析参数
-        if (args.length == 0) {
-            System.out.println("Usage: java ... HighlightByText <input.pdf> [output.pdf]");
-            System.out.println("No args provided, will try 'sample.pdf' in working dir and write '*_highlighted.pdf'.");
-        }
-        String inputPdf = "E:\\programFile\\AIProgram\\docxServer\\pdf\\index\\鄂尔多斯市蒙医医院.pdf";
-        String outputPdf = "E:\\programFile\\AIProgram\\docxServer\\pdf\\index\\highlighted_output.pdf";
+    public static String dir = "E:\\programFile\\AIProgram\\docxServer\\pdf\\task\\1979102567573037058\\";
+    public static String taskId = "1979102567573037058";
 
-        java.io.File inFile = new java.io.File(inputPdf);
+    public static void main(String[] args) {
+
+        java.io.File inFile = new java.io.File(dir + taskId + ".pdf");
         if (!inFile.exists()) {
             System.err.println("Input PDF not found: " + inFile.getAbsolutePath());
             return;
@@ -27,15 +25,22 @@ public class HighlightByText {
             // 如果你用的是 PDFBox 2.x，请改用：
             // doc = org.apache.pdfbox.pdmodel.PDDocument.load(inFile);
 
-            // 3) 构造测试用的高亮请求（来自你提供的四行示例）
-            java.util.List<HighlightRequest> reqs = buildDemoRequests();
+            // 3) 从 JSON 文件读取高亮请求
+            java.util.List<HighlightRequest> reqs = readRequestsFromJson(dir, taskId);
+
+            if (reqs.isEmpty()) {
+                System.err.println("未从 JSON 文件读取到任何高亮数据");
+                return;
+            }
+
+            System.out.println("从 JSON 读取到 " + reqs.size() + " 条高亮请求");
 
             // 4) 执行高亮
-            highlightByText(doc, reqs, new float[]{0f, 1f, 0f}, 0.30f, "demo");
+            highlightByText(doc, reqs, new float[]{0f, 1f, 0f}, 0.30f, "AI审查风险提示");
 
             // 5) 保存输出
-            doc.save(outputPdf);
-            System.out.println("OK. Highlighted PDF -> " + new java.io.File(outputPdf).getAbsolutePath());
+            doc.save(dir + taskId + "_highlighted.pdf");
+            System.out.println("OK. Highlighted PDF saved to: " + dir + taskId + "_highlighted.pdf");
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
@@ -53,6 +58,77 @@ public class HighlightByText {
         return in + "_highlighted.pdf";
     }
 
+    /**
+     * 从 JSON 文件读取高亮请求
+     * @param dir 目录路径
+     * @param taskId 任务ID（文件名）
+     * @return 高亮请求列表
+     */
+    private static java.util.List<HighlightRequest> readRequestsFromJson(String dir, String taskId) {
+        java.util.List<HighlightRequest> list = new java.util.ArrayList<HighlightRequest>();
+
+        java.io.File jsonFile = new java.io.File(dir + taskId + ".json");
+        if (!jsonFile.exists()) {
+            System.err.println("JSON 文件不存在: " + jsonFile.getAbsolutePath());
+            return list;
+        }
+
+        try {
+            // 使用 Jackson 解析 JSON
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root = mapper.readTree(jsonFile);
+
+            // 获取 data.dataList
+            JsonNode dataList = root.path("data").path("dataList");
+
+            if (!dataList.isArray()) {
+                System.err.println("JSON 格式错误: data.dataList 不是数组");
+                return list;
+            }
+
+            // 遍历 dataList
+            for (JsonNode item : dataList) {
+                String fileText = item.path("fileText").asText();
+                int page = item.path("page").asInt();
+
+                // 获取 position 数组
+                JsonNode positionArray = item.path("position");
+                if (!positionArray.isArray() || positionArray.size() == 0) {
+                    System.err.println("跳过无效数据: page=" + page + ", 无 position 信息");
+                    continue;
+                }
+
+                // 取第一个 position 元素
+                JsonNode pos = positionArray.get(0);
+                int x1 = pos.path("x1").asInt();
+                int y1 = pos.path("y1").asInt();
+                int x2 = pos.path("x2").asInt();
+                int y2 = pos.path("y2").asInt();
+
+                // 构造坐标列表
+                java.util.List<String> xy = new java.util.ArrayList<String>();
+                xy.add(x1 + "," + y1);
+                xy.add(x2 + "," + y2);
+
+                // 创建高亮请求
+                HighlightRequest req = new HighlightRequest(page, fileText, xy);
+                list.add(req);
+
+                System.out.println(String.format(
+                    "[读取] 第 %d 页, 文本长度: %d, 坐标: (%d,%d)-(%d,%d)",
+                    page, fileText.length(), x1, y1, x2, y2));
+            }
+
+            System.out.println("成功从 JSON 读取 " + list.size() + " 条高亮请求");
+
+        } catch (Exception e) {
+            System.err.println("解析 JSON 失败: " + e.getMessage());
+            e.printStackTrace();
+        }
+
+        return list;
+    }
+
     /** 构造示例用的 4 条高亮请求（page=4，含 xy 两点） */
     private static java.util.List<HighlightRequest> buildDemoRequests() {
         java.util.List<HighlightRequest> list = new java.util.ArrayList<HighlightRequest>();
@@ -65,10 +141,10 @@ public class HighlightByText {
 //        xy2.add("297,507"); xy2.add("561,526");
 //        list.add(new HighlightRequest(4, "供应商商业信誉", xy2));
 
-        java.util.List<String> xy3 = new java.util.ArrayList<String>();
-        xy3.add("403,202"); xy3.add("561,414");
-        list.add(new HighlightRequest(5, "1、对小、微企业报价给予相应比例的扣除。2、监狱企业视同小型、微型企业，评审中价格扣除按照小、微企业的扣除比例执行。3、" +
-                "残疾人福利性单位提供本单位制造的货物、承担的工程或服务，或提供其他残疾人福利性单位制造的货物（不包括使用非残疾人福利性单位注册商标的货物），视同小型、微型企业，按小微企业的扣除比例执行" , xy3));
+//        java.util.List<String> xy3 = new java.util.ArrayList<String>();
+//        xy3.add("403,202"); xy3.add("561,414");
+//        list.add(new HighlightRequest(5, "1、对小、微企业报价给予相应比例的扣除。2、监狱企业视同小型、微型企业，评审中价格扣除按照小、微企业的扣除比例执行。3、" +
+//                "残疾人福利性单位提供本单位制造的货物、承担的工程或服务，或提供其他残疾人福利性单位制造的货物（不包括使用非残疾人福利性单位注册商标的货物），视同小型、微型企业，按小微企业的扣除比例执行" , xy3));
 
 
 //        java.util.List<String> xy4 = new java.util.ArrayList<String>();
@@ -132,6 +208,8 @@ public class HighlightByText {
                     System.err.println(String.format(
                         "[INFO] 第 %d 页使用坐标过滤，矩形内文本长度: %d 字符",
                         r.page, ctx.text.length()));
+                    System.err.println("[矩形区域文本] " + ctx.text);
+                    System.err.println("----------------------------------------");
                 } else {
                     // 坐标解析失败，降级为全局搜索
                     System.err.println(String.format(

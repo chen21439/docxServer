@@ -977,10 +977,10 @@ public class DocxStructureAnalyzer {
                 blocks.add(block);
 
             } else if (element instanceof XWPFTable) {
-                // 表格块（顶层表格，level=1）
+                // 表格块（顶层表格，level=1，parentTablePath=null）
                 tableCounter++;
                 String tableId = String.format("t%03d", tableCounter);
-                DocxAnalysisResult.TableBlock block = processTable((XWPFTable) element, tableId, 1, null, tableCounter);
+                DocxAnalysisResult.TableBlock block = processTable((XWPFTable) element, tableId, 1, null, tableCounter, null);
                 blocks.add(block);
             }
         }
@@ -1380,15 +1380,24 @@ public class DocxStructureAnalyzer {
      * @param level 嵌套层级（1=顶层，2=二级嵌套...）
      * @param parentTableId 父表格ID（顶层表格为null）
      * @param topLevelIndex 顶层表格索引（用于判断是否提取详细数据）
+     * @param parentTablePath 父表格路径（用于构建完整路径，顶层表格传null）
      * @return 表格块
      */
     private static DocxAnalysisResult.TableBlock processTable(
-            XWPFTable table, String tableId, int level, String parentTableId, int topLevelIndex) {
+            XWPFTable table, String tableId, int level, String parentTableId, int topLevelIndex,
+            List<String> parentTablePath) {
 
         DocxAnalysisResult.TableBlock block = new DocxAnalysisResult.TableBlock();
         block.setId(tableId);
         block.setLevel(level);
         block.setParentTableId(parentTableId);
+
+        // 构建当前表格的完整路径
+        List<String> currentTablePath = new ArrayList<>();
+        if (parentTablePath != null) {
+            currentTablePath.addAll(parentTablePath);
+        }
+        currentTablePath.add(tableId);
 
         List<XWPFTableRow> rows = table.getRows();
         if (rows.isEmpty()) {
@@ -1421,7 +1430,12 @@ public class DocxStructureAnalyzer {
                 DocxAnalysisResult.TableRow tableRow = new DocxAnalysisResult.TableRow();
 
                 // 行ID格式：r-002, r-003...
-                tableRow.setId(String.format("r-%03d", rowIndex + 1));
+                String rowId = String.format("r-%03d", rowIndex + 1);
+                tableRow.setId(rowId);
+
+                // 构建行路径：如 ["t001", "r-002"]
+                List<String> rowPath = new ArrayList<>(currentTablePath);
+                rowPath.add(rowId);
 
                 List<DocxAnalysisResult.TableCell> tableCells = new ArrayList<>();
                 List<XWPFTableCell> xwpfCells = xwpfRow.getTableCells();
@@ -1435,12 +1449,20 @@ public class DocxStructureAnalyzer {
                             tableId, rowIndex + 1, colIndex + 1);
                     tableCell.setId(cellId);
                     tableCell.setText(xwpfCell.getText());
-                    tableCell.setColId(String.format("c%d", colIndex + 1));
+                    tableCell.setColId(String.format("c%d", colIndex + 1));  // 保留旧字段
+
+                    // ✅ 设置行路径
+                    tableCell.setRowPath(new ArrayList<>(rowPath));
+
+                    // ✅ 设置列路径：如 ["t001", "c1"]
+                    List<String> colPath = new ArrayList<>(currentTablePath);
+                    colPath.add(String.format("c%d", colIndex + 1));
+                    tableCell.setColPath(colPath);
 
                     // ★ 递归处理嵌套表格（如果未超过最大深度）
                     if (level < MAX_TABLE_NESTING_DEPTH) {
                         List<DocxAnalysisResult.TableBlock> nestedTables = extractNestedTables(
-                                xwpfCell, tableId, rowIndex, colIndex, level, topLevelIndex);
+                                xwpfCell, tableId, rowIndex, colIndex, level, topLevelIndex, rowPath);
                         if (nestedTables != null && !nestedTables.isEmpty()) {
                             tableCell.setNestedTables(nestedTables);
                         }
@@ -1468,10 +1490,12 @@ public class DocxStructureAnalyzer {
      * @param colIndex 列索引（0-based）
      * @param parentLevel 父表格层级
      * @param topLevelIndex 顶层表格索引
+     * @param parentRowPath 父行路径（用于构建嵌套表格的路径）
      * @return 嵌套表格列表（如果有）
      */
     private static List<DocxAnalysisResult.TableBlock> extractNestedTables(
-            XWPFTableCell cell, String parentTableId, int rowIndex, int colIndex, int parentLevel, int topLevelIndex) {
+            XWPFTableCell cell, String parentTableId, int rowIndex, int colIndex, int parentLevel, int topLevelIndex,
+            List<String> parentRowPath) {
 
         List<DocxAnalysisResult.TableBlock> nestedTables = new ArrayList<>();
 
@@ -1486,9 +1510,10 @@ public class DocxStructureAnalyzer {
                     String nestedTableId = String.format("%s.r%03d.c%03d.t%03d",
                             parentTableId, rowIndex + 1, colIndex + 1, nestedTableIndex);
 
-                    // 递归处理嵌套表格
+                    // 递归处理嵌套表格，传递父行路径
                     DocxAnalysisResult.TableBlock nestedBlock = processTable(
-                            (XWPFTable) element, nestedTableId, parentLevel + 1, parentTableId, topLevelIndex);
+                            (XWPFTable) element, nestedTableId, parentLevel + 1, parentTableId, topLevelIndex,
+                            parentRowPath);  // ✅ 传递父行路径
 
                     nestedTables.add(nestedBlock);
                 }

@@ -994,9 +994,17 @@ public class HighlightByMCID {
         // 用于合并所有页面的quadPoints（写回target）
         List<Float> allQuadPointsList = new ArrayList<>();
 
+        // 记录实际高亮的页码（用于更新target.page）
+        Integer actualHighlightPage = null;
+
         for (Map.Entry<Integer, List<TextPosition>> entry : pageToPositions.entrySet()) {
             int pageIndex = entry.getKey();
             List<TextPosition> positionsForPage = entry.getValue();
+
+            // 记录第一个实际高亮的页码（通常跨页文本只在一个页面高亮）
+            if (actualHighlightPage == null) {
+                actualHighlightPage = pageIndex;
+            }
 
             PDPage page = doc.getPage(pageIndex);
             PDRectangle cropBox = page.getCropBox();
@@ -1050,11 +1058,26 @@ public class HighlightByMCID {
             target.setQuadPoints(mergedQuadPoints);
             target.setRectangle(mergedRect);
 
-            if (isTargetUniqueId) {
-                System.out.println("\n【跨页处理成功】uniqueId=" + uniqueId);
-                System.out.println("生成的quadPoints数量: " + (mergedQuadPoints.length / 8) + "个四边形");
-                System.out.println("已成功写回到target对象");
-                System.out.println("=================================================\n");
+            // 【重要】更新target.page为实际高亮所在的页面
+            if (actualHighlightPage != null) {
+                int oldPage = target.getPage();
+                target.setPage(actualHighlightPage);
+
+                if (isTargetUniqueId) {
+                    System.out.println("\n【跨页处理成功】uniqueId=" + uniqueId);
+                    System.out.println("原始page: " + (oldPage + 1) + " (1-based)");
+                    System.out.println("实际高亮页: " + (actualHighlightPage + 1) + " (1-based)");
+                    System.out.println("已更新target.page: " + actualHighlightPage + " (0-based)");
+                    System.out.println("生成的quadPoints数量: " + (mergedQuadPoints.length / 8) + "个四边形");
+                    System.out.println("=================================================\n");
+                }
+            } else {
+                if (isTargetUniqueId) {
+                    System.out.println("\n【跨页处理成功】uniqueId=" + uniqueId);
+                    System.out.println("生成的quadPoints数量: " + (mergedQuadPoints.length / 8) + "个四边形");
+                    System.out.println("已成功写回到target对象");
+                    System.out.println("=================================================\n");
+                }
             }
 
             System.out.println("[跨页高亮] 已将合并后的quadPoints写回target（共" +

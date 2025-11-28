@@ -706,7 +706,19 @@ public class DocxAnalysisResult {
         private String text;
 
         @JsonProperty("col_id")
-        private String colId;
+        private String colId;  // 保留旧字段（局部作用域，如 "c1"）
+
+        @JsonProperty("row_path")
+        private List<String> rowPath;  // 从根表到当前行的路径，如 ["t001", "r-002"]
+
+        @JsonProperty("col_path")
+        private List<String> colPath;  // 从根表到当前列的路径，如 ["t001", "c1"]
+
+        // TODO: 未来支持跨表列引用
+        // 当前 col_path 只包含当前表格的路径
+        // 未来可以扩展为引用父表格的列，例如：
+        // colPath = ["t001", "c2"]  // 引用顶层表格的 c2 列
+        // 而不是当前嵌套表格的列
 
         @JsonProperty("nested_tables")
         private List<TableBlock> nestedTables;  // 单元格内的嵌套表格
@@ -720,6 +732,12 @@ public class DocxAnalysisResult {
 
         public String getColId() { return colId; }
         public void setColId(String colId) { this.colId = colId; }
+
+        public List<String> getRowPath() { return rowPath; }
+        public void setRowPath(List<String> rowPath) { this.rowPath = rowPath; }
+
+        public List<String> getColPath() { return colPath; }
+        public void setColPath(List<String> colPath) { this.colPath = colPath; }
 
         public List<TableBlock> getNestedTables() { return nestedTables; }
         public void setNestedTables(List<TableBlock> nestedTables) { this.nestedTables = nestedTables; }

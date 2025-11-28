@@ -240,15 +240,6 @@ public class MCIDTextExtractor extends PDFStreamEngine {
     }
 
     /**
-     * 获取收集到的TextPosition列表（用于高亮等功能）
-     *
-     * @return TextPosition列表（未排序的原始列表）
-     */
-    public List<TextPosition> getTextPositions() {
-        return new ArrayList<>(textPositions);  // 返回副本，避免外部修改
-    }
-
-    /**
      * 行聚类：使用YDirAdj将TextPosition聚合成行
      *
      * 阈值规则：abs(y - baseline) <= max(0.5 * medianHeight, 1.2f)
@@ -396,5 +387,14 @@ public class MCIDTextExtractor extends PDFStreamEngine {
         currentMCID = null;
         textPositions.clear();
         extractedText.setLength(0);
+    }
+
+    /**
+     * 获取收集到的TextPosition列表（包含坐标信息）
+     *
+     * @return TextPosition列表（不可变）
+     */
+    public List<TextPosition> getTextPositions() {
+        return Collections.unmodifiableList(textPositions);
     }
 }

@@ -160,8 +160,8 @@ public class TextHighlighter {
                 topDir -= padTopDir;
                 botDir += padBottomDir;
 
-                // X 向轻微外扩，取 4% 或 0.4pt
-                float padX = Math.max(0.4f, 0.04f * (rightDir - leftDir));
+                // X 向轻微外扩，取 1% 或 0.2pt（减小左右 padding，更贴近实际文字）
+                float padX = Math.max(0.2f, 0.01f * (rightDir - leftDir));
                 leftDir -= padX;
                 rightDir += padX;
 
