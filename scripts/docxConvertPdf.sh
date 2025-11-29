@@ -1,45 +1,51 @@
 #!/bin/bash
 #
-# DOCX×ªPDF×ª»»½Å±¾£¨Linux£©
+# DOCX è½¬ PDF æ‰“åŒ…è„šæœ¬ï¼ˆLinuxï¼‰
 #
-# ¹¦ÄÜ£º½«DOCXÎÄ¼þ×ª»»ÎªPDF¸ñÊ½£¬²¢´ò°ü½á¹ûÎÄ¼þ
-# Ê¹ÓÃ·½Ê½£º./docx2pdf.sh <taskId>
+# åŠŸèƒ½ï¼š
+#   - å°† DOCX æ–‡ä»¶è½¬æ¢ä¸º PDFï¼ˆPDF/A-2b + Tagged PDFï¼‰
+#   - æ‰“åŒ…è½¬æ¢ç»“æžœåŠç›¸å…³æ–‡ä»¶ä¸º tgzï¼Œå¹¶ç”Ÿæˆ sha256 æ ¡éªŒæ–‡ä»¶
 #
-# Ê¾Àý£º./docx2pdf.sh 1977688621829947393
+# ä½¿ç”¨æ–¹å¼ï¼š
+#   ./docx2pdf.sh <taskId>
 #
-# ËµÃ÷£º
-# - ÊäÈëÎÄ¼þ£º/data/docx2html/<taskId>.docx
-# - Êä³öÎÄ¼þ£º/data/docx2html/<taskId>.pdf
-# - ´ò°üÎÄ¼þ£º/data/docx2html/<taskId>.tgz + <taskId>.tgz.sha256
-# - Ê¹ÓÃflockÎÄ¼þËø¿ØÖÆ²¢·¢£¨×î¶à1¸öÈÎÎñÍ¬Ê±Ö´ÐÐ£©
-# - ³¬Ê±Ê±¼ä£º600Ãë£¨10·ÖÖÓ£©
+# ç¤ºä¾‹ï¼š
+#   ./docx2pdf.sh 1977688621829947393
+#
+# çº¦å®šï¼š
+#   - è¾“å…¥æ–‡ä»¶ï¼š/data/docx2html/<taskId>.docx
+#   - è¾“å‡º PDFï¼š/data/docx2html/<taskId>.pdf
+#   - æ‰“åŒ…ç»“æžœï¼š/data/docx2html/<taskId>.tgz + <taskId>.tgz.sha256
+#
+# å…¶ä»–ï¼š
+#   - ä½¿ç”¨ flock é”æ–‡ä»¶ï¼Œä¿è¯åŒä¸€æ—¶é—´åªæœ‰ 1 ä¸ªè½¬æ¢ä»»åŠ¡æ‰§è¡Œ
+#   - è¶…æ—¶æ—¶é—´ï¼š600 ç§’ï¼ˆ10 åˆ†é’Ÿï¼‰
 #
 
 set -euo pipefail
 
-# ==================== ÖÐÎÄ/UTF-8 »·¾³ÉèÖÃ ====================
-# Ç¿ÖÆ½Å±¾ÔÚ UTF-8 ÖÐÎÄ»·¾³ÏÂÔËÐÐ£¬±ÜÃâÈÕÖ¾ÂÒÂë
+# ==================== æœ¬åœ°/UTF-8 çŽ¯å¢ƒè®¾ç½® ====================
+# å¼ºåˆ¶è„šæœ¬è¿è¡Œåœ¨ UTF-8 çŽ¯å¢ƒï¼Œé¿å…æ—¥å¿—å’Œæ–‡ä»¶åä¸­æ–‡ä¹±ç 
 export LANG=zh_CN.UTF-8
 export LC_CTYPE=zh_CN.UTF-8
 export LC_ALL=zh_CN.UTF-8
-# Èç¹û·þÎñÆ÷Ã»ÓÐ zh_CN.UTF-8£¬¿ÉÒÔ¸Ä³É en_US.UTF-8£¬
-# ÓÃ `locale -a` ²é¿´¿ÉÓÃÁÐ±í
-# ==========================================================
+# å¦‚æžœç³»ç»Ÿæ²¡æœ‰ zh_CN.UTF-8ï¼Œå¯ä»¥æ”¹æˆ en_US.UTF-8ï¼Œå¹¶ç”¨ `locale -a` ç¡®è®¤
+# ============================================================
 
-# ==================== ÅäÖÃÇøÓò ====================
+# ==================== è·¯å¾„ä¸Žå‚æ•°é…ç½® ====================
 WORK_DIR="/data/docx2html"
 SHELL_DIR="/data/basic-tender-compliance/shell"
 LOCK_FILE="/var/lock/lo-convert.lock"
-LOCK_TIMEOUT=600  # Ëø³¬Ê±Ê±¼ä£¨Ãë£©
+LOCK_TIMEOUT=600  # flock è¶…æ—¶æ—¶é—´ï¼ˆç§’ï¼‰
 DOCKER_CONTAINER="lo-252"
 DOCKER_WORK_DIR="/work"
-# ==================================================
+# ========================================================
 
-# ¼ì²é²ÎÊý
+# ==================== å‚æ•°æ£€æŸ¥ ====================
 if [ $# -ne 1 ]; then
-    echo "´íÎó: È±ÉÙ²ÎÊý"
-    echo "ÓÃ·¨: $0 <taskId>"
-    echo "Ê¾Àý: $0 1977688621829947393"
+    echo "é”™è¯¯ï¼šç¼ºå°‘å‚æ•°"
+    echo "ç”¨æ³•ï¼š$0 <taskId>"
+    echo "ç¤ºä¾‹ï¼š$0 1977688621829947393"
     exit 1
 fi
 
@@ -48,106 +54,111 @@ INPUT_FILE="${WORK_DIR}/${TASK_ID}.docx"
 OUTPUT_FILE="${WORK_DIR}/${TASK_ID}.pdf"
 TGZ_FILE="${WORK_DIR}/${TASK_ID}.tgz"
 SHA256_FILE="${TGZ_FILE}.sha256"
+# =================================================
 
-# ÈÕÖ¾º¯Êý
+# ==================== æ—¥å¿—å‡½æ•° ====================
 log_info() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] [taskId: ${TASK_ID}] $*"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO ] [taskId: ${TASK_ID}] $*"
 }
 
 log_error() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] [taskId: ${TASK_ID}] $*" >&2
 }
+# =================================================
 
-# ¼ì²éÊäÈëÎÄ¼þÊÇ·ñ´æÔÚ
+# ==================== è¾“å…¥æ–‡ä»¶æ£€æŸ¥ ====================
 if [ ! -f "$INPUT_FILE" ]; then
-    log_error "ÊäÈëÎÄ¼þ²»´æÔÚ: $INPUT_FILE"
+    log_error "è¾“å…¥ DOCX æ–‡ä»¶ä¸å­˜åœ¨: $INPUT_FILE"
     exit 1
 fi
 
-log_info "¿ªÊ¼´¦Àí DOCX ×ª PDF ×ª»»"
-log_info "ÊäÈëÎÄ¼þ: $INPUT_FILE"
-log_info "Êä³öÎÄ¼þ: $OUTPUT_FILE"
+log_info "å¼€å§‹æ‰§è¡Œ DOCX â†’ PDF â†’ æ‰“åŒ… æµç¨‹"
+log_info "è¾“å…¥æ–‡ä»¶: $INPUT_FILE"
+log_info "ç›®æ ‡ PDF: $OUTPUT_FILE"
+# =======================================================
 
-# ==================== Ö÷×ª»»Á÷³Ì ====================
-# Ê¹ÓÃ flock È·±£Í¬Ò»Ê±¼äÖ»ÓÐÒ»¸ö×ª»»ÈÎÎñÖ´ÐÐ
-log_info "µÈ´ý»ñÈ¡×ª»»Ëø£¨³¬Ê± ${LOCK_TIMEOUT} Ãë£©..."
+# ==================== è½¬æ¢æ‰§è¡Œï¼ˆåŠ é”ï¼‰ ====================
+log_info "ç­‰å¾…èŽ·å–è½¬æ¢é”ï¼ˆè¶…æ—¶ ${LOCK_TIMEOUT} ç§’ï¼‰..."
 
 flock -x -w "$LOCK_TIMEOUT" "$LOCK_FILE" bash -c "
     set -euo pipefail
 
-    # ×Ó shell ÀïÃæÒ²ÉèÖÃÖÐÎÄ UTF-8 »·¾³£¬±£Ö¤ echo ÈÕÖ¾Õý³£
+    # åœ¨å­ shell ä¸­ä¹Ÿä¿æŒ UTF-8 çŽ¯å¢ƒ
     export LANG=zh_CN.UTF-8
     export LC_CTYPE=zh_CN.UTF-8
     export LC_ALL=zh_CN.UTF-8
 
-    echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] [taskId: ${TASK_ID}] ÒÑ»ñÈ¡×ª»»Ëø£¬¿ªÊ¼×ª»»\"
+    echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INFO ] [taskId: ${TASK_ID}] å·²èŽ·å–è½¬æ¢é”ï¼Œå¼€å§‹æ‰§è¡Œ LibreOffice è½¬æ¢\"
 
-    # Ö´ÐÐ Docker ×ª»»£¬²¢ÔÚÈÝÆ÷ÖÐÒ²ÏÔÊ½ÉèÖÃ UTF-8 »·¾³
-    docker exec -e LANG=zh_CN.UTF-8 -e LC_CTYPE=zh_CN.UTF-8 -e LC_ALL=zh_CN.UTF-8 -i \"${DOCKER_CONTAINER}\" \
+    # ä½¿ç”¨ Docker å®¹å™¨ä¸­çš„ LibreOffice å°† DOCX è½¬ä¸º PDF/A-2b + Tagged PDF
+    docker exec \
+        -e LANG=zh_CN.UTF-8 \
+        -e LC_CTYPE=zh_CN.UTF-8 \
+        -e LC_ALL=zh_CN.UTF-8 \
+        -i \"${DOCKER_CONTAINER}\" \
         soffice --headless --nologo --nofirststartwizard \
-        --convert-to pdf:writer_pdf_Export \
+        --convert-to 'pdf:writer_pdf_Export:{\"SelectPdfVersion\":{\"type\":\"long\",\"value\":\"2\"},\"UseTaggedPDF\":{\"type\":\"boolean\",\"value\":\"true\"}}' \
         --outdir \"${DOCKER_WORK_DIR}\" \
         \"${DOCKER_WORK_DIR}/${TASK_ID}.docx\"
 
-    echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] [taskId: ${TASK_ID}] ×ª»»Íê³É\"
+    echo \"[$(date '+%Y-%m-%d %H:%M:%S')] [INFO ] [taskId: ${TASK_ID}] LibreOffice è½¬æ¢å®Œæˆ\"
 "
+# =========================================================
 
-# ²»ÔÙ¼ì²éÉÏÒ»¸öÃüÁîµÄ $?£¬set -e ÒÑ¾­±£Ö¤³ö´í»áÖÐ¶Ï
-# ÕâÀïÖ»¼ì²éÎÄ¼þÊÇ·ñÕæÕýÉú³É
+# ==================== è½¬æ¢ç»“æžœæ£€æŸ¥ ====================
 if [ ! -f "$OUTPUT_FILE" ]; then
-    log_error "×ª»»ºóµÄ PDF ÎÄ¼þ²»´æÔÚ: $OUTPUT_FILE"
+    log_error "è½¬æ¢åŽçš„ PDF æ–‡ä»¶ä¸å­˜åœ¨: $OUTPUT_FILE"
     exit 1
 fi
 
-log_info "×ª»»³É¹¦£¬PDF ÎÄ¼þ´óÐ¡: $(du -h "$OUTPUT_FILE" | cut -f1)"
+log_info "PDF è½¬æ¢æˆåŠŸï¼Œæ–‡ä»¶å¤§å°: $(du -h "$OUTPUT_FILE" | cut -f1)"
+# =====================================================
 
-# ==================== ´ò°ü½á¹û ====================
-log_info "¿ªÊ¼´ò°ü×ª»»½á¹û..."
+# ==================== æ‰“åŒ…å¤„ç† ====================
+log_info "å¼€å§‹æ‰“åŒ…è½¬æ¢ç»“æžœ..."
 
 cd "$WORK_DIR"
 
-# ÁÐ³öÒª´ò°üµÄÎÄ¼þ
-log_info "=== ×¼±¸´ò°üÒÔÏÂÎÄ¼þ ==="
+# åˆ—å‡ºå°†è¦æ‰“åŒ…çš„æ–‡ä»¶ï¼Œæ–¹ä¾¿æŽ’æŸ¥
+log_info "=== å³å°†æ‰“åŒ…çš„æ–‡ä»¶/ç›®å½• ==="
 ls -lh "${TASK_ID}.pdf" 2>/dev/null || true
 ls -lhd "${TASK_ID}" 2>/dev/null || true
 ls -lh "${TASK_ID}"-* 2>/dev/null || true
-log_info "========================="
+log_info "============================"
 
-# ======= ÐÞ¸´ºóµÄ¡°ÊÇ·ñÓÐ¿É´ò°üÎÄ¼þ¡±¼ì²éÂß¼­ =======
-# ÈÎÒâÒ»¸ö´æÔÚ¼´¿É£ºPDF ÎÄ¼þ / Ä¿Â¼ / ×ÊÔ´ÎÄ¼þ
+# æ£€æŸ¥æ˜¯å¦æœ‰å¯æ‰“åŒ…çš„å¯¹è±¡ï¼ˆPDF / ç›®å½• / å…¶ä»–å‰ç¼€æ–‡ä»¶ï¼‰
 has_files=0
 [ -f "${TASK_ID}.pdf" ] && has_files=1
 [ -d "${TASK_ID}" ] && has_files=1
 ls "${TASK_ID}"-* >/dev/null 2>&1 && has_files=1 || true
 
 if [ "$has_files" -eq 0 ]; then
-    log_error "Ã»ÓÐÕÒµ½¿É´ò°üµÄÎÄ¼þ£¬È¡Ïû´ò°ü"
+    log_error "æœªæ‰¾åˆ°å¯æ‰“åŒ…çš„æ–‡ä»¶ï¼Œç»ˆæ­¢"
     exit 1
 fi
-# ==============================================
 
-# ´ò°üÎÄ¼þ£¨°üÀ¨ pdf ÎÄ¼þ¡¢¿ÉÄÜµÄ×ÊÔ´Ä¿Â¼¡¢×ÊÔ´ÎÄ¼þ£©
+# æ‰“åŒ…ï¼šPDF + åŒåç›®å½• + ä»¥ <taskId>- å¼€å¤´çš„æ–‡ä»¶
 find . -maxdepth 1 \( -name "${TASK_ID}.pdf" -o -name "${TASK_ID}" -o -name "${TASK_ID}-*" \) -print0 | \
     tar -czf "${TGZ_FILE}" --null -T -
 
 if [ ! -f "$TGZ_FILE" ]; then
-    log_error "´ò°üÊ§°Ü: $TGZ_FILE"
+    log_error "ç”ŸæˆåŽ‹ç¼©åŒ…å¤±è´¥: $TGZ_FILE"
     exit 1
 fi
 
-log_info "´ò°üÍê³É: ${TGZ_FILE} ($(du -h "$TGZ_FILE" | cut -f1))"
+log_info "åŽ‹ç¼©åŒ…ç”ŸæˆæˆåŠŸ: ${TGZ_FILE} ($(du -h "$TGZ_FILE" | cut -f1))"
 
-# Éú³É SHA256 Ð£ÑéÎÄ¼þ
+# ç”Ÿæˆ SHA256 æ ¡éªŒæ–‡ä»¶
 sha256sum "${TGZ_FILE}" > "${SHA256_FILE}"
-log_info "ÒÑÉú³ÉÐ£ÑéÎÄ¼þ: ${SHA256_FILE}"
+log_info "ç”Ÿæˆæ ¡éªŒæ–‡ä»¶: ${SHA256_FILE}"
 
-# ÏÔÊ¾Ñ¹Ëõ°üÄÚÈÝ£¨Ç° 20 ÐÐ£©
-log_info "Ñ¹Ëõ°üÄÚÈÝ£º"
+# å±•ç¤ºåŽ‹ç¼©åŒ…å†…å®¹å‰è‹¥å¹²è¡Œ
+log_info "åŽ‹ç¼©åŒ…å†…æ–‡ä»¶é¢„è§ˆï¼ˆå‰ 20 è¡Œï¼‰ï¼š"
 tar -tzf "${TGZ_FILE}" | head -20
 
-log_info "ËùÓÐ²Ù×÷Íê³É£¡"
-log_info "Êä³öÎÄ¼þ£º"
-log_info "  - Ñ¹Ëõ°ü: ${TGZ_FILE}"
-log_info "  - Ð£ÑéÎÄ¼þ: ${SHA256_FILE}"
+log_info "å…¨éƒ¨æµç¨‹æ‰§è¡Œå®Œæˆ"
+log_info "è¾“å‡ºæ–‡ä»¶ï¼š"
+log_info "  - åŽ‹ç¼©åŒ…: ${TGZ_FILE}"
+log_info "  - æ ¡éªŒæ–‡ä»¶: ${SHA256_FILE}"
 
 exit 0
