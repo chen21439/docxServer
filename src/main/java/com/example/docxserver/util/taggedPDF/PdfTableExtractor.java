@@ -2,11 +2,13 @@ package com.example.docxserver.util.taggedPDF;
 
 import com.example.docxserver.util.taggedPDF.dto.Counter;
 import com.example.docxserver.util.taggedPDF.dto.McidPageInfo;
+import com.example.docxserver.util.taggedPDF.dto.TextWithPositions;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot;
+import org.apache.pdfbox.text.TextPosition;
 
 import java.io.File;
 import java.io.IOException;
@@ -231,16 +233,25 @@ public class PdfTableExtractor {
                                         McidCollector.collectMcidsByPage(cellElement, doc, false);
                                     McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(cellMcidsByPage, doc);
 
-                                    // 提取单元格文本
-                                    String cellText = PdfTextExtractor.extractTextFromElement(cellElement, doc);
+                                    // 提取单元格文本和TextPosition（用于计算bbox）
+                                    TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(cellElement, doc);
+                                    String cellText = textWithPositions.getText();
                                     // 去除零宽字符（保留换行、空格、标点等）
                                     cellText = TextUtils.removeZeroWidthChars(cellText);
+
+                                    // 计算边界框
+                                    String bbox = computeBoundingBox(textWithPositions.getPositions());
 
                                     tableOutput.append("    <td type=\"").append(cellType).append("\">\n");
                                     tableOutput.append("      <p id=\"").append(cellId)
                                           .append("\" type=\"P\"")
                                           .append(" mcid=\"").append(TextUtils.escapeHtml(mcidPageInfo.mcidStr))
-                                          .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\">")
+                                          .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
+                                    // 添加bbox属性（如果有）
+                                    if (bbox != null) {
+                                        tableOutput.append(" bbox=\"").append(bbox).append("\"");
+                                    }
+                                    tableOutput.append(">")
                                           .append(TextUtils.escapeHtml(cellText))
                                           .append("</p>\n");
                                     tableOutput.append("    </td>\n");
@@ -307,8 +318,9 @@ public class PdfTableExtractor {
             if (!hasTableMcid) {
                 McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(elementMcidsByPage, doc);
 
-                // 提取元素文本
-                String paraText = PdfTextExtractor.extractTextFromElement(element, doc);
+                // 提取元素文本和TextPosition（用于计算bbox）
+                TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(element, doc);
+                String paraText = textWithPositions.getText();
                 // 去除零宽字符（保留换行、空格、标点等）
                 paraText = TextUtils.removeZeroWidthChars(paraText);
 
@@ -317,13 +329,21 @@ public class PdfTableExtractor {
                     int paraIndex = tableCounter.paragraphIndex++;
                     String paraId = IdUtils.formatParagraphId(paraIndex);
 
+                    // 计算边界框
+                    String bbox = computeBoundingBox(textWithPositions.getPositions());
+
                     System.out.println("  [表格外段落] type=" + structType + ", id=" + paraId + ", 文本长度=" + paraText.length() + ", MCID=" + mcidPageInfo.mcidStr);
 
-                    // 输出XML（带type属性）
+                    // 输出XML（带type属性和bbox）
                     paragraphOutput.append("<p id=\"").append(paraId)
                           .append("\" type=\"").append(structType).append("\"")
                           .append(" mcid=\"").append(TextUtils.escapeHtml(mcidPageInfo.mcidStr))
-                          .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\">")
+                          .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
+                    // 添加bbox属性（如果有）
+                    if (bbox != null) {
+                        paragraphOutput.append(" bbox=\"").append(bbox).append("\"");
+                    }
+                    paragraphOutput.append(">")
                           .append(TextUtils.escapeHtml(paraText))
                           .append("</p>\n");
 
@@ -340,5 +360,57 @@ public class PdfTableExtractor {
                 extractTablesFromElement(childElement, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot);
             }
         }
+    }
+
+    /**
+     * 从TextPosition列表计算边界框（PDF用户空间坐标）
+     *
+     * <h3>实现原理</h3>
+     * <ol>
+     *   <li>使用 DirAdj 系列方法（已包含所有变换：CTM + Text Matrix + Font Matrix）</li>
+     *   <li>YDirAdj 取绝对值得到从底部算起的基线位置</li>
+     *   <li>顶部 = 基线 + 高度（更大的Y）</li>
+     *   <li>底部 = 基线（更小的Y）</li>
+     * </ol>
+     *
+     * @param positions  文本位置列表
+     * @return 边界框字符串 "x0,y0,x1,y1"（PDF用户空间），如果无法计算则返回null
+     */
+    private static String computeBoundingBox(List<TextPosition> positions) {
+        if (positions == null || positions.isEmpty()) {
+            return null;
+        }
+
+        // 初始化边界
+        double minX = Double.MAX_VALUE;
+        double minY = Double.MAX_VALUE;  // PDF用户空间的底部（较小的Y）
+        double maxX = -Double.MAX_VALUE;
+        double maxY = -Double.MAX_VALUE; // PDF用户空间的顶部（较大的Y）
+
+        // 遍历所有文本位置，计算最小外接矩形
+        for (TextPosition tp : positions) {
+            // 使用DirAdj系列方法（已考虑所有变换：CTM + Text Matrix + Font Matrix）
+            double x = tp.getXDirAdj();
+            double width = tp.getWidthDirAdj();
+            double height = tp.getHeightDir();
+
+            // Y坐标转换：YDirAdj可能为负数，取绝对值得到从底部算起的Y坐标
+            double yBase = Math.abs(tp.getYDirAdj());  // 基线位置（从底部算起）
+
+            // PDF坐标系：左下角为原点，y轴向上
+            // 文字顶部：基线 + 字体高度（更大的Y）
+            // 文字底部：基线（更小的Y）
+            double yTop = yBase + height;  // 顶部（y值较大）
+            double yBottom = yBase;        // 底部（y值较小）
+
+            // 更新边界
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x + width);
+            minY = Math.min(minY, yBottom);  // minY是底部（y值较小）
+            maxY = Math.max(maxY, yTop);     // maxY是顶部（y值较大）
+        }
+
+        // 格式化为字符串 "x0,y0,x1,y1"（保留2位小数）
+        return String.format("%.2f,%.2f,%.2f,%.2f", minX, minY, maxX, maxY);
     }
 }

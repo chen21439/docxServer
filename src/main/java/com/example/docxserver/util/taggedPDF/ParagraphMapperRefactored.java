@@ -46,15 +46,15 @@ public class ParagraphMapperRefactored {
         String docxTxtPath = dir + taskId + "_docx.txt";
 
         // 步骤1: 读取PDF文本层,生成pdf_paragraph.txt 和 pdf_table.txt
-//        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT（全量处理）===");
-//        extractPdfToXml(taskId, pdfPath);
-//        System.out.println();
+        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT（全量处理）===");
+        extractPdfToXml(taskId, pdfPath);
+        System.out.println();
 
 //        // 步骤2: 从DOCX.txt提取文本到ID的映射，并与PDF段落进行匹配验证----验证使用
 //        System.out.println("=== 从DOCX.txt提取文本到ID的映射，并与PDF段落进行匹配验证 ===");
 //        extractTextToIdMapFromDocx(docxTxtPath, taskId);
 //        System.out.println();
-//
+////
 //        // 步骤3: 使用ID直接匹配，生成映射结果----验证使用
 //         System.out.println("=== 使用ID直接匹配，生成匹配结果 ===");
 //         buildMappingById(docxTxtPath, pdfPath);
@@ -66,9 +66,9 @@ public class ParagraphMapperRefactored {
 //         System.out.println();
 //
 //        // 步骤5: 从JSON文件验证PDF文本提取的准确性
-        System.out.println("=== 从JSON文件验证PDF文本提取的准确性 ===");
-        validatePdfTextByJson(taskId);
-        System.out.println();
+//        System.out.println("=== 从JSON文件验证PDF文本提取的准确性 ===");
+//        validatePdfTextByJson(taskId);
+//        System.out.println();
     }
 
     /**
