@@ -70,46 +70,20 @@ public class RemoteLibreOfficeCli {
 
     public static void main(String[] args) throws Exception {
 
-        String cmd = "set -euo pipefail\n" +
-                "IN=\"%s\"\n" +
-                "OUTDIR=\"%s\"\n" +
-                "WD=$(dirname \"$IN\")\n" +
-                "BN=$(basename \"$IN\")\n" +
-                "[ -n \"$OUTDIR\" ] || OUTDIR=\"$WD\"\n" +
-                "mkdir -p \"$OUTDIR\"\n" +
-                // 创建占位 CSS，确保浏览器能加载到（你也可以换成拷贝真实 CSS）
-                ": > \"$OUTDIR/xxx.css\"\n" +
-                "docker run --rm \\\n" +
-                "  -v \"$WD\":/in:Z \\\n" +
-                "  -v \"$OUTDIR\":/out:Z \\\n" +
-                "  %s \\\n" +
-                "  --headless --nologo --nofirststartwizard \\\n" +
-                "  --convert-to \"xhtml:org.openoffice.da.writer2xhtml:xhtml_custom_stylesheet=xxx.css,xhtml_formatting=convert_all,xhtml_convert_to_px=true\" \\\n" +
-                "  --outdir /out \\\n" +
-                "  \"/in/$BN\"\n" +
-                "echo \"DONE: $IN -> $OUTDIR\"";
-
-
-
-
-
-
-
-        // 示例1: 使用旧方法（带命令模板）
-//        RemoteLibreOfficeCli.executeRemoteWithUploadDownload(
-//            "E:\\programFile\\AIProgram\\docxServer\\style\\park.docx",
-//            "E:\\programFile\\AIProgram\\docxServer\\style",
-//            "lo-cli:w2x-rl9-w2xconf_v2",
-//            RemoteLibreOfficeCli.getDocxToOdtCommandTemplate()
-//        );
-
         // 示例2: 使用新方法（推荐，通过Shell脚本执行，带flock并发控制）
-        String taskId = "1977688621829947393";  // 示例任务ID
+        String taskId = "25112909590817561317";  // 示例任务ID
         RemoteLibreOfficeCli.executeRemoteViaShellScript(
             taskId,
-            "E:\\programFile\\AIProgram\\docxServer\\style\\park.docx",
-            "E:\\programFile\\AIProgram\\docxServer\\style"
+            "E:\\programFile\\AIProgram\\tender_ontology\\static\\upload\\25112909590817561317\\city.docx",
+            "E:\\programFile\\AIProgram\\tender_ontology\\static\\upload\\25112909590817561317"
         );
+
+//        String taskId = "1977688621829947393";  // 示例任务ID
+//        RemoteLibreOfficeCli.executeRemoteViaShellScript(
+//                taskId,
+//                "E:\\programFile\\AIProgram\\docxServer\\style\\park.docx",
+//                "E:\\programFile\\AIProgram\\docxServer\\style"
+//        );
     }
 
     /**
@@ -395,7 +369,7 @@ public class RemoteLibreOfficeCli {
             uploadFile(session, localInputFile, remoteInputPath);
 
             // 2. 调用远程Shell脚本执行转换（脚本内部使用flock控制并发）
-            String remoteShellScript = "/data/basic-tender-compliance/shell/docx2odt.sh";
+            String remoteShellScript = "/data/basic-tender-compliance/shell/docxConvertPdf.sh";
             String shellCmd = String.format("bash -lc '%s %s'", remoteShellScript, taskId);
             log.info("[taskId: {}] 执行远程Shell脚本: {}", taskId, shellCmd);
             execRemote(session, shellCmd);
@@ -561,20 +535,20 @@ public class RemoteLibreOfficeCli {
 
             byte[] buf = new byte[8192];
             while (true) {
-                // 读取标准输出
+                // 读取标准输出（使用 UTF-8 编码解码远程脚本的中文输出）
                 while (in.available() > 0) {
                     int n = in.read(buf, 0, buf.length);
                     if (n < 0) break;
-                    String output = new String(buf, 0, n);
+                    String output = new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8);
                     outputBuilder.append(output);
                     log.debug("远程命令输出: {}", output.trim());
                 }
 
-                // 读取错误输出
+                // 读取错误输出（使用 UTF-8 编码解码远程脚本的中文输出）
                 while (err.available() > 0) {
                     int n = err.read(buf, 0, buf.length);
                     if (n < 0) break;
-                    String error = new String(buf, 0, n);
+                    String error = new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8);
                     log.error("远程命令错误: {}", error.trim());
                 }
 
