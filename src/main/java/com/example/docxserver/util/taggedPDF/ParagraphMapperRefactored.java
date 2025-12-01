@@ -63,6 +63,7 @@ public class ParagraphMapperRefactored {
 //        // 步骤4: 使用PDFTextStripper提取PDF全文到txt
 //         System.out.println("=== 使用PDFTextStripper提取PDF全文 ===");
 //         extractPdfTextWithStripper(pdfPath);
+
 //         System.out.println();
 //
 //        // 步骤5: 从JSON文件验证PDF文本提取的准确性

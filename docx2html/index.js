@@ -1,4 +1,4 @@
-﻿// Document.xml 可视化工具
+﻿﻿﻿﻿// Document.xml 可视化工具
 
 // 使用 API 端点读取XML文件，避免中文路径问题
 const XML_FILE_PATH = '/api/document.xml';
@@ -280,9 +280,7 @@ function renderSearchHtml(html) {
         btn.dataset.enhanced = '1';
     });
 
-    // 事件委托：查看/复制
-    resultContent.removeEventListener('click', onResultContentClick);
-    resultContent.addEventListener('click', onResultContentClick);
+    // 事件委托由 setupResultEnhancer 安装（启用自动预载/回退定位/复制带标签）
 }
 
 async function onResultContentClick(e) {
@@ -324,50 +322,58 @@ async function onResultContentClick(e) {
         const idx = shrinkBtn.getAttribute('data-index') || '';
         const previewBox = document.getElementById('html-preview-' + idx);
         const viewBtn = document.querySelector('.btn-view-html[data-index="' + idx + '"]');
-        if (!previewBox || !viewBtn) {
-            showError('请先点击“查看对应HTML”加载片段');
-            return;
+        if (!previewBox || !viewBtn) return;
+
+        // 自动预载：若未加载或缺少定位信息，先执行一次“查看对应HTML”
+        if (!previewBox.textContent.trim() || !previewBox.getAttribute('data-pos')) {
+            await autoLoadPreview(idx);
         }
+
         const pos = (previewBox.getAttribute('data-pos') || viewBtn.getAttribute('data-pos') || '');
         const selType = (previewBox.getAttribute('data-sel-type') || viewBtn.getAttribute('data-sel-type') || '').toLowerCase();
         const selVal = (previewBox.getAttribute('data-sel-val') || viewBtn.getAttribute('data-sel-val') || '').toLowerCase();
-        if (!pos) {
-            showError('请先点击“查看对应HTML”再缩小范围');
-            return;
-        }
+
         try {
             const project = (window.AppState && window.AppState.getProject) ? window.AppState.getProject() : document.getElementById('projectFolder').value.trim();
             const doc = await getProjectDocxDom(project);
-            const target = doc.getElementById(pos);
-            if (!target) {
-                showError('未在 docx.html 中找到初始元素');
-                return;
-            }
+
+            // 从同一卡片中取匹配文本，回退定位用
+            let c = viewBtn.parentElement;
+            while (c && !c.querySelector('.text-content')) c = c.parentElement;
+            const matchedText = (c && c.querySelector('.text-content')) ? normText(c.querySelector('.text-content').textContent || '') : '';
+
+            const target = resolveTarget(doc, pos, matchedText);
+            if (!target) { showError('未在 docx.html 中找到初始元素'); return; }
+
             const curScope = (previewBox.getAttribute('data-scope') || '').toLowerCase();
             const narrower = pickNarrowerNode(target, curScope, selType, selVal);
             const escaped = narrower.outerHTML.replace(/</g, '<').replace(/>/g, '>');
             previewBox.innerHTML = '<div style="font-family:monospace;white-space:pre-wrap;">' + escaped + '</div>';
             previewBox.setAttribute('data-scope', getNodeScopeName(narrower));
-            previewBox.setAttribute('data-html', narrower.outerHTML);
             previewBox.setAttribute('data-pos', pos);
             previewBox.setAttribute('data-sel-type', selType);
             previewBox.setAttribute('data-sel-val', selVal);
+            previewBox.setAttribute('data-html', narrower.outerHTML);
         } catch (err) {
             showError('缩小范围失败：' + (err && err.message ? err.message : String(err)));
         }
         return;
     }
 
-    // 复制目标HTML
+    // 复制目标HTML（带标签，支持自动预载）
     const copyHtmlBtn = e.target.closest('.btn-copy-html');
     if (copyHtmlBtn) {
         const idx = copyHtmlBtn.getAttribute('data-index') || '';
         const previewBox = document.getElementById('html-preview-' + idx);
-        if (!previewBox || !previewBox.textContent.trim()) {
-            showError('请先点击“查看对应HTML”加载片段');
-            return;
+        if (!previewBox) return;
+
+        // 自动预载：未加载或无 data-html 时，先执行一次“查看对应HTML”
+        if (!previewBox.textContent.trim() || !previewBox.getAttribute('data-html')) {
+            await autoLoadPreview(idx);
         }
-        const htmlRaw = previewBox.getAttribute('data-html') || unescapeHtml(previewBox.textContent || '');
+
+        const htmlRaw = previewBox.getAttribute('data-html') || '';
+        if (!htmlRaw) { showError('请先点击“查看对应HTML”加载片段'); return; }
         await copyHtml(htmlRaw);
         return;
     }
@@ -673,16 +679,16 @@ function getExtractionSelector() {
             return null;
         }
 
-        const rawValue = levelInput.value.trim();
+        let rawValue = levelInput.value.trim();
         if (!rawValue) {
-            showError('请输入父级层数');
-            return null;
+            rawValue = '1';
+            levelInput.value = '1';
         }
 
-        const level = parseInt(rawValue, 10);
+        let level = parseInt(rawValue, 10);
         if (!Number.isInteger(level) || level <= 0) {
-            showError('父级层数必须是大于 0 的整数');
-            return null;
+            level = 1;
+            levelInput.value = '1';
         }
 
         return { type: 'level', value: level };
@@ -785,6 +791,23 @@ function setupResultEnhancer() {
             btn.insertAdjacentElement('afterend', btnCopyHtml);
             btn.insertAdjacentElement('afterend', btnShrink);
             btn.insertAdjacentElement('afterend', btnExpand);
+
+            // 若“目标父级”XML 区域存在省略提示，则补充“展开全部XML”按钮
+            let card = btn.parentElement;
+            while (card && !card.querySelector('.xml-tree')) card = card.parentElement;
+            const parentXmlTree = findParentXmlTree(card) || (card ? card.querySelector('.xml-tree') : null);
+            const xmlText = parentXmlTree ? (parentXmlTree.innerText || '') : '';
+            const hasOmit = /\(\s*还有\s*\d+\s*个子节点\s*\)|内容过大，已截断/.test(xmlText);
+            if (parentXmlTree && hasOmit) {
+                // 补充按钮（保留手动展开）
+                if (!card.querySelector('.btn-expand-xml')) {
+                    const btnExpandXml = mk('btn-expand-xml', '展开全部XML');
+                    btnCopyXml.insertAdjacentElement('afterend', btnExpandXml);
+                }
+                // 自动展开完整 XML（无需用户点击）
+                expandXmlForCard(card).catch(() => { /* 忽略错误，仍保留按钮以便手动重试 */ });
+            }
+
             btn.dataset.enhanced = '1';
         });
     };
@@ -798,6 +821,20 @@ function setupResultEnhancer() {
 }
 
 async function onResultContentClickEnhanced(e) {
+    // 展开全部XML（只影响该卡片的 .xml-tree）
+    const expandXmlBtn = e.target.closest('.btn-expand-xml');
+    if (expandXmlBtn) {
+        try {
+            let card = expandXmlBtn.parentElement;
+            while (card && !card.querySelector('.xml-tree')) card = card.parentElement;
+            if (!card) { showError('未找到该结果的 XML 区域'); return; }
+            await expandXmlForCard(card);
+        } catch (err) {
+            showError('展开XML失败：' + (err && err.message ? err.message : String(err)));
+        }
+        return;
+    }
+
     // 扩大HTML范围
     const expandBtn = e.target.closest('.btn-expand-html');
     if (expandBtn) {
@@ -810,6 +847,131 @@ async function onResultContentClickEnhanced(e) {
         if (!previewBox.textContent.trim() || !previewBox.getAttribute('data-pos')) {
             await autoLoadPreview(idx);
         }
+
+/* ==== 展开全部XML：基于 xmlDoc 反向定位该卡片的 XML 父级并序列化 ==== */
+const XML_EXPAND_LIMIT_BYTES = 200 * 1024; // 200KB 安全上限
+
+async function expandXmlForCard(card) {
+    if (!card) return;
+    // 优先定位“目标父级”对应的 xml-tree
+    const xmlTree = findParentXmlTree(card) || card.querySelector('.xml-tree');
+    if (!xmlTree) { showError('未找到 XML 区域'); return; }
+
+    // 已展开过
+    if (xmlTree.getAttribute('data-xml-full') === '1') return;
+
+    // 从卡片提取“匹配文本”，用于定位
+    const matchedText = getMatchedTextFromCard(card);
+
+    // 选取一个最可能的父级标签名：从当前预览片段首行抓取，如 <w:p> / <w:tc>
+    const currentSnippet = (xmlTree.innerText || '').trim();
+    const tagMatch = currentSnippet.match(/<\s*([a-zA-Z0-9:_-]+)\b/);
+    const fallbackTag = tagMatch ? tagMatch[1] : null;
+
+    // 解析“目标父级（向上 N 层）”中的 N（默认至少 1 层）
+    const upLevels = Math.max(1, parseUpLevelsFromCard(card) || 0);
+
+    // 获取全局 xmlDoc
+    const doc = (window.AppState && window.AppState.getXmlDoc) ? window.AppState.getXmlDoc() : null;
+    if (!doc) { showError('XML 文档未加载'); return; }
+
+    // 在 xmlDoc 中定位父级节点：优先按标签匹配并包含匹配文本，强制上卷 N 层
+    const node = findXmlNodeForCard(doc, fallbackTag, matchedText, upLevels);
+    if (!node) { showError('未能在 XML 中定位到对应父级节点'); return; }
+
+    const xmlStr = serializeXmlNode(node);
+
+    // 展示完整 XML（等宽 + 保留缩进）
+    xmlTree.textContent = xmlStr;
+    xmlTree.setAttribute('data-xml-full', '1');
+}
+
+function getMatchedTextFromCard(card) {
+    const el = card.querySelector('.text-content');
+    return normText(el ? (el.textContent || '') : '');
+}
+
+// 在 xmlDoc 中查找匹配节点：按标签+包含文本，若无标签则全表搜索
+function findXmlNodeForCard(xmlDoc, tagName, containsText, upLevels) {
+    const normContains = normText(containsText || '');
+    const list = tagName ? Array.from(xmlDoc.getElementsByTagName(tagName)) : Array.from(xmlDoc.getElementsByTagName('*'));
+
+    let best = null;
+    for (const el of list) {
+        const t = normText(el.textContent || '');
+        if (!t) continue;
+        if (normContains && !t.includes(normContains)) continue;
+
+        // 以命中的叶子为起点，先强制上卷 upLevels 层
+        let cur = el;
+        let climbed = 0;
+        while (cur && cur.parentNode && cur.parentNode.nodeType === 1 && climbed < (upLevels || 0)) {
+            cur = cur.parentNode;
+            climbed++;
+        }
+
+        // 可选：小幅覆盖修正（若父文本仍是 containsText 的子集且未超长，再再上卷 1-2 层）
+        let adj = cur;
+        let adjSteps = 0;
+        while (adj && adj.parentNode && adj.parentNode.nodeType === 1 && adjSteps < 2) {
+            const p = adj.parentNode;
+            const pt = normText(p.textContent || '');
+            if (pt && normContains && pt.length <= normContains.length && normContains.includes(pt)) {
+                adj = p;
+                adjSteps++;
+                continue;
+            }
+            break;
+        }
+
+        best = adj || cur || el;
+        break;
+    }
+    return best;
+}
+
+function serializeXmlNode(node) {
+    try {
+        const ser = new XMLSerializer();
+        return ser.serializeToString(node);
+    } catch {
+        return node.outerHTML || (node.textContent || '');
+    }
+}
+
+// 从卡片中找到“目标父级”标题对应的 xml-tree：查找包含“目标父级”的标题/标签，取其后最近的 .xml-tree
+function findParentXmlTree(card) {
+    if (!card) return null;
+    // 常见标题容器：h3/h4/h5/div/span 等，包含“目标父级”
+    const headings = Array.from(card.querySelectorAll('h1,h2,h3,h4,h5,strong,div,span,p'))
+        .filter(el => /目标父级/.test(el.textContent || ''));
+    for (const h of headings) {
+        // 在同级或后续兄弟里找最近的 .xml-tree
+        let n = h;
+        for (let i = 0; i < 8 && n; i++) {
+            if (n.nextElementSibling && n.nextElementSibling.classList && n.nextElementSibling.classList.contains('xml-tree')) {
+                return n.nextElementSibling;
+            }
+            n = n.nextElementSibling;
+        }
+        // 向下在父容器中找 .xml-tree
+        let parent = h.parentElement;
+        if (parent) {
+            const xt = parent.querySelector('.xml-tree');
+            if (xt) return xt;
+        }
+    }
+    return null;
+}
+
+// 从卡片文案解析“目标父级（向上 N 层）”
+function parseUpLevelsFromCard(card) {
+    if (!card) return 0;
+    const txt = card.innerText || '';
+    const m = txt.match(/目标父级（向上\s*(\d+)\s*层）/);
+    const n = m ? parseInt(m[1], 10) : 0;
+    return Number.isFinite(n) && n > 0 ? n : 0;
+}
 
         const pos = viewBtn.getAttribute('data-pos') || '';
         const selType = (viewBtn.getAttribute('data-sel-type') || '').toLowerCase();
@@ -991,6 +1153,24 @@ function resolveTarget(doc, pos, matchedText) {
     return target;
 }
 
+/* 辅助：自动触发“查看对应HTML”与按文本回退定位 */
+async function autoLoadPreview(idx) {
+    const btn = document.querySelector('.btn-view-html[data-index="' + idx + '"]');
+    if (!btn) return false;
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 80));
+    return true;
+}
+function resolveTarget(doc, pos, matchedText) {
+    let el = pos ? doc.getElementById(pos) : null;
+    if (!el && matchedText) {
+        const nodes = doc.querySelectorAll('*[id]');
+        for (const n of nodes) {
+            if (normText(n.textContent || '').includes(matchedText)) { el = n; break; }
+        }
+    }
+    return el;
+}
 // 离屏加载并缓存项目 docx.html
 const __docxHtmlCache = new Map();
 async function getProjectDocxDom(project) {

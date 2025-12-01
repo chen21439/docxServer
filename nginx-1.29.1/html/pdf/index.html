@@ -9,23 +9,29 @@
   <style>
     body {
       margin: 0;
-      padding: 20px;
+      padding: 0;
       font-family: Arial, sans-serif;
       background-color: #111827;
       color: #e5e7eb;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
     }
     #controls {
-      position: sticky;
-      top: 0;
+      flex-shrink: 0;
       z-index: 10;
       background: #0f172a;
       border-bottom: 1px solid #1f2937;
       padding: 15px;
-      margin-bottom: 20px;
-      border-radius: 5px;
       display: flex;
       gap: 10px;
       align-items: center;
+    }
+    #main-content {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
     }
     #controls input {
       padding: 8px;
@@ -52,11 +58,67 @@
       color: #9ca3af;
     }
     #pdf-container {
+      flex: 1;
+      overflow-y: auto;
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 20px;
       padding: 16px;
+    }
+    #right-panel {
+      width: 400px;
+      background: #0f172a;
+      border-left: 1px solid #1f2937;
+      overflow-y: auto;
+      flex-shrink: 0;
+    }
+    #right-panel h3 {
+      margin: 0;
+      padding: 15px;
+      background: #1e293b;
+      border-bottom: 1px solid #1f2937;
+      font-size: 16px;
+      color: #fbbf24;
+    }
+    #selection-info {
+      padding: 15px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    #selection-info pre {
+      background: #1e293b;
+      padding: 10px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 12px;
+      margin: 10px 0;
+    }
+    .info-section {
+      margin-bottom: 20px;
+    }
+    .info-label {
+      color: #9ca3af;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+    .info-value {
+      color: #e5e7eb;
+      word-break: break-all;
+    }
+    .quad-item {
+      background: #1e293b;
+      padding: 8px;
+      margin: 5px 0;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 11px;
+    }
+    .no-selection {
+      color: #6b7280;
+      font-style: italic;
+      text-align: center;
+      padding: 40px 20px;
     }
     .page-wrapper {
       width: 100%;
@@ -109,13 +171,23 @@
   <div id="controls">
     <input type="text" id="pdf-url" value="/pdf/file/1978018096320905217.pdf" placeholder="输入 PDF URL" />
     <button id="load-pdf">加载 PDF</button>
+    <button id="prev-page">上一页</button>
+    <button id="next-page">下一页</button>
     <button id="zoom-out">缩小</button>
     <span id="zoom-info">100%</span>
     <button id="zoom-in">放大</button>
     <span id="page-info">准备加载...</span>
   </div>
 
-  <div id="pdf-container"></div>
+  <div id="main-content">
+    <div id="pdf-container"></div>
+    <div id="right-panel">
+      <h3>选中文本信息</h3>
+      <div id="selection-info">
+        <div class="no-selection">请在PDF中选择文本</div>
+      </div>
+    </div>
+  </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.js"></script>
@@ -125,6 +197,8 @@
 
     const pdfUrlInput = document.getElementById('pdf-url');
     const loadButton = document.getElementById('load-pdf');
+    const prevPageBtn = document.getElementById('prev-page');
+    const nextPageBtn = document.getElementById('next-page');
     const zoomOutBtn = document.getElementById('zoom-out');
     const zoomInBtn = document.getElementById('zoom-in');
     const zoomInfo = document.getElementById('zoom-info');
@@ -134,6 +208,7 @@
     let pdfDoc = null;
     let scale = 1.5;
     const pages = [];
+    let currentPage = 5; // 默认第5页
 
     // 渲染单个页面
     async function renderPage(page, pageNumber) {
@@ -192,28 +267,23 @@
       pages.push({ page, viewport, div: pageContainer, canvas, ctx, textLayerDiv });
     }
 
-    // 渲染所有页面
-    async function renderAllPages(pdf) {
+    // 渲染单页
+    async function renderSinglePage(pageNum) {
+      if (!pdfDoc) return;
+      if (pageNum < 1 || pageNum > pdfDoc.numPages) return;
+
       pdfContainer.innerHTML = '';
       pages.length = 0;
-      pageInfo.textContent = `加载中，共 ${pdf.numPages} 页...`;
 
-      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-        const page = await pdf.getPage(pageNum);
-        await renderPage(page, pageNum);
-        pageInfo.textContent = `已加载 ${pageNum} / ${pdf.numPages} 页`;
-      }
+      const page = await pdfDoc.getPage(pageNum);
+      await renderPage(page, pageNum);
 
+      currentPage = pageNum;
       zoomInfo.textContent = Math.round(scale * 100) + '%';
-      pageInfo.textContent = `全部 ${pdf.numPages} 页加载完成，可选择文本`;
+      pageInfo.textContent = `第 ${pageNum} 页 / 共 ${pdfDoc.numPages} 页`;
 
-      // 默认滚动到第9页
-      setTimeout(() => {
-        const page9 = document.getElementById('page-9');
-        if (page9) {
-          page9.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      }, 500);
+      // 清空右侧面板
+      updateSelectionPanel(null);
     }
 
     // 加载 PDF
@@ -222,7 +292,9 @@
         pageInfo.textContent = '正在加载 PDF...';
         const loadingTask = pdfjsLib.getDocument(url);
         pdfDoc = await loadingTask.promise;
-        await renderAllPages(pdfDoc);
+
+        // 加载默认页（第5页）
+        await renderSinglePage(currentPage);
       } catch (error) {
         pageInfo.textContent = '加载失败: ' + error.message;
         console.error('Error loading PDF:', error);
@@ -232,11 +304,7 @@
     // 重新渲染（缩放后）
     async function rerenderAtScale() {
       if (!pdfDoc) return;
-      const doc = pdfDoc;
-      pdfContainer.innerHTML = '';
-      pages.length = 0;
-      pdfDoc = doc;
-      await renderAllPages(pdfDoc);
+      await renderSinglePage(currentPage);
     }
 
     // 事件监听
@@ -252,6 +320,22 @@
     pdfUrlInput.addEventListener('keypress', function(e) {
       if (e.key === 'Enter') {
         loadButton.click();
+      }
+    });
+
+    // 上一页
+    prevPageBtn.addEventListener('click', async () => {
+      if (!pdfDoc) return;
+      if (currentPage > 1) {
+        await renderSinglePage(currentPage - 1);
+      }
+    });
+
+    // 下一页
+    nextPageBtn.addEventListener('click', async () => {
+      if (!pdfDoc) return;
+      if (currentPage < pdfDoc.numPages) {
+        await renderSinglePage(currentPage + 1);
       }
     });
 
@@ -275,8 +359,118 @@
       }
     });
 
+    // 从选区提取 QuadPoints 信息
+    function selectionToPayload(pdf, pages) {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) return null;
+
+      const groupByPage = new Map();
+
+      for (let i = 0; i < sel.rangeCount; i++) {
+        const range = sel.getRangeAt(i);
+        for (const r of Array.from(range.getClientRects())) {
+          const el = document.elementFromPoint(r.left + 1, r.top + 1);
+          const pageDiv = el?.closest?.(".page-container");
+          if (!pageDiv) continue;
+
+          const pageNumber = Number(pageDiv.dataset.pageNumber);
+          // 在单页模式下，pages 数组只有一个元素
+          const pageData = pages[0];
+          if (!pageData) continue;
+
+          const { viewport } = pageData;
+          const pageBox = pageDiv.getBoundingClientRect();
+
+          // 视口像素 → PDF 坐标（QuadPoints: 上左、上右、下左、下右）
+          const tl = viewport.convertToPdfPoint(r.left - pageBox.left,  r.top    - pageBox.top);
+          const tr = viewport.convertToPdfPoint(r.right - pageBox.left, r.top    - pageBox.top);
+          const bl = viewport.convertToPdfPoint(r.left - pageBox.left,  r.bottom - pageBox.top);
+          const br = viewport.convertToPdfPoint(r.right - pageBox.left, r.bottom - pageBox.top);
+
+          const pageArr = groupByPage.get(pageNumber) || [];
+          // QuadPoints 格式: [ulx, uly, urx, ury, llx, lly, lrx, lry]
+          pageArr.push([tl[0], tl[1], tr[0], tr[1], bl[0], bl[1], br[0], br[1]]);
+          groupByPage.set(pageNumber, pageArr);
+        }
+      }
+
+      const selections = Array.from(groupByPage.entries()).map(([page, quads]) => ({
+        page,
+        quads
+      }));
+
+      return {
+        doc: { fingerprint: pdf.fingerprint, unit: "pt" },
+        selections,
+        text: sel.toString()
+      };
+    }
+
+    // 更新右侧面板显示
+    function updateSelectionPanel(payload) {
+      const panel = document.getElementById('selection-info');
+
+      if (!payload) {
+        panel.innerHTML = '<div class="no-selection">请在PDF中选择文本</div>';
+        return;
+      }
+
+      let html = '';
+
+      // 显示选中文本
+      html += '<div class="info-section">';
+      html += '<div class="info-label">选中文本：</div>';
+      html += `<div class="info-value">${payload.text || '(无)'}</div>`;
+      html += '</div>';
+
+      // 显示文档指纹
+      html += '<div class="info-section">';
+      html += '<div class="info-label">文档指纹：</div>';
+      html += `<div class="info-value">${payload.doc.fingerprint}</div>`;
+      html += '</div>';
+
+      // 显示坐标单位
+      html += '<div class="info-section">';
+      html += '<div class="info-label">坐标单位：</div>';
+      html += `<div class="info-value">${payload.doc.unit}</div>`;
+      html += '</div>';
+
+      // 显示每页的 QuadPoints
+      html += '<div class="info-section">';
+      html += '<div class="info-label">QuadPoints（PDF 坐标）：</div>';
+      payload.selections.forEach(sel => {
+        html += `<div style="margin-top:10px;"><strong>第 ${sel.page} 页：</strong></div>`;
+        sel.quads.forEach((quad, idx) => {
+          html += `<div class="quad-item">`;
+          html += `Quad ${idx + 1}:<br>`;
+          html += `UL: (${quad[0].toFixed(2)}, ${quad[1].toFixed(2)})<br>`;
+          html += `UR: (${quad[2].toFixed(2)}, ${quad[3].toFixed(2)})<br>`;
+          html += `LL: (${quad[4].toFixed(2)}, ${quad[5].toFixed(2)})<br>`;
+          html += `LR: (${quad[6].toFixed(2)}, ${quad[7].toFixed(2)})`;
+          html += `</div>`;
+        });
+      });
+      html += '</div>';
+
+      // 显示完整 JSON
+      html += '<div class="info-section">';
+      html += '<div class="info-label">完整 JSON：</div>';
+      html += `<pre>${JSON.stringify(payload, null, 2)}</pre>`;
+      html += '</div>';
+
+      panel.innerHTML = html;
+    }
+
+    // 监听选择变化
+    document.addEventListener('selectionchange', function() {
+      if (!pdfDoc || pages.length === 0) return;
+
+      const payload = selectionToPayload(pdfDoc, pages);
+      updateSelectionPanel(payload);
+    });
+
     // 暴露到全局，便于调试
-    window.__pdfViewer = { pages, pdfDoc };
+    window.__pdfViewer = { pages, pdfDoc, selectionToPayload };
   </script>
 </body>
 </html>

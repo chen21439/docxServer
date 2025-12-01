@@ -1,7 +1,7 @@
 ﻿﻿const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { DOMParser } = require('@xmldom/xmldom');
+const { DOMParser, XMLSerializer } = require('@xmldom/xmldom');
 
 const app = express();
 const PORT = 3000;
@@ -388,7 +388,7 @@ function buildResultsHtml(results, searchText, selector, xmlDoc) {
     `;
 
     // 基于字符串长度限制，而不是简单的结果数量限制
-    const maxResponseSize = 800000; // 800KB 字符串长度限制
+    const maxResponseSize = 100000000; // 提高响应大小上限，避免截断
     let currentSize = html.length;
     let processedCount = 0;
     let truncatedBySize = false;
@@ -512,7 +512,7 @@ function renderParentChain(result, maxSize = 100000) {
         if (!result.targetParent) {
             return '';
         }
-        return renderElementWithSizeLimit(result.targetParent, result.matchedText, 0, true, maxSize);
+        return `<pre style="margin-left: 0px; background: #e8f5e9; padding: 10px; border-left: 4px solid #4CAF50;">${escapeHtml(new XMLSerializer().serializeToString(result.targetParent))}</pre>`;
     }
 
     let html = '';
@@ -521,7 +521,7 @@ function renderParentChain(result, maxSize = 100000) {
     // 当前文本节点部分
     const textNodeHtml = `<div style="margin-bottom: 10px;">
         <div style="color: #666; font-size: 12px; margin-bottom: 5px;">当前文本节点</div>
-        ${renderElementWithSizeLimit(result.textElement, result.matchedText, 0, false, maxSize / 2)}
+        <pre style="margin-left: 0px;">${escapeHtml(new XMLSerializer().serializeToString(result.textElement))}</pre>
     </div>`;
     
     html += textNodeHtml;
@@ -533,7 +533,7 @@ function renderParentChain(result, maxSize = 100000) {
         const remainingSize = maxSize - currentSize;
         const parentHtml = `<div style="margin-top: 15px; padding-top: 15px; border-top: 2px dashed #ddd;">
             <div style="color: #666; font-size: 12px; margin-bottom: 5px;">目标父级（向上 ${result.selectorValue} 层）</div>
-            ${renderElementWithSizeLimit(targetParent, result.matchedText, 1, true, remainingSize)}
+            <pre style="margin-left: 0px; background: #e8f5e9; padding: 10px; border-left: 4px solid #4CAF50;">${escapeHtml(new XMLSerializer().serializeToString(targetParent))}</pre>
         </div>`;
         
         html += parentHtml;
