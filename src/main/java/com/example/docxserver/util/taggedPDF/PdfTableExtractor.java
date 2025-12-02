@@ -362,9 +362,6 @@ public class PdfTableExtractor {
                         McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(elementMcidsByPage, doc);
                         paragraphOutput.append(" mcid=\"").append(TextUtils.escapeHtml(mcidPageInfo.mcidStr))
                               .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
-                        System.out.println("  [表格外段落] type=" + structType + ", id=" + paraId + ", 文本长度=" + paraText.length() + ", MCID=" + mcidPageInfo.mcidStr);
-                    } else {
-                        System.out.println("  [表格外段落] type=" + structType + ", id=" + paraId + ", 文本长度=" + paraText.length());
                     }
 
                     // 添加bbox属性（如果有）

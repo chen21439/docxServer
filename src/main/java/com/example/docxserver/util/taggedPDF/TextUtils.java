@@ -103,8 +103,24 @@ public class TextUtils {
                 .replace("\u200C", "")  // Zero Width Non-Joiner
                 .replace("\u200D", "")  // Zero Width Joiner
                 .replace("\uFEFF", "")  // Zero Width No-Break Space (BOM)
-                // 去除所有空白字符
+                // 去除各种Unicode空格字符（PDF中常见）
+                .replace("\u00A0", "")  // Non-Breaking Space
+                .replace("\u2002", "")  // En Space
+                .replace("\u2003", "")  // Em Space
+                .replace("\u2004", "")  // Three-Per-Em Space
+                .replace("\u2005", "")  // Four-Per-Em Space
+                .replace("\u2006", "")  // Six-Per-Em Space
+                .replace("\u2007", "")  // Figure Space
+                .replace("\u2008", "")  // Punctuation Space
+                .replace("\u2009", "")  // Thin Space
+                .replace("\u200A", "")  // Hair Space
+                .replace("\u202F", "")  // Narrow No-Break Space
+                .replace("\u205F", "")  // Medium Mathematical Space
+                .replace("\u3000", "")  // Ideographic Space (全角空格)
+                // 去除所有空白字符（包括普通空格、制表符等）
                 .replaceAll("\\s+", "")
+                // 去除所有Unicode空白字符类别
+                .replaceAll("\\p{Zs}", "")
                 // 去除标点符号（保留小数点）
                 .replaceAll("[\\p{Punct}&&[^.]]", "");
                 // 不再转换大小写，保留原始大小写

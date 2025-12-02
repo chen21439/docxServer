@@ -3,6 +3,7 @@ package com.example.docxserver.util.taggedPDF;
 import com.example.docxserver.util.taggedPDF.dto.McidPageInfo;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDMarkedContentReference;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement;
 import org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent;
 
@@ -165,6 +166,38 @@ public class McidCollector {
                 } else {
                     System.err.println("      [警告] 无法确定MCID " + mcid + " 的页面位置（element.getPage()和ParentTree均失败）");
                 }
+
+            } else if (kid instanceof PDMarkedContentReference) {
+                // PDFBox 3.0: PDMarkedContentReference（Aspose等工具生成的PDF使用此格式）
+                PDMarkedContentReference mcr = (PDMarkedContentReference) kid;
+                int mcid = mcr.getMCID();
+
+                // PDMarkedContentReference 自带 getPage() 方法
+                PDPage page = mcr.getPage();
+
+                // 如果 mcr.getPage() 返回 null，尝试从父元素获取
+                if (page == null) {
+                    page = element.getPage();
+                }
+
+                // 如果仍然为null，尝试通过ParentTree查找
+                if (page == null) {
+                    page = PdfStructureUtils.resolvePageByParentTree(doc, element, mcid);
+                }
+
+                if (page != null) {
+                    // 页面过滤：只处理目标页面（-1表示处理所有页面）
+                    if (TARGET_PAGE == -1) {
+                        mcidsByPage.computeIfAbsent(page, k -> new HashSet<>()).add(mcid);
+                    } else {
+                        int pageNum = doc.getPages().indexOf(page) + 1; // 1-based页码
+                        if (pageNum == TARGET_PAGE) {
+                            mcidsByPage.computeIfAbsent(page, k -> new HashSet<>()).add(mcid);
+                        }
+                    }
+                } else {
+                    System.err.println("      [警告] 无法确定MCID " + mcid + " 的页面位置（PDMarkedContentReference）");
+                }
             }
         }
     }
@@ -199,6 +232,11 @@ public class McidCollector {
                 // 直接的MCID整数
                 Integer mcid = (Integer) kid;
                 mcids.add(mcid);
+
+            } else if (kid instanceof PDMarkedContentReference) {
+                // PDFBox 3.0: PDMarkedContentReference
+                PDMarkedContentReference mcr = (PDMarkedContentReference) kid;
+                mcids.add(mcr.getMCID());
             }
         }
     }

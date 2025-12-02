@@ -31,6 +31,8 @@ public class MCIDTextExtractor extends PDFStreamEngine {
     private final List<TextPosition> textPositions = new ArrayList<>();
     private final StringBuilder extractedText = new StringBuilder();
     private String debugPrefix = "";  // 调试前缀（如"[t001-r002-c003-p001]"）
+    private boolean debugMode = false;  // 调试模式开关
+    private final Map<Integer, StringBuilder> mcidTextMap = new HashMap<>();  // 每个MCID对应的文本
 
     /**
      * 构造函数
@@ -147,6 +149,12 @@ public class MCIDTextExtractor extends PDFStreamEngine {
                 );
 
                 textPositions.add(textPosition);
+
+                // 记录每个MCID对应的文本（用于调试）
+                if (!mcidTextMap.containsKey(currentMCID)) {
+                    mcidTextMap.put(currentMCID, new StringBuilder());
+                }
+                mcidTextMap.get(currentMCID).append(unicode);
             }
         }
     }
@@ -396,5 +404,47 @@ public class MCIDTextExtractor extends PDFStreamEngine {
      */
     public List<TextPosition> getTextPositions() {
         return Collections.unmodifiableList(textPositions);
+    }
+
+    /**
+     * 获取每个MCID对应的文本映射（用于调试）
+     *
+     * @return MCID -> 文本 的映射
+     */
+    public Map<Integer, String> getMcidTextMap() {
+        Map<Integer, String> result = new HashMap<>();
+        for (Map.Entry<Integer, StringBuilder> entry : mcidTextMap.entrySet()) {
+            result.put(entry.getKey(), entry.getValue().toString());
+        }
+        return result;
+    }
+
+    /**
+     * 打印MCID调试信息
+     * 显示每个目标MCID是否找到了文本
+     */
+    public void printMcidDebugInfo() {
+        System.out.println("=== MCID文本提取调试 ===");
+        System.out.println("目标MCID: " + targetMCIDs);
+        System.out.println("实际找到的MCID: " + mcidTextMap.keySet());
+
+        // 检查哪些MCID没有找到文本
+        Set<Integer> missingMcids = new HashSet<>(targetMCIDs);
+        missingMcids.removeAll(mcidTextMap.keySet());
+        if (!missingMcids.isEmpty()) {
+            System.out.println("【警告】未找到文本的MCID: " + missingMcids);
+        }
+
+        // 打印每个MCID对应的文本
+        System.out.println("\n每个MCID的文本:");
+        for (Integer mcid : targetMCIDs) {
+            StringBuilder sb = mcidTextMap.get(mcid);
+            String text = (sb != null) ? sb.toString() : "[未找到]";
+            // 截断显示
+            if (text.length() > 50) {
+                text = text.substring(0, 50) + "...";
+            }
+            System.out.println("  MCID " + mcid + ": " + text);
+        }
     }
 }

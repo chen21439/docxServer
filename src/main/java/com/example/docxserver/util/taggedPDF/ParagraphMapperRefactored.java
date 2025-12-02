@@ -74,13 +74,20 @@ public class ParagraphMapperRefactored {
 
     /**
      * 从PDF提取表格和段落到XML格式
+     * 输出文件保存在PDF所在目录
      *
      * @param taskId 任务ID
      * @param pdfPath PDF文件路径
      * @throws IOException 文件读写异常
      */
     public static void extractPdfToXml(String taskId, String pdfPath) throws IOException {
-        PdfTableExtractor.extractToXml(taskId, pdfPath, dir);
+        // 从pdfPath推断输出目录（PDF所在目录）
+        File pdfFile = new File(pdfPath);
+        String outputDir = pdfFile.getParent();
+        if (outputDir == null) {
+            outputDir = ".";
+        }
+        PdfTableExtractor.extractToXml(taskId, pdfPath, outputDir);
     }
 
     /**
@@ -131,7 +138,12 @@ public class ParagraphMapperRefactored {
         System.out.println("DOCX: 提取完成，共 " + normalizedTextToIdMap.size() + " 个唯一文本片段（normalized）");
 
         // ===== 步骤2: 查找最新的PDF段落文件 =====
-        File pdfDir = new File(dir);
+        // 从docxTxtPath推断PDF目录（而不是使用硬编码的dir变量）
+        File docxTxtFile = new File(docxTxtPath);
+        File pdfDir = docxTxtFile.getParentFile();
+        if (pdfDir == null) {
+            pdfDir = new File(".");
+        }
         File[] pdfParagraphFiles = pdfDir.listFiles(new java.io.FileFilter() {
             @Override
             public boolean accept(File pathname) {
@@ -195,13 +207,16 @@ public class ParagraphMapperRefactored {
                 // 成功匹配，不打印
             } else {
                 failedCount++;
-                failedLog.append("  [失败 #").append(failedCount).append("]\n");
-                failedLog.append("    PDF ID: ").append(pdfId).append("\n");
-                failedLog.append("    PDF Type: ").append(pdfType).append("\n");
-                failedLog.append("    PDF MCID: ").append(pdfMcid).append("\n");
-                failedLog.append("    PDF原文: ").append(TextUtils.truncate(pdfText, 80)).append("\n");
-                failedLog.append("    Normalized: ").append(TextUtils.truncate(normalizedPdfText, 80)).append("\n");
-                failedLog.append("\n");
+                // 只记录前3个失败的详情
+                if (failedCount <= 3) {
+                    failedLog.append("  [失败 #").append(failedCount).append("]\n");
+                    failedLog.append("    PDF ID: ").append(pdfId).append("\n");
+                    failedLog.append("    PDF Type: ").append(pdfType).append("\n");
+                    failedLog.append("    PDF MCID: ").append(pdfMcid).append("\n");
+                    failedLog.append("    PDF原文: ").append(TextUtils.truncate(pdfText, 80)).append("\n");
+                    failedLog.append("    Normalized: ").append(TextUtils.truncate(normalizedPdfText, 80)).append("\n");
+                    failedLog.append("\n");
+                }
             }
         }
 
