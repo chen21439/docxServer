@@ -27,7 +27,9 @@ import java.util.*;
 public class MCIDTextExtractor extends PDFStreamEngine {
 
     private final Set<Integer> targetMCIDs;
-    private Integer currentMCID = null;
+    // 使用栈来正确处理 BDC/EMC 嵌套
+    // 例如: BDC(69) -> BDC(70) -> EMC(70) -> 继续收集69的文本 -> EMC(69)
+    private final Deque<Integer> mcidStack = new ArrayDeque<>();
     private final List<TextPosition> textPositions = new ArrayList<>();
     private final StringBuilder extractedText = new StringBuilder();
     private String debugPrefix = "";  // 调试前缀（如"[t001-r002-c003-p001]"）
@@ -60,12 +62,13 @@ public class MCIDTextExtractor extends PDFStreamEngine {
         addOperator(new org.apache.pdfbox.contentstream.operator.state.Save(this));
         addOperator(new org.apache.pdfbox.contentstream.operator.state.SetMatrix(this));
 
-        // 添加标记内容操作符 - 关键！
+        // 添加标记内容操作符 - 关键！使用栈来正确处理嵌套
         addOperator(new org.apache.pdfbox.contentstream.operator.markedcontent.BeginMarkedContentSequence(this) {
             @Override
             public void process(Operator operator, List<COSBase> arguments) throws IOException {
                 super.process(operator, arguments);
-                // BMC 操作符，可能没有MCID
+                // BMC 操作符，没有MCID，压入 -1 表示无效MCID（保持栈平衡）
+                mcidStack.push(-1);
             }
         });
 
@@ -75,6 +78,7 @@ public class MCIDTextExtractor extends PDFStreamEngine {
                 super.process(operator, arguments);
 
                 // BDC 操作符，从属性字典中提取MCID
+                Integer mcid = null;
                 if (arguments.size() >= 2) {
                     COSBase properties = arguments.get(1);
                     if (properties instanceof COSName) {
@@ -89,7 +93,7 @@ public class MCIDTextExtractor extends PDFStreamEngine {
                                     org.apache.pdfbox.cos.COSDictionary mcDict =
                                         (org.apache.pdfbox.cos.COSDictionary) propsDict.getDictionaryObject(propName);
                                     if (mcDict != null && mcDict.containsKey(COSName.MCID)) {
-                                        currentMCID = mcDict.getInt(COSName.MCID);
+                                        mcid = mcDict.getInt(COSName.MCID);
                                     }
                                 }
                             }
@@ -97,10 +101,12 @@ public class MCIDTextExtractor extends PDFStreamEngine {
                     } else if (properties instanceof org.apache.pdfbox.cos.COSDictionary) {
                         org.apache.pdfbox.cos.COSDictionary dict = (org.apache.pdfbox.cos.COSDictionary) properties;
                         if (dict.containsKey(COSName.MCID)) {
-                            currentMCID = dict.getInt(COSName.MCID);
+                            mcid = dict.getInt(COSName.MCID);
                         }
                     }
                 }
+                // 压入MCID（如果没有找到MCID，压入-1保持栈平衡）
+                mcidStack.push(mcid != null ? mcid : -1);
             }
         });
 
@@ -108,7 +114,10 @@ public class MCIDTextExtractor extends PDFStreamEngine {
             @Override
             public void process(Operator operator, List<COSBase> arguments) throws IOException {
                 super.process(operator, arguments);
-                currentMCID = null; // 退出标记内容
+                // EMC 操作符，弹出当前层的MCID，恢复到父层
+                if (!mcidStack.isEmpty()) {
+                    mcidStack.pop();
+                }
             }
         });
     }
@@ -122,10 +131,26 @@ public class MCIDTextExtractor extends PDFStreamEngine {
     }
 
     /**
+     * 获取当前有效的MCID（栈中最近的目标MCID）
+     *
+     * 核心逻辑：从栈顶向下查找第一个属于目标集合的MCID
+     * 这样即使有嵌套的非目标MCID（如 MCID 70），也能继续收集父级目标MCID（如 MCID 69）的文本
+     */
+    private Integer getCurrentTargetMCID() {
+        // 从栈顶向下遍历，找到第一个目标MCID
+        for (Integer mcid : mcidStack) {
+            if (mcid != null && mcid >= 0 && targetMCIDs.contains(mcid)) {
+                return mcid;
+            }
+        }
+        return null;
+    }
+
+    /**
      * 判断是否应该收集文本
      */
     private boolean shouldCollectText() {
-        return currentMCID != null && targetMCIDs.contains(currentMCID);
+        return getCurrentTargetMCID() != null;
     }
 
     /**
@@ -133,7 +158,8 @@ public class MCIDTextExtractor extends PDFStreamEngine {
      */
     @Override
     protected void showGlyph(Matrix textRenderingMatrix, PDFont font, int code, Vector displacement) throws IOException {
-        if (shouldCollectText()) {
+        Integer currentMCID = getCurrentTargetMCID();
+        if (currentMCID != null) {
             // 获取Unicode字符
             String unicode = font.toUnicode(code);
             if (unicode != null) {
@@ -408,9 +434,10 @@ public class MCIDTextExtractor extends PDFStreamEngine {
      * 清空状态
      */
     public void reset() {
-        currentMCID = null;
+        mcidStack.clear();
         textPositions.clear();
         extractedText.setLength(0);
+        mcidTextMap.clear();
     }
 
     /**
