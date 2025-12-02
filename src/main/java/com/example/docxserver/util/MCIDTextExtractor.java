@@ -33,6 +33,7 @@ public class MCIDTextExtractor extends PDFStreamEngine {
     private String debugPrefix = "";  // 调试前缀（如"[t001-r002-c003-p001]"）
     private boolean debugMode = false;  // 调试模式开关
     private final Map<Integer, StringBuilder> mcidTextMap = new HashMap<>();  // 每个MCID对应的文本
+    private PDPage currentPage = null;  // 当前处理的页面（用于查找资源字典）
 
     /**
      * 构造函数
@@ -77,8 +78,22 @@ public class MCIDTextExtractor extends PDFStreamEngine {
                 if (arguments.size() >= 2) {
                     COSBase properties = arguments.get(1);
                     if (properties instanceof COSName) {
-                        // 间接引用，需要查找资源字典
-                        // 简化处理：跳过
+                        // 间接引用，需要从页面资源字典的 /Properties 中查找
+                        COSName propName = (COSName) properties;
+                        if (currentPage != null && currentPage.getResources() != null) {
+                            org.apache.pdfbox.cos.COSDictionary resourcesDict = currentPage.getResources().getCOSObject();
+                            if (resourcesDict != null) {
+                                org.apache.pdfbox.cos.COSDictionary propsDict =
+                                    (org.apache.pdfbox.cos.COSDictionary) resourcesDict.getDictionaryObject(COSName.PROPERTIES);
+                                if (propsDict != null) {
+                                    org.apache.pdfbox.cos.COSDictionary mcDict =
+                                        (org.apache.pdfbox.cos.COSDictionary) propsDict.getDictionaryObject(propName);
+                                    if (mcDict != null && mcDict.containsKey(COSName.MCID)) {
+                                        currentMCID = mcDict.getInt(COSName.MCID);
+                                    }
+                                }
+                            }
+                        }
                     } else if (properties instanceof org.apache.pdfbox.cos.COSDictionary) {
                         org.apache.pdfbox.cos.COSDictionary dict = (org.apache.pdfbox.cos.COSDictionary) properties;
                         if (dict.containsKey(COSName.MCID)) {
@@ -102,6 +117,7 @@ public class MCIDTextExtractor extends PDFStreamEngine {
      * 处理页面内容流
      */
     public void processPage(PDPage page) throws IOException {
+        this.currentPage = page;  // 保存当前页面引用
         super.processPage(page);
     }
 

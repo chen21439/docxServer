@@ -26,78 +26,79 @@ public class TenderPdfExtractor {
     public static String taskId = "25120110583313478093";
 
     public static void main(String[] args) throws Exception {
+        testMcidExtraction();
 
         // 查找目录中的PDF文件
-        File dir = new File(baseDir);
-        if (!dir.exists() || !dir.isDirectory()) {
-            System.err.println("目录不存在: " + baseDir);
-            return;
-        }
-
-        File[] pdfFiles = dir.listFiles(new FilenameFilter() {
-            @Override
-            public boolean accept(File dir, String name) {
-                return name.toLowerCase().endsWith(".pdf");
-            }
-        });
-
-        if (pdfFiles == null || pdfFiles.length == 0) {
-            System.err.println("目录中没有找到PDF文件");
-            return;
-        }
-
-        // 打印找到的PDF文件
-        System.out.println("=== 找到的PDF文件 ===");
-        for (File pdf : pdfFiles) {
-            System.out.println("  - " + pdf.getName() + " (" + (pdf.length() / 1024) + " KB)");
-        }
-        System.out.println();
-
-        // 查找并统计DOCX文件
-        File[] docxFiles = dir.listFiles(new FilenameFilter() {
-            @Override
-            public boolean accept(File dir, String name) {
-                return name.toLowerCase().endsWith(".docx");
-            }
-        });
-
-        if (docxFiles != null && docxFiles.length > 0) {
-            System.out.println("=== 找到的DOCX文件 ===");
-            for (File docx : docxFiles) {
-                System.out.println("  - " + docx.getName() + " (" + (docx.length() / 1024) + " KB)");
-                // 统计DOCX中的表格和段落数量
-                countDocxElements(docx);
-            }
-            System.out.println();
-        }
-
-        // 处理指定的PDF文件（_python.pdf）
-        File pdfFile = new File(baseDir + "深圳理工大学家具采购_python.pdf");
-        if (!pdfFile.exists()) {
-            // 如果指定文件不存在，使用第一个PDF文件
-            pdfFile = pdfFiles[0];
-        }
-        String pdfPath = pdfFile.getAbsolutePath();
-
-        System.out.println("=== 开始处理PDF: " + pdfFile.getName() + " ===");
-        System.out.println();
-
-        // 调用 ParagraphMapperRefactored.extractPdfToXml 提取表格和段落
-        // 输出目录自动使用PDF所在目录
-        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT（全量处理）===");
-        ParagraphMapperRefactored.extractPdfToXml(taskId, pdfPath);
-
-        System.out.println();
-        System.out.println("=== 提取完成 ===");
-        System.out.println("输出目录: " + baseDir);
-
-        // 步骤2：比较DOCX和PDF的表格外段落
-        System.out.println();
-        compareDocxAndPdfParagraphs();
-
-        // 步骤3：比较DOCX和PDF的表格段落
-        System.out.println();
-        compareDocxAndPdfTableParagraphs();
+//        File dir = new File(baseDir);
+//        if (!dir.exists() || !dir.isDirectory()) {
+//            System.err.println("目录不存在: " + baseDir);
+//            return;
+//        }
+//
+//        File[] pdfFiles = dir.listFiles(new FilenameFilter() {
+//            @Override
+//            public boolean accept(File dir, String name) {
+//                return name.toLowerCase().endsWith(".pdf");
+//            }
+//        });
+//
+//        if (pdfFiles == null || pdfFiles.length == 0) {
+//            System.err.println("目录中没有找到PDF文件");
+//            return;
+//        }
+//
+//        // 打印找到的PDF文件
+//        System.out.println("=== 找到的PDF文件 ===");
+//        for (File pdf : pdfFiles) {
+//            System.out.println("  - " + pdf.getName() + " (" + (pdf.length() / 1024) + " KB)");
+//        }
+//        System.out.println();
+//
+//        // 查找并统计DOCX文件
+//        File[] docxFiles = dir.listFiles(new FilenameFilter() {
+//            @Override
+//            public boolean accept(File dir, String name) {
+//                return name.toLowerCase().endsWith(".docx");
+//            }
+//        });
+//
+//        if (docxFiles != null && docxFiles.length > 0) {
+//            System.out.println("=== 找到的DOCX文件 ===");
+//            for (File docx : docxFiles) {
+//                System.out.println("  - " + docx.getName() + " (" + (docx.length() / 1024) + " KB)");
+//                // 统计DOCX中的表格和段落数量
+//                countDocxElements(docx);
+//            }
+//            System.out.println();
+//        }
+//
+//        // 处理指定的PDF文件（_python.pdf）
+//        File pdfFile = new File(baseDir + "深圳理工大学家具采购_python.pdf");
+//        if (!pdfFile.exists()) {
+//            // 如果指定文件不存在，使用第一个PDF文件
+//            pdfFile = pdfFiles[0];
+//        }
+//        String pdfPath = pdfFile.getAbsolutePath();
+//
+//        System.out.println("=== 开始处理PDF: " + pdfFile.getName() + " ===");
+//        System.out.println();
+//
+//        // 调用 ParagraphMapperRefactored.extractPdfToXml 提取表格和段落
+//        // 输出目录自动使用PDF所在目录
+//        System.out.println("=== 从PDF独立提取表格结构到XML格式TXT（全量处理）===");
+//        ParagraphMapperRefactored.extractPdfToXml(taskId, pdfPath);
+//
+//        System.out.println();
+//        System.out.println("=== 提取完成 ===");
+//        System.out.println("输出目录: " + baseDir);
+//
+//        // 步骤2：比较DOCX和PDF的表格外段落
+//        System.out.println();
+//        compareDocxAndPdfParagraphs();
+//
+//        // 步骤3：比较DOCX和PDF的表格段落
+//        System.out.println();
+//        compareDocxAndPdfTableParagraphs();
     }
 
     /**
