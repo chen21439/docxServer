@@ -122,23 +122,30 @@ public class PdfTableExtractor {
 
             log("开始从PDF结构树提取表格和段落...");
 
-            // 第一遍遍历：收集所有表格的MCID（按页分桶）
-            log("第一遍：收集所有表格的MCID...");
+            // 第一遍遍历：收集所有MCID（按页分桶）
+            // 同时收集表格MCID（用于第二遍排除）和所有MCID（用于构建全局缓存）
+            log("第一遍：收集所有MCID...");
             Map<PDPage, Set<Integer>> tableMCIDsByPage = new HashMap<>();
-            List<Object> kids = structTreeRoot.getKids();
+            Map<PDPage, Set<Integer>> allMCIDsByPage = new HashMap<>();
             for (Object kid : structTreeRoot.getKids()) {
                 if (kid instanceof PDStructureElement) {
                     PDStructureElement element = (PDStructureElement) kid;
                     McidCollector.collectTableMCIDs(element, tableMCIDsByPage, doc);
+                    McidCollector.collectAllMCIDsByPage(element, allMCIDsByPage, doc);
                 }
             }
 
-            // 统计表格MCID总数
+            // 统计MCID总数
             int totalTableMCIDs = 0;
             for (Set<Integer> mcids : tableMCIDsByPage.values()) {
                 totalTableMCIDs += mcids.size();
             }
+            int totalAllMCIDs = 0;
+            for (Set<Integer> mcids : allMCIDsByPage.values()) {
+                totalAllMCIDs += mcids.size();
+            }
             log("收集到表格MCID总数: " + totalTableMCIDs + " (跨 " + tableMCIDsByPage.size() + " 个页面)");
+            log("收集到所有MCID总数: " + totalAllMCIDs + " (跨 " + allMCIDsByPage.size() + " 个页面)");
 
             // 打印root的直接子元素类型（调试用）
             log("StructTreeRoot的直接子元素类型：");
@@ -157,7 +164,7 @@ public class PdfTableExtractor {
             // 原来：每个单元格/段落都会调用 processPage()，导致 N×M 次页面解析
             // 现在：预先解析所有页面，构建 (pageIndex:mcid) -> text 映射
             GlobalMcidCache mcidCache = new GlobalMcidCache(doc);
-            mcidCache.build();
+            mcidCache.build(allMCIDsByPage);
 
             // 预创建 PdfListParser 用于列表解析（避免每次遇到 L 元素都重新构建）
             // 使用数组包装以便延迟初始化
@@ -360,6 +367,38 @@ public class PdfTableExtractor {
             PDStructureTreeRoot structTreeRoot,
             boolean includeMcid,
             PdfListParser[] listParserHolder) throws IOException {
+        // 调用带缓存的版本，传入 null 使用旧的提取方式
+        extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid, listParserHolder, null);
+    }
+
+    /**
+     * 从结构元素中递归提取表格（支持页面过滤、MCID控制和全局缓存）
+     *
+     * @param element 当前结构元素
+     * @param tableOutput 表格输出缓冲区
+     * @param paragraphOutput 段落输出缓冲区
+     * @param tableCounter 表格计数器
+     * @param doc PDF文档对象
+     * @param tableMCIDsByPage 表格MCID按页分桶的映射
+     * @param targetPage 目标页面（null表示所有页面）
+     * @param structTreeRoot 结构树根节点（用于判断是否是root的直接子元素）
+     * @param includeMcid 是否在输出中包含MCID和page属性
+     * @param listParserHolder 列表解析器持有者（延迟初始化，避免重复构建）
+     * @param mcidCache 全局MCID缓存（用于高性能文本提取，可为null使用旧方法）
+     * @throws IOException 文件读取或文本提取异常
+     */
+    private static void extractTablesFromElement(
+            PDStructureElement element,
+            StringBuilder tableOutput,
+            StringBuilder paragraphOutput,
+            Counter tableCounter,
+            PDDocument doc,
+            Map<PDPage, Set<Integer>> tableMCIDsByPage,
+            PDPage targetPage,
+            PDStructureTreeRoot structTreeRoot,
+            boolean includeMcid,
+            PdfListParser[] listParserHolder,
+            GlobalMcidCache mcidCache) throws IOException {
 
         // 页面过滤：如果指定了目标页面，检查当前元素是否属于该页
         if (targetPage != null) {
@@ -616,7 +655,7 @@ public class PdfTableExtractor {
         for (Object kid : element.getKids()) {
             if (kid instanceof PDStructureElement) {
                 PDStructureElement childElement = (PDStructureElement) kid;
-                extractTablesFromElement(childElement, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid, listParserHolder);
+                extractTablesFromElement(childElement, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid, listParserHolder, mcidCache);
             }
         }
     }
