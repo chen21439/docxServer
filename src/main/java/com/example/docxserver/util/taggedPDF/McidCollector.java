@@ -59,40 +59,6 @@ public class McidCollector {
     }
 
     /**
-     * 递归收集所有MCID（按页分桶）- 用于构建全局MCID缓存
-     *
-     * 遍历结构树，收集所有元素的MCID。
-     * 与 collectTableMCIDs 不同，这个方法收集所有元素（表格+段落+列表等）。
-     *
-     * @param element 当前结构元素
-     * @param allMCIDsByPage 所有MCID按页分桶的全局映射（会被修改）
-     * @param doc PDF文档（用于ParentTree兜底查找）
-     * @throws IOException IO异常
-     */
-    public static void collectAllMCIDsByPage(
-            PDStructureElement element,
-            Map<PDPage, Set<Integer>> allMCIDsByPage,
-            PDDocument doc) throws IOException {
-
-        // 收集当前元素的所有MCID
-        Map<PDPage, Set<Integer>> elementMcids = collectMcidsByPage(element, doc, false);
-
-        // 合并到全局映射
-        for (Map.Entry<PDPage, Set<Integer>> entry : elementMcids.entrySet()) {
-            allMCIDsByPage.computeIfAbsent(entry.getKey(), k -> new HashSet<>())
-                          .addAll(entry.getValue());
-        }
-
-        // 递归处理子元素
-        for (Object kid : element.getKids()) {
-            if (kid instanceof PDStructureElement) {
-                PDStructureElement childElement = (PDStructureElement) kid;
-                collectAllMCIDsByPage(childElement, allMCIDsByPage, doc);
-            }
-        }
-    }
-
-    /**
      * 收集该结构元素后代的所有MCID，按页分桶
      *
      * 关键：**只递归该元素的后代**，不包含兄弟节点或父节点
