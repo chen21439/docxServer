@@ -2,6 +2,7 @@ package com.example.docxserver.util.taggedPDF;
 
 import com.example.docxserver.util.taggedPDF.dto.Counter;
 import com.example.docxserver.util.taggedPDF.dto.McidPageInfo;
+import com.example.docxserver.util.taggedPDF.dto.MergedElement;
 import com.example.docxserver.util.taggedPDF.dto.TextWithPositions;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -80,9 +81,13 @@ public class PdfTableExtractor {
         String timestamp = sdf.format(new Date());
         String tableOutputPath = outputDir + File.separator + taskId + "_pdf_" + timestamp + ".txt";
         String paragraphOutputPath = outputDir + File.separator + taskId + "_pdf_paragraph_" + timestamp + ".txt";
+        String mergedOutputPath = outputDir + File.separator + taskId + "_merged_" + timestamp + ".txt";
 
         StringBuilder tableOutput = new StringBuilder();
         StringBuilder paragraphOutput = new StringBuilder();
+
+        // 用于聚合的元素列表
+        List<MergedElement> mergedElements = new ArrayList<>();
 
         // 打开PDF文档
         try (PDDocument doc = Loader.loadPDF(pdfFile)) {
@@ -145,12 +150,121 @@ public class PdfTableExtractor {
             System.out.println("共提取 " + tableCounter.tableIndex + " 个表格, " + tableCounter.paragraphIndex + " 个段落");
         }
 
-        // 写入文件
+        // 写入表格文件
         Files.write(Paths.get(tableOutputPath), tableOutput.toString().getBytes(StandardCharsets.UTF_8));
         System.out.println("PDF表格结构已写入到: " + tableOutputPath);
 
+        // 写入段落文件
         Files.write(Paths.get(paragraphOutputPath), paragraphOutput.toString().getBytes(StandardCharsets.UTF_8));
         System.out.println("PDF段落结构已写入到: " + paragraphOutputPath);
+
+        // 生成聚合文件（不包含mcid，按page和bbox排序）
+        String mergedContent = generateMergedContent(tableOutput.toString(), paragraphOutput.toString());
+        Files.write(Paths.get(mergedOutputPath), mergedContent.getBytes(StandardCharsets.UTF_8));
+        System.out.println("PDF聚合结构已写入到: " + mergedOutputPath);
+    }
+
+    /**
+     * 生成聚合文件内容（合并表格和段落，按page和bbox排序，不包含mcid）
+     *
+     * @param tableContent 表格XML内容
+     * @param paragraphContent 段落XML内容
+     * @return 聚合后的XML内容
+     */
+    private static String generateMergedContent(String tableContent, String paragraphContent) {
+        List<MergedElement> elements = new ArrayList<>();
+
+        // 解析表格内容（每个<table>...</table>作为一个元素）
+        parseTableElements(tableContent, elements);
+
+        // 解析段落内容（每个<p>...</p>作为一个元素）
+        parseParagraphElements(paragraphContent, elements);
+
+        // 按page和bbox排序
+        Collections.sort(elements);
+
+        // 生成输出
+        StringBuilder result = new StringBuilder();
+        for (MergedElement element : elements) {
+            result.append(element.getContent());
+        }
+
+        return result.toString();
+    }
+
+    /**
+     * 解析表格XML内容，提取每个表格作为MergedElement
+     */
+    private static void parseTableElements(String content, List<MergedElement> elements) {
+        // 匹配 <table ... page="..." bbox="...">...</table>
+        int startIdx = 0;
+        while (true) {
+            int tableStart = content.indexOf("<table ", startIdx);
+            if (tableStart == -1) break;
+
+            int tableEnd = content.indexOf("</table>", tableStart);
+            if (tableEnd == -1) break;
+
+            tableEnd += "</table>".length();
+            String tableXml = content.substring(tableStart, tableEnd);
+
+            // 提取page和bbox属性
+            String pageStr = extractAttribute(tableXml, "page");
+            String bboxStr = extractAttribute(tableXml, "bbox");
+
+            // 移除mcid属性（聚合文件不需要）
+            String cleanedXml = removeMcidAttributes(tableXml);
+
+            elements.add(new MergedElement(MergedElement.ElementType.TABLE, cleanedXml + "\n", pageStr, bboxStr));
+
+            startIdx = tableEnd;
+        }
+    }
+
+    /**
+     * 解析段落XML内容，提取每个段落作为MergedElement
+     */
+    private static void parseParagraphElements(String content, List<MergedElement> elements) {
+        // 按行处理（每行一个<p>标签）
+        String[] lines = content.split("\n");
+        for (String line : lines) {
+            line = line.trim();
+            if (line.startsWith("<p ") && line.endsWith("</p>")) {
+                // 提取page和bbox属性
+                String pageStr = extractAttribute(line, "page");
+                String bboxStr = extractAttribute(line, "bbox");
+
+                // 移除mcid属性（聚合文件不需要）
+                String cleanedXml = removeMcidAttributes(line);
+
+                elements.add(new MergedElement(MergedElement.ElementType.PARAGRAPH, cleanedXml + "\n", pageStr, bboxStr));
+            }
+        }
+    }
+
+    /**
+     * 从XML标签中提取属性值
+     */
+    private static String extractAttribute(String xml, String attrName) {
+        String pattern = attrName + "=\"";
+        int start = xml.indexOf(pattern);
+        if (start == -1) return null;
+
+        start += pattern.length();
+        int end = xml.indexOf("\"", start);
+        if (end == -1) return null;
+
+        return xml.substring(start, end);
+    }
+
+    /**
+     * 移除XML中的mcid和page属性（聚合文件不需要mcid）
+     */
+    private static String removeMcidAttributes(String xml) {
+        // 移除 mcid="..." 属性
+        xml = xml.replaceAll(" mcid=\"[^\"]*\"", "");
+        // 注意：保留page属性，因为聚合文件需要按page排序后的结果
+        return xml;
     }
 
     /**
@@ -234,7 +348,14 @@ public class PdfTableExtractor {
         if ("Table".equalsIgnoreCase(structType)) {
             int tableIndex = tableCounter.tableIndex++;
             String tableId = IdUtils.formatTableId(tableIndex);
-            tableOutput.append("<table id=\"").append(tableId).append("\" type=\"Table\">\n");
+
+            // 收集整个表格的所有TextPosition（用于计算表格整体bbox，按页分组）
+            Map<PDPage, List<TextPosition>> tablePositionsByPage = new HashMap<>();
+            // 收集表格的页码信息
+            Set<Integer> tablePages = new TreeSet<>();
+
+            // 先构建表格内容到临时缓冲区，同时收集位置信息
+            StringBuilder tableContent = new StringBuilder();
 
             // 提取表格内的行
             int rowIndex = 0;
@@ -246,7 +367,7 @@ public class PdfTableExtractor {
                     if ("TR".equalsIgnoreCase(childType)) {
                         // 提取TR中的单元格
                         String rowId = tableId + "-r" + String.format("%03d", rowIndex + 1);
-                        tableOutput.append("  <tr id=\"").append(rowId).append("\">\n");
+                        tableContent.append("  <tr id=\"").append(rowId).append("\">\n");
 
                         int colIndex = 0;
                         for (Object cellKid : childElement.getKids()) {
@@ -262,43 +383,99 @@ public class PdfTableExtractor {
                                     String cellText = textWithPositions.getText();
                                     cellText = TextUtils.removeZeroWidthChars(cellText);
 
-                                    // 构建单元格XML
-                                    String tagName = cellType.toLowerCase();
-                                    tableOutput.append("    <").append(tagName).append(">");
-                                    tableOutput.append("<p id=\"").append(cellId).append("\"");
+                                    // 收集页码信息（先收集，用于后续fallback）
+                                    Map<PDPage, Set<Integer>> cellMcidsByPage = McidCollector.collectMcidsByPage(cellElement, doc, false);
 
-                                    // 可选：添加MCID属性
-                                    if (includeMcid) {
-                                        Map<PDPage, Set<Integer>> cellMcidsByPage = McidCollector.collectMcidsByPage(cellElement, doc, false);
-                                        McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(cellMcidsByPage, doc);
-                                        if (mcidPageInfo.mcidStr != null && !mcidPageInfo.mcidStr.isEmpty()) {
-                                            tableOutput.append(" mcid=\"").append(TextUtils.escapeHtml(mcidPageInfo.mcidStr)).append("\"");
-                                            tableOutput.append(" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
+                                    // 收集位置信息用于计算表格整体bbox（按页分组）
+                                    Map<PDPage, List<TextPosition>> cellPositionsByPage = textWithPositions.getPositionsByPage();
+                                    if (cellPositionsByPage != null && !cellPositionsByPage.isEmpty()) {
+                                        for (Map.Entry<PDPage, List<TextPosition>> entry : cellPositionsByPage.entrySet()) {
+                                            PDPage page = entry.getKey();
+                                            List<TextPosition> pagePositions = entry.getValue();
+                                            if (!tablePositionsByPage.containsKey(page)) {
+                                                tablePositionsByPage.put(page, new ArrayList<>());
+                                            }
+                                            tablePositionsByPage.get(page).addAll(pagePositions);
+                                        }
+                                    } else if (textWithPositions.getPositions() != null && !textWithPositions.getPositions().isEmpty()) {
+                                        // fallback: 使用旧方法（兼容性处理）
+                                        // 尝试从单元格的MCID获取页面信息
+                                        for (PDPage page : cellMcidsByPage.keySet()) {
+                                            if (!tablePositionsByPage.containsKey(page)) {
+                                                tablePositionsByPage.put(page, new ArrayList<>());
+                                            }
+                                            tablePositionsByPage.get(page).addAll(textWithPositions.getPositions());
+                                            break; // 只添加一次
+                                        }
+                                    }
+                                    for (PDPage page : cellMcidsByPage.keySet()) {
+                                        int pageNum = doc.getPages().indexOf(page) + 1;
+                                        if (pageNum > 0) {
+                                            tablePages.add(pageNum);
                                         }
                                     }
 
-                                    // 计算bbox
-                                    String bbox = computeBoundingBox(textWithPositions.getPositions());
-                                    if (bbox != null) {
-                                        tableOutput.append(" bbox=\"").append(bbox).append("\"");
+                                    // 构建单元格XML
+                                    String tagName = cellType.toLowerCase();
+                                    tableContent.append("    <").append(tagName).append(">");
+                                    tableContent.append("<p id=\"").append(cellId).append("\"");
+
+                                    // 可选：添加MCID属性
+                                    if (includeMcid) {
+                                        McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(cellMcidsByPage, doc);
+                                        if (mcidPageInfo.mcidStr != null && !mcidPageInfo.mcidStr.isEmpty()) {
+                                            tableContent.append(" mcid=\"").append(TextUtils.escapeHtml(mcidPageInfo.mcidStr)).append("\"");
+                                            tableContent.append(" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
+                                        }
                                     }
 
-                                    tableOutput.append(">")
+                                    // 计算单元格bbox（按页分组）
+                                    String cellBbox = computeBoundingBoxByPage(textWithPositions.getPositionsByPage(), doc);
+                                    if (cellBbox == null) {
+                                        // fallback: 使用旧方法（单页情况）
+                                        cellBbox = computeBoundingBox(textWithPositions.getPositions());
+                                    }
+                                    if (cellBbox != null) {
+                                        tableContent.append(" bbox=\"").append(cellBbox).append("\"");
+                                    }
+
+                                    tableContent.append(">")
                                               .append(TextUtils.escapeHtml(cellText))
                                               .append("</p>");
-                                    tableOutput.append("</").append(tagName).append(">\n");
+                                    tableContent.append("</").append(tagName).append(">\n");
 
                                     colIndex++;
                                 }
                             }
                         }
 
-                        tableOutput.append("  </tr>\n");
+                        tableContent.append("  </tr>\n");
                         rowIndex++;
                     }
                 }
             }
 
+            // 构建表格开始标签（带page和bbox属性）
+            tableOutput.append("<table id=\"").append(tableId).append("\" type=\"Table\"");
+
+            // 添加page属性（使用 | 分隔符，与bbox格式保持一致）
+            if (!tablePages.isEmpty()) {
+                StringBuilder pageStr = new StringBuilder();
+                for (Integer p : tablePages) {
+                    if (pageStr.length() > 0) pageStr.append("|");
+                    pageStr.append(p);
+                }
+                tableOutput.append(" page=\"").append(pageStr).append("\"");
+            }
+
+            // 添加bbox属性（按页分组，支持跨页表格）
+            String tableBbox = computeBoundingBoxByPage(tablePositionsByPage, doc);
+            if (tableBbox != null) {
+                tableOutput.append(" bbox=\"").append(tableBbox).append("\"");
+            }
+
+            tableOutput.append(">\n");
+            tableOutput.append(tableContent);
             tableOutput.append("</table>\n");
         }
 
@@ -311,6 +488,7 @@ public class PdfTableExtractor {
 
         // 跳过Table元素本身（Table会在上面的逻辑中处理）
         if (!PdfStructureUtils.isTableRelatedElement(structType)) {
+
             // 收集当前元素的所有MCID（按页分桶，不排除表格）
             Map<PDPage, Set<Integer>> elementMcidsByPage =
                 McidCollector.collectMcidsByPage(element, doc, false);
@@ -339,6 +517,16 @@ public class PdfTableExtractor {
 
             // 如果当前元素的MCID不在表格MCID中，认定为表格外段落
             if (!hasTableMcid) {
+
+                // ============ 特殊处理：表格外的 List (<L>) 元素 ============
+                // 使用 PdfListParser 按照正确的逻辑解析列表
+                // 每个 LI = Lbl + LBody 作为一个完整的段落
+                if ("L".equalsIgnoreCase(structType)) {
+                    extractListWithParser(element, paragraphOutput, tableCounter, doc, includeMcid);
+                    // 不再递归处理 L 的子元素（已在 extractListWithParser 中处理）
+                    return;
+                }
+
                 // 提取元素文本和TextPosition（用于计算bbox）
                 TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(element, doc);
                 String paraText = textWithPositions.getText();
@@ -350,8 +538,12 @@ public class PdfTableExtractor {
                     int paraIndex = tableCounter.paragraphIndex++;
                     String paraId = IdUtils.formatParagraphId(paraIndex);
 
-                    // 计算边界框
-                    String bbox = computeBoundingBox(textWithPositions.getPositions());
+                    // 计算边界框（按页分组，支持跨页）
+                    String bbox = computeBoundingBoxByPage(textWithPositions.getPositionsByPage(), doc);
+                    if (bbox == null) {
+                        // fallback: 使用旧方法（单页情况或无positionsByPage）
+                        bbox = computeBoundingBox(textWithPositions.getPositions());
+                    }
 
                     // 输出XML（带type属性和bbox）
                     paragraphOutput.append("<p id=\"").append(paraId)
@@ -388,15 +580,318 @@ public class PdfTableExtractor {
     }
 
     /**
-     * 从TextPosition列表计算边界框（PDF用户空间坐标）
+     * 提取 List (<L>) 中的所有列表项 (<LI>)
      *
-     * <h3>实现原理</h3>
+     * <h3>处理逻辑</h3>
      * <ol>
-     *   <li>使用 DirAdj 系列方法（已包含所有变换：CTM + Text Matrix + Font Matrix）</li>
-     *   <li>YDirAdj 取绝对值得到从底部算起的基线位置</li>
-     *   <li>顶部 = 基线 + 高度（更大的Y）</li>
-     *   <li>底部 = 基线（更小的Y）</li>
+     *   <li>遍历 L 的直接子元素，找到所有 LI</li>
+     *   <li>每个 LI 作为一个独立段落输出（type="LI"）</li>
+     *   <li>LI 内部的 Lbl（标签）和 LBody（主体）文本会拼接在一起</li>
+     *   <li>支持嵌套列表：如果 LBody 内部有 L，会递归处理</li>
      * </ol>
+     *
+     * @param listElement L 元素
+     * @param paragraphOutput 段落输出缓冲区
+     * @param tableCounter 计数器
+     * @param doc PDF文档
+     * @param tableMCIDsByPage 表格MCID（用于排除表格内容）
+     * @param includeMcid 是否包含MCID属性
+     * @throws IOException IO异常
+     */
+    private static void extractListItems(
+            PDStructureElement listElement,
+            StringBuilder paragraphOutput,
+            Counter tableCounter,
+            PDDocument doc,
+            Map<PDPage, Set<Integer>> tableMCIDsByPage,
+            boolean includeMcid) throws IOException {
+
+        // 遍历 L 的子元素
+        for (Object kid : listElement.getKids()) {
+            if (kid instanceof PDStructureElement) {
+                PDStructureElement childElement = (PDStructureElement) kid;
+                String childType = childElement.getStructureType();
+
+                if ("LI".equalsIgnoreCase(childType)) {
+                    // 提取单个列表项
+                    extractSingleListItem(childElement, paragraphOutput, tableCounter, doc, tableMCIDsByPage, includeMcid);
+                } else if ("L".equalsIgnoreCase(childType)) {
+                    // 嵌套列表：递归处理
+                    extractListItems(childElement, paragraphOutput, tableCounter, doc, tableMCIDsByPage, includeMcid);
+                }
+                // 其他子元素忽略（如 Caption 等）
+            }
+        }
+    }
+
+    /**
+     * 提取单个列表项 (<LI>) 的完整文本
+     *
+     * <h3>处理逻辑</h3>
+     * <ol>
+     *   <li>收集 Lbl（标签，如 "1."、"•"）的文本</li>
+     *   <li>收集 LBody（主体内容）的文本</li>
+     *   <li>如果没有 Lbl/LBody，直接收集 LI 下所有子元素的文本</li>
+     *   <li>拼接为完整的列表项文本：labelText + bodyText</li>
+     *   <li>如果 LBody 内有嵌套的 L，递归处理嵌套列表</li>
+     * </ol>
+     *
+     * @param liElement LI 元素
+     * @param paragraphOutput 段落输出缓冲区
+     * @param tableCounter 计数器
+     * @param doc PDF文档
+     * @param tableMCIDsByPage 表格MCID
+     * @param includeMcid 是否包含MCID属性
+     * @throws IOException IO异常
+     */
+    private static void extractSingleListItem(
+            PDStructureElement liElement,
+            StringBuilder paragraphOutput,
+            Counter tableCounter,
+            PDDocument doc,
+            Map<PDPage, Set<Integer>> tableMCIDsByPage,
+            boolean includeMcid) throws IOException {
+
+        StringBuilder labelText = new StringBuilder();
+        StringBuilder bodyText = new StringBuilder();
+        List<TextPosition> allPositions = new ArrayList<>();
+        List<PDStructureElement> nestedLists = new ArrayList<>();  // 收集嵌套的 L 元素
+
+        // 遍历 LI 的子元素
+        for (Object kid : liElement.getKids()) {
+            if (kid instanceof PDStructureElement) {
+                PDStructureElement childElement = (PDStructureElement) kid;
+                String childType = childElement.getStructureType();
+
+                if ("Lbl".equalsIgnoreCase(childType)) {
+                    // 标签部分（如 "1."、"•"、"a)"）
+                    TextWithPositions lblText = PdfTextExtractor.extractTextWithPositions(childElement, doc);
+                    labelText.append(lblText.getText());
+                    if (lblText.getPositions() != null) {
+                        allPositions.addAll(lblText.getPositions());
+                    }
+                } else if ("LBody".equalsIgnoreCase(childType)) {
+                    // 主体部分 - 检查是否有嵌套列表，同时提取非列表部分的文本
+                    // 遍历 LBody 的子元素，分开处理嵌套列表和其他内容
+                    boolean hasNestedList = false;
+                    for (Object lbodyKid : childElement.getKids()) {
+                        if (lbodyKid instanceof PDStructureElement) {
+                            PDStructureElement lbodyChild = (PDStructureElement) lbodyKid;
+                            if ("L".equalsIgnoreCase(lbodyChild.getStructureType())) {
+                                hasNestedList = true;
+                                nestedLists.add(lbodyChild);
+                            }
+                        }
+                    }
+
+                    // 无论是否有嵌套列表，都直接提取 LBody 的完整文本（包括非列表部分）
+                    // 嵌套列表的文本会在后面单独处理
+                    if (!hasNestedList) {
+                        // 没有嵌套列表，直接提取整个 LBody 的文本
+                        TextWithPositions lbodyText = PdfTextExtractor.extractTextWithPositions(childElement, doc);
+                        bodyText.append(lbodyText.getText());
+                        if (lbodyText.getPositions() != null) {
+                            allPositions.addAll(lbodyText.getPositions());
+                        }
+                    } else {
+                        // 有嵌套列表，只提取非列表子元素的文本
+                        extractLBodyContent(childElement, bodyText, allPositions, nestedLists, doc);
+                    }
+                } else if ("L".equalsIgnoreCase(childType)) {
+                    // LI 直接包含嵌套列表（不通过 LBody）
+                    nestedLists.add(childElement);
+                } else {
+                    // 其他元素（如直接在 LI 下的 P、Span 等）
+                    TextWithPositions otherText = PdfTextExtractor.extractTextWithPositions(childElement, doc);
+                    bodyText.append(otherText.getText());
+                    if (otherText.getPositions() != null) {
+                        allPositions.addAll(otherText.getPositions());
+                    }
+                }
+            }
+        }
+
+        // 拼接完整的列表项文本
+        String fullText = labelText.toString() + bodyText.toString();
+        fullText = TextUtils.removeZeroWidthChars(fullText);
+
+        // 只有文本非空时才输出
+        if (!fullText.trim().isEmpty()) {
+            int paraIndex = tableCounter.paragraphIndex++;
+            String paraId = IdUtils.formatParagraphId(paraIndex);
+
+            // 收集 LI 的所有 MCID
+            Map<PDPage, Set<Integer>> liMcidsByPage = McidCollector.collectMcidsByPage(liElement, doc, false);
+
+            // 计算边界框
+            String bbox = computeBoundingBox(allPositions);
+
+            // 输出 XML
+            paragraphOutput.append("<p id=\"").append(paraId)
+                  .append("\" type=\"LI\"");
+
+            // 根据参数决定是否输出 MCID 和 page
+            if (includeMcid) {
+                McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(liMcidsByPage, doc);
+                paragraphOutput.append(" mcid=\"").append(TextUtils.escapeHtml(mcidPageInfo.mcidStr))
+                      .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
+            }
+
+            // 添加 bbox 属性
+            if (bbox != null) {
+                paragraphOutput.append(" bbox=\"").append(bbox).append("\"");
+            }
+
+            paragraphOutput.append(">")
+                  .append(TextUtils.escapeHtml(fullText))
+                  .append("</p>\n");
+        }
+
+        // 递归处理嵌套列表
+        for (PDStructureElement nestedList : nestedLists) {
+            extractListItems(nestedList, paragraphOutput, tableCounter, doc, tableMCIDsByPage, includeMcid);
+        }
+    }
+
+    /**
+     * 提取 LBody 的内容
+     *
+     * <h3>处理逻辑</h3>
+     * <ul>
+     *   <li>如果 LBody 下有嵌套的 L，将其收集到 nestedLists 中，稍后递归处理</li>
+     *   <li>其他内容（P、Span、Table等）正常提取文本</li>
+     * </ul>
+     *
+     * @param lBodyElement LBody 元素
+     * @param bodyText 文本输出缓冲区
+     * @param allPositions 位置列表
+     * @param nestedLists 嵌套列表收集器
+     * @param doc PDF文档
+     * @throws IOException IO异常
+     */
+    private static void extractLBodyContent(
+            PDStructureElement lBodyElement,
+            StringBuilder bodyText,
+            List<TextPosition> allPositions,
+            List<PDStructureElement> nestedLists,
+            PDDocument doc) throws IOException {
+
+        for (Object kid : lBodyElement.getKids()) {
+            if (kid instanceof PDStructureElement) {
+                PDStructureElement childElement = (PDStructureElement) kid;
+                String childType = childElement.getStructureType();
+
+                if ("L".equalsIgnoreCase(childType)) {
+                    // 嵌套列表：收集起来稍后处理
+                    nestedLists.add(childElement);
+                } else {
+                    // 其他内容：提取文本
+                    TextWithPositions childText = PdfTextExtractor.extractTextWithPositions(childElement, doc);
+                    bodyText.append(childText.getText());
+                    if (childText.getPositions() != null) {
+                        allPositions.addAll(childText.getPositions());
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 使用 PdfListParser 解析列表
+     *
+     * 核心逻辑：
+     * 1. 创建 PdfListParser 并构建 MCID 文本映射
+     * 2. 调用 parseList 解析 L 元素
+     * 3. 将解析结果扁平化输出为段落
+     *
+     * @param listElement L 元素
+     * @param paragraphOutput 段落输出缓冲区
+     * @param tableCounter 计数器
+     * @param doc PDF 文档
+     * @param includeMcid 是否包含 MCID 属性
+     * @throws IOException IO异常
+     */
+    private static void extractListWithParser(
+            PDStructureElement listElement,
+            StringBuilder paragraphOutput,
+            Counter tableCounter,
+            PDDocument doc,
+            boolean includeMcid) throws IOException {
+
+        // 创建 ListParser 并构建 MCID 文本映射
+        PdfListParser parser = new PdfListParser(doc);
+        parser.buildMcidTextMap();
+
+        // 解析列表
+        List<PdfListParser.ListItem> items = parser.parseList(listElement, 1);
+
+        // 递归输出所有列表项
+        outputListItems(items, paragraphOutput, tableCounter, doc, listElement, includeMcid);
+    }
+
+    /**
+     * 递归输出列表项
+     *
+     * @param items 列表项列表
+     * @param paragraphOutput 段落输出缓冲区
+     * @param tableCounter 计数器
+     * @param doc PDF 文档
+     * @param listElement L 元素（用于获取 MCID）
+     * @param includeMcid 是否包含 MCID 属性
+     */
+    private static void outputListItems(
+            List<PdfListParser.ListItem> items,
+            StringBuilder paragraphOutput,
+            Counter tableCounter,
+            PDDocument doc,
+            PDStructureElement listElement,
+            boolean includeMcid) throws IOException {
+
+        for (PdfListParser.ListItem item : items) {
+            // 拼接 label + text
+            StringBuilder sb = new StringBuilder();
+            if (item.label != null && !item.label.isEmpty()) {
+                sb.append(item.label);
+            }
+            if (item.text != null && !item.text.isEmpty()) {
+                sb.append(item.text);
+            }
+
+            String fullText = sb.toString().trim();
+            fullText = TextUtils.removeZeroWidthChars(fullText);
+
+            // 只有文本非空时才输出
+            if (!fullText.isEmpty()) {
+                int paraIndex = tableCounter.paragraphIndex++;
+                String paraId = IdUtils.formatParagraphId(paraIndex);
+
+                // 输出 XML
+                paragraphOutput.append("<p id=\"").append(paraId)
+                      .append("\" type=\"LI\"");
+
+                // 根据参数决定是否输出 MCID 和 page（简化处理，使用整个 L 元素的 MCID）
+                if (includeMcid) {
+                    Map<PDPage, Set<Integer>> mcidsByPage = McidCollector.collectMcidsByPage(listElement, doc, false);
+                    McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(mcidsByPage, doc);
+                    paragraphOutput.append(" mcid=\"").append(TextUtils.escapeHtml(mcidPageInfo.mcidStr))
+                          .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
+                }
+
+                paragraphOutput.append(">")
+                      .append(TextUtils.escapeHtml(fullText))
+                      .append("</p>\n");
+            }
+
+            // 递归处理子列表
+            for (List<PdfListParser.ListItem> subList : item.children) {
+                outputListItems(subList, paragraphOutput, tableCounter, doc, listElement, includeMcid);
+            }
+        }
+    }
+
+    /**
+     * 从TextPosition列表计算边界框（PDF用户空间坐标）
+     * 注意：此方法不区分页面，适用于单页内容
      *
      * @param positions  文本位置列表
      * @return 边界框字符串 "x0,y0,x1,y1"（PDF用户空间），如果无法计算则返回null
@@ -408,34 +903,60 @@ public class PdfTableExtractor {
 
         // 初始化边界
         double minX = Double.MAX_VALUE;
-        double minY = Double.MAX_VALUE;  // PDF用户空间的底部（较小的Y）
+        double minY = Double.MAX_VALUE;
         double maxX = -Double.MAX_VALUE;
-        double maxY = -Double.MAX_VALUE; // PDF用户空间的顶部（较大的Y）
+        double maxY = -Double.MAX_VALUE;
 
         // 遍历所有文本位置，计算最小外接矩形
         for (TextPosition tp : positions) {
-            // 使用DirAdj系列方法（已考虑所有变换：CTM + Text Matrix + Font Matrix）
             double x = tp.getXDirAdj();
             double width = tp.getWidthDirAdj();
             double height = tp.getHeightDir();
+            double yBase = Math.abs(tp.getYDirAdj());
+            double yTop = yBase + height;
+            double yBottom = yBase;
 
-            // Y坐标转换：YDirAdj可能为负数，取绝对值得到从底部算起的Y坐标
-            double yBase = Math.abs(tp.getYDirAdj());  // 基线位置（从底部算起）
-
-            // PDF坐标系：左下角为原点，y轴向上
-            // 文字顶部：基线 + 字体高度（更大的Y）
-            // 文字底部：基线（更小的Y）
-            double yTop = yBase + height;  // 顶部（y值较大）
-            double yBottom = yBase;        // 底部（y值较小）
-
-            // 更新边界
             minX = Math.min(minX, x);
             maxX = Math.max(maxX, x + width);
-            minY = Math.min(minY, yBottom);  // minY是底部（y值较小）
-            maxY = Math.max(maxY, yTop);     // maxY是顶部（y值较大）
+            minY = Math.min(minY, yBottom);
+            maxY = Math.max(maxY, yTop);
         }
 
-        // 格式化为字符串 "x0,y0,x1,y1"（保留2位小数）
         return String.format("%.2f,%.2f,%.2f,%.2f", minX, minY, maxX, maxY);
+    }
+
+    /**
+     * 按页计算边界框（支持跨页内容）
+     *
+     * @param positionsByPage 按页分组的TextPosition映射
+     * @param doc PDF文档
+     * @return 边界框字符串，格式："x0,y0,x1,y1" 或跨页时 "x0,y0,x1,y1|x0,y0,x1,y1"
+     */
+    private static String computeBoundingBoxByPage(Map<PDPage, List<TextPosition>> positionsByPage, PDDocument doc) {
+        if (positionsByPage == null || positionsByPage.isEmpty()) {
+            return null;
+        }
+
+        // 按页码排序
+        List<Map.Entry<PDPage, List<TextPosition>>> sortedEntries = new ArrayList<>(positionsByPage.entrySet());
+        sortedEntries.sort((a, b) -> {
+            int pageA = doc.getPages().indexOf(a.getKey());
+            int pageB = doc.getPages().indexOf(b.getKey());
+            return Integer.compare(pageA, pageB);
+        });
+
+        StringBuilder result = new StringBuilder();
+        for (Map.Entry<PDPage, List<TextPosition>> entry : sortedEntries) {
+            List<TextPosition> positions = entry.getValue();
+            String bbox = computeBoundingBox(positions);
+            if (bbox != null) {
+                if (result.length() > 0) {
+                    result.append("|");
+                }
+                result.append(bbox);
+            }
+        }
+
+        return result.length() > 0 ? result.toString() : null;
     }
 }

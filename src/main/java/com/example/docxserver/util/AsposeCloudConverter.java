@@ -86,7 +86,16 @@ public class AsposeCloudConverter {
                 dos.writeBytes("Content-Disposition: form-data; name=\"saveOptionsData\"" + lineEnd);
                 dos.writeBytes("Content-Type: application/json" + lineEnd);
                 dos.writeBytes(lineEnd);
-                dos.writeBytes("{\"SaveFormat\": \"pdf\", \"FileName\": \"output.pdf\"}");
+                // 生成Tagged PDF (PDF/UA-2标准)，使PDF包含结构标签
+                String pdfFileName = docxFile.getName().replace(".docx", ".pdf").replace(".DOCX", ".pdf");
+                String saveOptionsJson = "{" +
+                        "\"SaveFormat\": \"pdf\", " +
+                        "\"FileName\": \"" + pdfFileName + "\", " +
+                        "\"Compliance\": \"PdfUa2\", " +
+                        "\"BookmarksOutlineLevel\": 1, " +
+                        "\"ExportDocumentStructure\": true" +
+                        "}";
+                dos.writeBytes(saveOptionsJson);
                 dos.writeBytes(lineEnd);
 
                 // 结束boundary

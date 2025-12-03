@@ -220,6 +220,7 @@ public class PdfTextExtractor {
         // 3. 按页提取文本和位置
         StringBuilder resultText = new StringBuilder();
         List<TextPosition> allPositions = new ArrayList<>();
+        Map<PDPage, List<TextPosition>> positionsByPage = new HashMap<>();
 
         try {
             // 按文档页序遍历（确保文本顺序正确）
@@ -242,8 +243,13 @@ public class PdfTextExtractor {
                         resultText.append(pageText);
                     }
 
-                    // 收集所有TextPosition
+                    // 收集所有TextPosition（兼容旧逻辑）
                     allPositions.addAll(pagePositions);
+
+                    // 按页分组收集TextPosition（用于跨页bbox计算）
+                    if (!pagePositions.isEmpty()) {
+                        positionsByPage.put(page, new ArrayList<>(pagePositions));
+                    }
                 }
             }
         } catch (Exception e) {
@@ -252,6 +258,6 @@ public class PdfTextExtractor {
             return new TextWithPositions("", new ArrayList<TextPosition>());
         }
 
-        return new TextWithPositions(resultText.toString().trim(), allPositions);
+        return new TextWithPositions(resultText.toString().trim(), allPositions, positionsByPage);
     }
 }

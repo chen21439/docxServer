@@ -15,6 +15,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -185,6 +187,10 @@ public class ParagraphMapperRefactored {
         int failedCount = 0;
         StringBuilder failedLog = new StringBuilder();
 
+        // 按类型统计（成功和失败分开）
+        Map<String, Integer> matchedByType = new HashMap<>();
+        Map<String, Integer> failedByType = new HashMap<>();
+
         // 遍历PDF段落，查找匹配
         for (Element pdfParagraph : pdfParagraphs) {
             totalCount++;
@@ -192,6 +198,11 @@ public class ParagraphMapperRefactored {
             String pdfId = pdfParagraph.attr("id");
             String pdfType = pdfParagraph.attr("type");
             String pdfMcid = pdfParagraph.attr("mcid");
+
+            // 类型为空时标记为 "Unknown"
+            if (pdfType == null || pdfType.isEmpty()) {
+                pdfType = "Unknown";
+            }
 
             if (pdfText.isEmpty()) {
                 continue;  // 跳过空段落
@@ -204,9 +215,12 @@ public class ParagraphMapperRefactored {
             if (normalizedTextToIdMap.containsKey(normalizedPdfText)) {
                 String matchedDocxId = normalizedTextToIdMap.get(normalizedPdfText);
                 matchedCount++;
-                // 成功匹配，不打印
+                // 成功匹配，统计类型
+                matchedByType.put(pdfType, matchedByType.getOrDefault(pdfType, 0) + 1);
             } else {
                 failedCount++;
+                // 失败，统计类型
+                failedByType.put(pdfType, failedByType.getOrDefault(pdfType, 0) + 1);
                 // 只记录前3个失败的详情
                 if (failedCount <= 3) {
                     failedLog.append("  [失败 #").append(failedCount).append("]\n");
@@ -226,8 +240,40 @@ public class ParagraphMapperRefactored {
         System.out.println("匹配成功: " + matchedCount + " (" + (totalCount > 0 ? matchedCount * 100 / totalCount : 0) + "%)");
         System.out.println("匹配失败: " + failedCount + " (" + (totalCount > 0 ? failedCount * 100 / totalCount : 0) + "%)");
 
+        // 打印按类型统计（成功）
+        if (!matchedByType.isEmpty()) {
+            System.out.println("\n=== 匹配成功的类型统计 ===");
+            // 按数量降序排列
+            List<Map.Entry<String, Integer>> sortedMatched = new ArrayList<>(matchedByType.entrySet());
+            Collections.sort(sortedMatched, new Comparator<Map.Entry<String, Integer>>() {
+                @Override
+                public int compare(Map.Entry<String, Integer> e1, Map.Entry<String, Integer> e2) {
+                    return e2.getValue().compareTo(e1.getValue());  // 降序
+                }
+            });
+            for (Map.Entry<String, Integer> entry : sortedMatched) {
+                System.out.println("  " + entry.getKey() + ": " + entry.getValue());
+            }
+        }
+
+        // 打印按类型统计（失败）
+        if (!failedByType.isEmpty()) {
+            System.out.println("\n=== 匹配失败的类型统计 ===");
+            // 按数量降序排列
+            List<Map.Entry<String, Integer>> sortedFailed = new ArrayList<>(failedByType.entrySet());
+            Collections.sort(sortedFailed, new Comparator<Map.Entry<String, Integer>>() {
+                @Override
+                public int compare(Map.Entry<String, Integer> e1, Map.Entry<String, Integer> e2) {
+                    return e2.getValue().compareTo(e1.getValue());  // 降序
+                }
+            });
+            for (Map.Entry<String, Integer> entry : sortedFailed) {
+                System.out.println("  " + entry.getKey() + ": " + entry.getValue());
+            }
+        }
+
         if (failedCount > 0) {
-            System.out.println("\n=== 匹配失败的段落详情 ===");
+            System.out.println("\n=== 匹配失败的段落详情（前3个）===");
             System.out.println(failedLog.toString());
         }
     }

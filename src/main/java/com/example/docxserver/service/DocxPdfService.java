@@ -1,8 +1,10 @@
 package com.example.docxserver.service;
 
 import com.example.docxserver.util.AsposeCloudConverter;
+import com.example.docxserver.util.docx.DocxHeaderFooterRemover;
 import com.example.docxserver.util.taggedPDF.PdfTableExtractor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -14,6 +16,7 @@ import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * PDF文档处理服务
@@ -158,6 +161,11 @@ public class DocxPdfService {
             // 更新状态：已上传
             updateTaskStatus(taskId, STATUS_UPLOADED, "文件已上传", null);
 
+            // Step 1.5: 移除DOCX中的页眉、页脚和页码
+            log.info("[taskId: {}] Step 1.5: 移除页眉页脚页码...", taskId);
+            DocxHeaderFooterRemover.removeHeaderFooter(docxPath);
+            log.info("[taskId: {}] 页眉页脚页码已移除", taskId);
+
             // Step 2: 调用Aspose Cloud API转换DOCX为PDF
             log.info("[taskId: {}] Step 2: 调用Aspose Cloud转换DOCX为PDF...", taskId);
             updateTaskStatus(taskId, STATUS_CONVERTING, "正在转换PDF", null);
@@ -216,6 +224,75 @@ public class DocxPdfService {
     }
 
     /**
+     * 异步处理：转换PDF并提取结构（后台执行）
+     *
+     * @param taskId 任务ID
+     * @param docxPath DOCX文件路径
+     * @param taskDir 任务目录
+     * @param includeMcid 是否包含MCID
+     */
+    @Async
+    public void processDocxToPdfTxtAsync(String taskId, String docxPath, String taskDir, boolean includeMcid) {
+        log.info("[taskId: {}] 开始异步处理...", taskId);
+
+        try {
+            // Step 1.5: 移除DOCX中的页眉、页脚和页码
+            log.info("[taskId: {}] Step 1.5: 移除页眉页脚页码...", taskId);
+            updateTaskStatus(taskId, STATUS_PROCESSING, "正在移除页眉页脚", null);
+            DocxHeaderFooterRemover.removeHeaderFooter(docxPath);
+            log.info("[taskId: {}] 页眉页脚页码已移除", taskId);
+
+            // Step 2: 调用Aspose Cloud API转换DOCX为PDF
+            log.info("[taskId: {}] Step 2: 调用Aspose Cloud转换DOCX为PDF...", taskId);
+            updateTaskStatus(taskId, STATUS_CONVERTING, "正在转换PDF", null);
+
+            String pdfPath = taskDir + File.separator + taskId + ".pdf";
+            boolean convertSuccess = AsposeCloudConverter.convert(docxPath, pdfPath);
+            if (!convertSuccess) {
+                throw new IOException("Aspose Cloud转换失败");
+            }
+
+            File pdfFile = new File(pdfPath);
+            if (!pdfFile.exists()) {
+                throw new IOException("转换失败：PDF文件未生成");
+            }
+            log.info("[taskId: {}] PDF文件生成成功: {}", taskId, pdfPath);
+
+            // Step 3: 解析PDF生成TXT
+            log.info("[taskId: {}] Step 3: 解析PDF生成TXT... (includeMcid={})", taskId, includeMcid);
+            updateTaskStatus(taskId, STATUS_EXTRACTING, "正在解析PDF", null);
+
+            extractPdfToXml(taskId, pdfPath, taskDir, includeMcid);
+
+            // 构建结果信息
+            Map<String, Object> resultInfo = new HashMap<>();
+            resultInfo.put("pdfPath", pdfPath);
+
+            // 查找生成的TXT文件
+            File taskDirFile = new File(taskDir);
+            File[] txtFiles = taskDirFile.listFiles((dir, name) -> name.endsWith(".txt"));
+            if (txtFiles != null) {
+                for (File txt : txtFiles) {
+                    if (txt.getName().contains("_pdf_") && !txt.getName().contains("_paragraph_")) {
+                        resultInfo.put("txtPath", txt.getAbsolutePath());
+                    } else if (txt.getName().contains("_paragraph_")) {
+                        resultInfo.put("paragraphTxtPath", txt.getAbsolutePath());
+                    }
+                }
+            }
+
+            log.info("[taskId: {}] 异步处理完成！", taskId);
+            updateTaskStatus(taskId, STATUS_COMPLETED, "处理完成", resultInfo);
+
+        } catch (Exception e) {
+            log.error("[taskId: {}] 异步处理失败: {}", taskId, e.getMessage(), e);
+            Map<String, Object> errorInfo = new HashMap<>();
+            errorInfo.put("error", e.getMessage());
+            updateTaskStatus(taskId, STATUS_FAILED, "处理失败: " + e.getMessage(), errorInfo);
+        }
+    }
+
+    /**
      * 根据taskId获取任务目录
      */
     public String getTaskDir(String taskId) {
@@ -226,6 +303,7 @@ public class DocxPdfService {
      * 任务状态常量
      */
     public static final String STATUS_UPLOADED = "UPLOADED";       // 文件已上传
+    public static final String STATUS_PROCESSING = "PROCESSING";   // 正在处理（移除页眉页脚）
     public static final String STATUS_CONVERTING = "CONVERTING";   // 正在转换PDF
     public static final String STATUS_EXTRACTING = "EXTRACTING";   // 正在解析PDF
     public static final String STATUS_COMPLETED = "COMPLETED";     // 处理完成

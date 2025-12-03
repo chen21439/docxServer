@@ -73,7 +73,11 @@ public class DocxPdfController {
     }
 
     /**
-     * 完整处理流程：上传DOCX -> 远程转换PDF -> 解析PDF得到TXT
+     * 完整处理流程：上传DOCX -> 远程转换PDF -> 解析PDF得到TXT（异步处理）
+     *
+     * 接收DOCX文件后立即返回taskId，后台异步执行转换和解析。
+     * 使用 /status/{taskId} 轮询处理状态。
+     * 处理完成后使用 /artifact/{taskId} 下载结果。
      *
      * @param file DOCX文件
      * @param includeMcid 是否在TXT输出中包含MCID和page属性（默认false）
@@ -101,31 +105,39 @@ public class DocxPdfController {
         }
 
         try {
-            log.info("开始处理文件: {}, includeMcid={}", originalFilename, includeMcid);
+            log.info("接收文件: {}, includeMcid={}", originalFilename, includeMcid);
 
-            // 调用Service完整处理流程
-            Map<String, Object> processResult = docxPdfService.processDocxToPdfTxt(file, includeMcid);
-            String taskId = (String) processResult.get("taskId");
+            // Step 1: 只保存文件，立即返回taskId
+            Map<String, Object> uploadResult = docxPdfService.uploadDocx(file);
+            String taskId = (String) uploadResult.get("taskId");
+            String docxPath = (String) uploadResult.get("filePath");
+            String taskDir = (String) uploadResult.get("taskDir");
 
-            log.info("文件处理完成: taskId={}", taskId);
+            // 更新状态为已上传
+            docxPdfService.updateTaskStatus(taskId, DocxPdfService.STATUS_UPLOADED, "文件已上传，开始处理", null);
 
-            // 返回taskId
+            log.info("文件已保存: taskId={}, 开始异步处理", taskId);
+
+            // Step 2: 异步执行后续处理（移除页眉页脚、转换PDF、解析TXT）
+            docxPdfService.processDocxToPdfTxtAsync(taskId, docxPath, taskDir, includeMcid);
+
+            // 立即返回taskId
             result.put("success", true);
             result.put("taskId", taskId);
-            result.put("message", "处理完成，请使用 /artifact/{taskId} 下载结果");
+            result.put("message", "文件已接收，正在后台处理。请使用 /status/{taskId} 查询进度，处理完成后使用 /artifact/{taskId} 下载结果");
 
             return ResponseEntity.ok(result);
 
         } catch (Exception e) {
-            log.error("文件处理失败: {}", e.getMessage(), e);
+            log.error("文件上传失败: {}", e.getMessage(), e);
             result.put("success", false);
-            result.put("message", "处理失败: " + e.getMessage());
+            result.put("message", "上传失败: " + e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
         }
     }
 
     /**
-     * 下载处理结果（ZIP压缩包，包含PDF和TXT）
+     * 下载处理结果（ZIP压缩包，包含PDF和聚合TXT）
      *
      * @param taskId 任务ID
      * @return ZIP压缩包
@@ -142,10 +154,9 @@ public class DocxPdfController {
                 return ResponseEntity.notFound().build();
             }
 
-            // 查找PDF和TXT文件
+            // 查找PDF和聚合TXT文件
             File pdfFile = null;
-            File tableTxtFile = null;
-            File paragraphTxtFile = null;
+            File mergedTxtFile = null;
 
             File[] files = taskDirFile.listFiles();
             if (files != null) {
@@ -153,25 +164,20 @@ public class DocxPdfController {
                     String name = f.getName();
                     if (name.endsWith(".pdf")) {
                         pdfFile = f;
-                    } else if (name.contains("_pdf_") && name.endsWith(".txt") && !name.contains("_paragraph_")) {
-                        tableTxtFile = f;
-                    } else if (name.contains("_paragraph_") && name.endsWith(".txt")) {
-                        paragraphTxtFile = f;
+                    } else if (name.contains("_merged_") && name.endsWith(".txt")) {
+                        mergedTxtFile = f;
                     }
                 }
             }
 
-            // 打包成ZIP
+            // 打包成ZIP（只包含PDF和聚合文件）
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             try (ZipOutputStream zos = new ZipOutputStream(baos)) {
                 if (pdfFile != null) {
                     addFileToZip(zos, pdfFile, taskId + ".pdf");
                 }
-                if (tableTxtFile != null) {
-                    addFileToZip(zos, tableTxtFile, taskId + "_table.txt");
-                }
-                if (paragraphTxtFile != null) {
-                    addFileToZip(zos, paragraphTxtFile, taskId + "_paragraph.txt");
+                if (mergedTxtFile != null) {
+                    addFileToZip(zos, mergedTxtFile, taskId + "_merged.txt");
                 }
             }
 
