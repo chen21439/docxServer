@@ -11,6 +11,9 @@ import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructur
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot;
 import org.apache.pdfbox.text.TextPosition;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -24,6 +27,14 @@ import java.util.*;
  * 负责从PDF结构树中提取表格和段落到XML格式
  */
 public class PdfTableExtractor {
+
+    private static final Logger log = LoggerFactory.getLogger(PdfTableExtractor.class);
+
+    /**
+     * 共享的 PdfListParser（避免每个 List 元素都重新构建 MCID 映射）
+     * 使用 ThreadLocal 保证线程安全，每个文档处理完后需要清理
+     */
+    private static final ThreadLocal<PdfListParser> sharedListParser = new ThreadLocal<>();
 
     /**
      * 从PDF提取表格和段落结构到XML格式
@@ -103,15 +114,15 @@ public class PdfTableExtractor {
             PDPage targetPage = null;
             if (targetPageNum > 0 && targetPageNum <= doc.getNumberOfPages()) {
                 targetPage = doc.getPage(targetPageNum - 1);  // 转换为0-based索引
-                System.out.println("只处理第 " + targetPageNum + " 页的内容");
+                log.info("只处理第 {} 页的内容", targetPageNum);
             } else {
-                System.out.println("处理所有页面的内容");
+                log.info("处理所有页面的内容");
             }
 
-            System.out.println("开始从PDF结构树提取表格和段落...");
+            log.info("开始从PDF结构树提取表格和段落...");
 
             // 第一遍遍历：收集所有表格的MCID（按页分桶）
-            System.out.println("第一遍：收集所有表格的MCID...");
+            log.info("第一遍：收集所有表格的MCID...");
             Map<PDPage, Set<Integer>> tableMCIDsByPage = new HashMap<>();
             List<Object> kids = structTreeRoot.getKids();
             for (Object kid : structTreeRoot.getKids()) {
@@ -126,19 +137,20 @@ public class PdfTableExtractor {
             for (Set<Integer> mcids : tableMCIDsByPage.values()) {
                 totalTableMCIDs += mcids.size();
             }
-            System.out.println("收集到表格MCID总数: " + totalTableMCIDs + " (跨 " + tableMCIDsByPage.size() + " 个页面)");
+            log.info("收集到表格MCID总数: {} (跨 {} 个页面)", totalTableMCIDs, tableMCIDsByPage.size());
 
             // 打印root的直接子元素类型（调试用）
-            System.out.println("StructTreeRoot的直接子元素类型：");
+            log.info("StructTreeRoot的直接子元素类型：");
             for (Object kid : structTreeRoot.getKids()) {
                 if (kid instanceof PDStructureElement) {
                     PDStructureElement element = (PDStructureElement) kid;
-                    System.out.println("  - " + element.getStructureType());
+                    log.info("  - {}", element.getStructureType());
                 }
             }
 
             // 第二遍遍历：提取所有表格和段落（传入doc参数和tableMCIDsByPage）
-            System.out.println("第二遍：提取表格和段落...");
+            log.info("第二遍：提取表格和段落...");
+            long pass2Start = System.currentTimeMillis();
             Counter tableCounter = new Counter();
             for (Object kid : structTreeRoot.getKids()) {
                 if (kid instanceof PDStructureElement) {
@@ -146,22 +158,27 @@ public class PdfTableExtractor {
                     extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid);
                 }
             }
+            long pass2End = System.currentTimeMillis();
 
-            System.out.println("共提取 " + tableCounter.tableIndex + " 个表格, " + tableCounter.paragraphIndex + " 个段落");
+            log.info("共提取 {} 个表格, {} 个段落，第二遍耗时: {} ms",
+                    tableCounter.tableIndex, tableCounter.paragraphIndex, (pass2End - pass2Start));
+        } finally {
+            // 清理共享的 PdfListParser，避免内存泄漏
+            sharedListParser.remove();
         }
 
         // 写入表格文件
         Files.write(Paths.get(tableOutputPath), tableOutput.toString().getBytes(StandardCharsets.UTF_8));
-        System.out.println("PDF表格结构已写入到: " + tableOutputPath);
+        log.info("PDF表格结构已写入到: {}", tableOutputPath);
 
         // 写入段落文件
         Files.write(Paths.get(paragraphOutputPath), paragraphOutput.toString().getBytes(StandardCharsets.UTF_8));
-        System.out.println("PDF段落结构已写入到: " + paragraphOutputPath);
+        log.info("PDF段落结构已写入到: {}", paragraphOutputPath);
 
         // 生成聚合文件（不包含mcid，按page和bbox排序）
         String mergedContent = generateMergedContent(tableOutput.toString(), paragraphOutput.toString());
         Files.write(Paths.get(mergedOutputPath), mergedContent.getBytes(StandardCharsets.UTF_8));
-        System.out.println("PDF聚合结构已写入到: " + mergedOutputPath);
+        log.info("PDF聚合结构已写入到: {}", mergedOutputPath);
     }
 
     /**
@@ -800,7 +817,7 @@ public class PdfTableExtractor {
      * 使用 PdfListParser 解析列表
      *
      * 核心逻辑：
-     * 1. 创建 PdfListParser 并构建 MCID 文本映射
+     * 1. 获取或创建共享的 PdfListParser（避免每个 List 都重新构建 MCID 映射）
      * 2. 调用 parseList 解析 L 元素
      * 3. 将解析结果扁平化输出为段落
      *
@@ -818,9 +835,14 @@ public class PdfTableExtractor {
             PDDocument doc,
             boolean includeMcid) throws IOException {
 
-        // 创建 ListParser 并构建 MCID 文本映射
-        PdfListParser parser = new PdfListParser(doc);
-        parser.buildMcidTextMap();
+        // 获取或创建共享的 ListParser（只构建一次 MCID 映射）
+        PdfListParser parser = sharedListParser.get();
+        if (parser == null) {
+            parser = new PdfListParser(doc);
+            parser.buildMcidTextMap();
+            sharedListParser.set(parser);
+            log.info("创建共享的 PdfListParser（MCID 映射只构建一次）");
+        }
 
         // 解析列表
         List<PdfListParser.ListItem> items = parser.parseList(listElement, 1);

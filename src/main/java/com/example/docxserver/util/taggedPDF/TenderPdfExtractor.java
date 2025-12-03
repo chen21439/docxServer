@@ -92,13 +92,14 @@ public class TenderPdfExtractor {
         System.out.println("=== 提取完成 ===");
         System.out.println("输出目录: " + baseDir);
 
+        // 注释掉DOCX比较步骤（只测试PDF提取）
         // 步骤2：比较DOCX和PDF的表格外段落
-        System.out.println();
-        compareDocxAndPdfParagraphs();
+        // System.out.println();
+        // compareDocxAndPdfParagraphs();
 
         // 步骤3：比较DOCX和PDF的表格段落
-        System.out.println();
-        compareDocxAndPdfTableParagraphs();
+        // System.out.println();
+        // compareDocxAndPdfTableParagraphs();
     }
 
     /**
