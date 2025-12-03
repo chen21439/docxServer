@@ -20,8 +20,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 /**
@@ -126,16 +124,15 @@ public class PdfTableExtractor {
             // 第一遍遍历：收集所有表格的MCID（按页分桶）
             log.info("第一遍：收集所有表格的MCID...");
             Map<PDPage, Set<Integer>> tableMCIDsByPage = new HashMap<>();
-            Map<PDPage, Set<Integer>> allMCIDsByPage = new HashMap<>();
+            List<Object> kids = structTreeRoot.getKids();
             for (Object kid : structTreeRoot.getKids()) {
                 if (kid instanceof PDStructureElement) {
                     PDStructureElement element = (PDStructureElement) kid;
                     McidCollector.collectTableMCIDs(element, tableMCIDsByPage, doc);
-                    McidCollector.collectAllMCIDsByPage(element, allMCIDsByPage, doc);
                 }
             }
 
-            // 统计MCID总数
+            // 统计表格MCID总数
             int totalTableMCIDs = 0;
             for (Set<Integer> mcids : tableMCIDsByPage.values()) {
                 totalTableMCIDs += mcids.size();
@@ -158,7 +155,7 @@ public class PdfTableExtractor {
             for (Object kid : structTreeRoot.getKids()) {
                 if (kid instanceof PDStructureElement) {
                     PDStructureElement element = (PDStructureElement) kid;
-                    extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid, listParserHolder, mcidCache);
+                    extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid);
                 }
             }
             long pass2End = System.currentTimeMillis();
@@ -325,7 +322,7 @@ public class PdfTableExtractor {
             Counter tableCounter,
             PDDocument doc,
             Map<PDPage, Set<Integer>> tableMCIDsByPage) throws IOException {
-        extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, null, null, true, new PdfListParser[1]);
+        extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, null, null, true);
     }
 
     /**
@@ -340,7 +337,6 @@ public class PdfTableExtractor {
      * @param targetPage 目标页面（null表示所有页面）
      * @param structTreeRoot 结构树根节点（用于判断是否是root的直接子元素）
      * @param includeMcid 是否在输出中包含MCID和page属性
-     * @param listParserHolder 列表解析器持有者（延迟初始化，避免重复构建）
      * @throws IOException 文件读取或文本提取异常
      */
     private static void extractTablesFromElement(
@@ -352,40 +348,7 @@ public class PdfTableExtractor {
             Map<PDPage, Set<Integer>> tableMCIDsByPage,
             PDPage targetPage,
             PDStructureTreeRoot structTreeRoot,
-            boolean includeMcid,
-            PdfListParser[] listParserHolder) throws IOException {
-        // 调用带缓存的版本，传入 null 使用旧的提取方式
-        extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid, listParserHolder, null);
-    }
-
-    /**
-     * 从结构元素中递归提取表格（支持页面过滤、MCID控制和全局缓存）
-     *
-     * @param element 当前结构元素
-     * @param tableOutput 表格输出缓冲区
-     * @param paragraphOutput 段落输出缓冲区
-     * @param tableCounter 表格计数器
-     * @param doc PDF文档对象
-     * @param tableMCIDsByPage 表格MCID按页分桶的映射
-     * @param targetPage 目标页面（null表示所有页面）
-     * @param structTreeRoot 结构树根节点（用于判断是否是root的直接子元素）
-     * @param includeMcid 是否在输出中包含MCID和page属性
-     * @param listParserHolder 列表解析器持有者（延迟初始化，避免重复构建）
-     * @param mcidCache 全局MCID缓存（用于高性能文本提取，可为null使用旧方法）
-     * @throws IOException 文件读取或文本提取异常
-     */
-    private static void extractTablesFromElement(
-            PDStructureElement element,
-            StringBuilder tableOutput,
-            StringBuilder paragraphOutput,
-            Counter tableCounter,
-            PDDocument doc,
-            Map<PDPage, Set<Integer>> tableMCIDsByPage,
-            PDPage targetPage,
-            PDStructureTreeRoot structTreeRoot,
-            boolean includeMcid,
-            PdfListParser[] listParserHolder,
-            GlobalMcidCache mcidCache) throws IOException {
+            boolean includeMcid) throws IOException {
 
         // 页面过滤：如果指定了目标页面，检查当前元素是否属于该页
         if (targetPage != null) {
@@ -402,8 +365,6 @@ public class PdfTableExtractor {
         if ("Table".equalsIgnoreCase(structType)) {
             int tableIndex = tableCounter.tableIndex++;
             String tableId = IdUtils.formatTableId(tableIndex);
-            long tableStartTime = System.currentTimeMillis();
-            log("  开始提取表格 " + tableId + "...");
 
             // 收集整个表格的所有TextPosition（用于计算表格整体bbox，按页分组）
             Map<PDPage, List<TextPosition>> tablePositionsByPage = new HashMap<>();
@@ -434,19 +395,36 @@ public class PdfTableExtractor {
                                 if ("TD".equalsIgnoreCase(cellType) || "TH".equalsIgnoreCase(cellType)) {
                                     String cellId = rowId + "-c" + String.format("%03d", colIndex + 1) + "-p001";
 
-                                    // 提取单元格文本（使用缓存版本提高性能）
-                                    String cellText;
-                                    if (mcidCache != null) {
-                                        // 使用全局缓存提取文本（高性能）
-                                        cellText = PdfTextExtractor.extractTextFromElementWithCache(cellElement, doc, mcidCache);
-                                    } else {
-                                        // 回退到旧方法
-                                        cellText = PdfTextExtractor.extractTextFromElement(cellElement, doc);
-                                    }
+                                    // 提取单元格文本
+                                    TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(cellElement, doc);
+                                    String cellText = textWithPositions.getText();
                                     cellText = TextUtils.removeZeroWidthChars(cellText);
 
-                                    // 收集页码信息
+                                    // 收集页码信息（先收集，用于后续fallback）
                                     Map<PDPage, Set<Integer>> cellMcidsByPage = McidCollector.collectMcidsByPage(cellElement, doc, false);
+
+                                    // 收集位置信息用于计算表格整体bbox（按页分组）
+                                    Map<PDPage, List<TextPosition>> cellPositionsByPage = textWithPositions.getPositionsByPage();
+                                    if (cellPositionsByPage != null && !cellPositionsByPage.isEmpty()) {
+                                        for (Map.Entry<PDPage, List<TextPosition>> entry : cellPositionsByPage.entrySet()) {
+                                            PDPage page = entry.getKey();
+                                            List<TextPosition> pagePositions = entry.getValue();
+                                            if (!tablePositionsByPage.containsKey(page)) {
+                                                tablePositionsByPage.put(page, new ArrayList<>());
+                                            }
+                                            tablePositionsByPage.get(page).addAll(pagePositions);
+                                        }
+                                    } else if (textWithPositions.getPositions() != null && !textWithPositions.getPositions().isEmpty()) {
+                                        // fallback: 使用旧方法（兼容性处理）
+                                        // 尝试从单元格的MCID获取页面信息
+                                        for (PDPage page : cellMcidsByPage.keySet()) {
+                                            if (!tablePositionsByPage.containsKey(page)) {
+                                                tablePositionsByPage.put(page, new ArrayList<>());
+                                            }
+                                            tablePositionsByPage.get(page).addAll(textWithPositions.getPositions());
+                                            break; // 只添加一次
+                                        }
+                                    }
                                     for (PDPage page : cellMcidsByPage.keySet()) {
                                         int pageNum = doc.getPages().indexOf(page) + 1;
                                         if (pageNum > 0) {
@@ -468,8 +446,15 @@ public class PdfTableExtractor {
                                         }
                                     }
 
-                                    // 注意：使用缓存版本时暂不计算单元格bbox（性能优先）
-                                    // TODO: 如需bbox，可以扩展GlobalMcidCache以缓存TextPosition
+                                    // 计算单元格bbox（按页分组）
+                                    String cellBbox = computeBoundingBoxByPage(textWithPositions.getPositionsByPage(), doc);
+                                    if (cellBbox == null) {
+                                        // fallback: 使用旧方法（单页情况）
+                                        cellBbox = computeBoundingBox(textWithPositions.getPositions());
+                                    }
+                                    if (cellBbox != null) {
+                                        tableContent.append(" bbox=\"").append(cellBbox).append("\"");
+                                    }
 
                                     tableContent.append(">")
                                               .append(TextUtils.escapeHtml(cellText))
@@ -509,9 +494,6 @@ public class PdfTableExtractor {
             tableOutput.append(">\n");
             tableOutput.append(tableContent);
             tableOutput.append("</table>\n");
-
-            long tableEndTime = System.currentTimeMillis();
-            log("  表格 " + tableId + " 提取完成，共 " + rowIndex + " 行，耗时: " + (tableEndTime - tableStartTime) + " ms");
         }
 
         // 表格外段落提取逻辑
@@ -557,29 +539,14 @@ public class PdfTableExtractor {
                 // 使用 PdfListParser 按照正确的逻辑解析列表
                 // 每个 LI = Lbl + LBody 作为一个完整的段落
                 if ("L".equalsIgnoreCase(structType)) {
-                    // 延迟初始化 PdfListParser（只在首次遇到 L 元素时构建，避免重复构建 MCID 映射）
-                    if (listParserHolder[0] == null) {
-                        log("[PdfListParser] 首次遇到 L 元素，开始构建 MCID 文本映射...");
-                        long startTime = System.currentTimeMillis();
-                        listParserHolder[0] = new PdfListParser(doc);
-                        listParserHolder[0].buildMcidTextMap();
-                        long endTime = System.currentTimeMillis();
-                        log("[PdfListParser] MCID 文本映射构建完成，耗时: " + (endTime - startTime) + " ms");
-                    }
-                    extractListWithParser(element, paragraphOutput, tableCounter, doc, includeMcid, listParserHolder[0]);
+                    extractListWithParser(element, paragraphOutput, tableCounter, doc, includeMcid);
                     // 不再递归处理 L 的子元素（已在 extractListWithParser 中处理）
                     return;
                 }
 
-                // 提取元素文本（使用缓存版本提高性能）
-                String paraText;
-                if (mcidCache != null) {
-                    // 使用全局缓存提取文本（高性能）
-                    paraText = PdfTextExtractor.extractTextFromElementWithCache(element, doc, mcidCache);
-                } else {
-                    // 回退到旧方法
-                    paraText = PdfTextExtractor.extractTextFromElement(element, doc);
-                }
+                // 提取元素文本和TextPosition（用于计算bbox）
+                TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(element, doc);
+                String paraText = textWithPositions.getText();
                 // 去除零宽字符（保留换行、空格、标点等）
                 paraText = TextUtils.removeZeroWidthChars(paraText);
 
@@ -588,7 +555,14 @@ public class PdfTableExtractor {
                     int paraIndex = tableCounter.paragraphIndex++;
                     String paraId = IdUtils.formatParagraphId(paraIndex);
 
-                    // 输出XML（带type属性）
+                    // 计算边界框（按页分组，支持跨页）
+                    String bbox = computeBoundingBoxByPage(textWithPositions.getPositionsByPage(), doc);
+                    if (bbox == null) {
+                        // fallback: 使用旧方法（单页情况或无positionsByPage）
+                        bbox = computeBoundingBox(textWithPositions.getPositions());
+                    }
+
+                    // 输出XML（带type属性和bbox）
                     paragraphOutput.append("<p id=\"").append(paraId)
                           .append("\" type=\"").append(structType).append("\"");
 
@@ -599,9 +573,10 @@ public class PdfTableExtractor {
                               .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
                     }
 
-                    // 注意：使用缓存版本时暂不计算段落bbox（性能优先）
-                    // TODO: 如需bbox，可以扩展GlobalMcidCache以缓存TextPosition
-
+                    // 添加bbox属性（如果有）
+                    if (bbox != null) {
+                        paragraphOutput.append(" bbox=\"").append(bbox).append("\"");
+                    }
                     paragraphOutput.append(">")
                           .append(TextUtils.escapeHtml(paraText))
                           .append("</p>\n");
@@ -616,7 +591,7 @@ public class PdfTableExtractor {
         for (Object kid : element.getKids()) {
             if (kid instanceof PDStructureElement) {
                 PDStructureElement childElement = (PDStructureElement) kid;
-                extractTablesFromElement(childElement, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid, listParserHolder, mcidCache);
+                extractTablesFromElement(childElement, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid);
             }
         }
     }
@@ -839,7 +814,7 @@ public class PdfTableExtractor {
     }
 
     /**
-     * 使用 PdfListParser 解析列表（复用已构建的 parser）
+     * 使用 PdfListParser 解析列表
      *
      * 核心逻辑：
      * 1. 获取或创建共享的 PdfListParser（避免每个 List 都重新构建 MCID 映射）
@@ -851,36 +826,8 @@ public class PdfTableExtractor {
      * @param tableCounter 计数器
      * @param doc PDF 文档
      * @param includeMcid 是否包含 MCID 属性
-     * @param parser 已构建好的 PdfListParser
      * @throws IOException IO异常
      */
-    private static void extractListWithParser(
-            PDStructureElement listElement,
-            StringBuilder paragraphOutput,
-            Counter tableCounter,
-            PDDocument doc,
-            boolean includeMcid,
-            PdfListParser parser) throws IOException {
-
-        // 解析列表
-        List<PdfListParser.ListItem> items = parser.parseList(listElement, 1);
-
-        // 递归输出所有列表项
-        outputListItems(items, paragraphOutput, tableCounter, doc, listElement, includeMcid);
-    }
-
-    /**
-     * 使用 PdfListParser 解析列表（每次创建新的 parser，兼容旧代码）
-     *
-     * @param listElement L 元素
-     * @param paragraphOutput 段落输出缓冲区
-     * @param tableCounter 计数器
-     * @param doc PDF 文档
-     * @param includeMcid 是否包含 MCID 属性
-     * @throws IOException IO异常
-     * @deprecated 建议使用带 parser 参数的版本以避免重复构建 MCID 映射
-     */
-    @Deprecated
     private static void extractListWithParser(
             PDStructureElement listElement,
             StringBuilder paragraphOutput,
@@ -897,7 +844,11 @@ public class PdfTableExtractor {
             log.info("创建共享的 PdfListParser（MCID 映射只构建一次）");
         }
 
-        extractListWithParser(listElement, paragraphOutput, tableCounter, doc, includeMcid, parser);
+        // 解析列表
+        List<PdfListParser.ListItem> items = parser.parseList(listElement, 1);
+
+        // 递归输出所有列表项
+        outputListItems(items, paragraphOutput, tableCounter, doc, listElement, includeMcid);
     }
 
     /**
