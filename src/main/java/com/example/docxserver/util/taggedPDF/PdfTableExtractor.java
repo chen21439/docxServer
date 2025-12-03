@@ -447,36 +447,19 @@ public class PdfTableExtractor {
                                 if ("TD".equalsIgnoreCase(cellType) || "TH".equalsIgnoreCase(cellType)) {
                                     String cellId = rowId + "-c" + String.format("%03d", colIndex + 1) + "-p001";
 
-                                    // 提取单元格文本
-                                    TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(cellElement, doc);
-                                    String cellText = textWithPositions.getText();
+                                    // 提取单元格文本（使用缓存版本提高性能）
+                                    String cellText;
+                                    if (mcidCache != null) {
+                                        // 使用全局缓存提取文本（高性能）
+                                        cellText = PdfTextExtractor.extractTextFromElementWithCache(cellElement, doc, mcidCache);
+                                    } else {
+                                        // 回退到旧方法
+                                        cellText = PdfTextExtractor.extractTextFromElement(cellElement, doc);
+                                    }
                                     cellText = TextUtils.removeZeroWidthChars(cellText);
 
-                                    // 收集页码信息（先收集，用于后续fallback）
+                                    // 收集页码信息
                                     Map<PDPage, Set<Integer>> cellMcidsByPage = McidCollector.collectMcidsByPage(cellElement, doc, false);
-
-                                    // 收集位置信息用于计算表格整体bbox（按页分组）
-                                    Map<PDPage, List<TextPosition>> cellPositionsByPage = textWithPositions.getPositionsByPage();
-                                    if (cellPositionsByPage != null && !cellPositionsByPage.isEmpty()) {
-                                        for (Map.Entry<PDPage, List<TextPosition>> entry : cellPositionsByPage.entrySet()) {
-                                            PDPage page = entry.getKey();
-                                            List<TextPosition> pagePositions = entry.getValue();
-                                            if (!tablePositionsByPage.containsKey(page)) {
-                                                tablePositionsByPage.put(page, new ArrayList<>());
-                                            }
-                                            tablePositionsByPage.get(page).addAll(pagePositions);
-                                        }
-                                    } else if (textWithPositions.getPositions() != null && !textWithPositions.getPositions().isEmpty()) {
-                                        // fallback: 使用旧方法（兼容性处理）
-                                        // 尝试从单元格的MCID获取页面信息
-                                        for (PDPage page : cellMcidsByPage.keySet()) {
-                                            if (!tablePositionsByPage.containsKey(page)) {
-                                                tablePositionsByPage.put(page, new ArrayList<>());
-                                            }
-                                            tablePositionsByPage.get(page).addAll(textWithPositions.getPositions());
-                                            break; // 只添加一次
-                                        }
-                                    }
                                     for (PDPage page : cellMcidsByPage.keySet()) {
                                         int pageNum = doc.getPages().indexOf(page) + 1;
                                         if (pageNum > 0) {
@@ -498,15 +481,8 @@ public class PdfTableExtractor {
                                         }
                                     }
 
-                                    // 计算单元格bbox（按页分组）
-                                    String cellBbox = computeBoundingBoxByPage(textWithPositions.getPositionsByPage(), doc);
-                                    if (cellBbox == null) {
-                                        // fallback: 使用旧方法（单页情况）
-                                        cellBbox = computeBoundingBox(textWithPositions.getPositions());
-                                    }
-                                    if (cellBbox != null) {
-                                        tableContent.append(" bbox=\"").append(cellBbox).append("\"");
-                                    }
+                                    // 注意：使用缓存版本时暂不计算单元格bbox（性能优先）
+                                    // TODO: 如需bbox，可以扩展GlobalMcidCache以缓存TextPosition
 
                                     tableContent.append(">")
                                               .append(TextUtils.escapeHtml(cellText))
@@ -608,9 +584,15 @@ public class PdfTableExtractor {
                     return;
                 }
 
-                // 提取元素文本和TextPosition（用于计算bbox）
-                TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(element, doc);
-                String paraText = textWithPositions.getText();
+                // 提取元素文本（使用缓存版本提高性能）
+                String paraText;
+                if (mcidCache != null) {
+                    // 使用全局缓存提取文本（高性能）
+                    paraText = PdfTextExtractor.extractTextFromElementWithCache(element, doc, mcidCache);
+                } else {
+                    // 回退到旧方法
+                    paraText = PdfTextExtractor.extractTextFromElement(element, doc);
+                }
                 // 去除零宽字符（保留换行、空格、标点等）
                 paraText = TextUtils.removeZeroWidthChars(paraText);
 
@@ -619,14 +601,7 @@ public class PdfTableExtractor {
                     int paraIndex = tableCounter.paragraphIndex++;
                     String paraId = IdUtils.formatParagraphId(paraIndex);
 
-                    // 计算边界框（按页分组，支持跨页）
-                    String bbox = computeBoundingBoxByPage(textWithPositions.getPositionsByPage(), doc);
-                    if (bbox == null) {
-                        // fallback: 使用旧方法（单页情况或无positionsByPage）
-                        bbox = computeBoundingBox(textWithPositions.getPositions());
-                    }
-
-                    // 输出XML（带type属性和bbox）
+                    // 输出XML（带type属性）
                     paragraphOutput.append("<p id=\"").append(paraId)
                           .append("\" type=\"").append(structType).append("\"");
 
@@ -637,10 +612,9 @@ public class PdfTableExtractor {
                               .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
                     }
 
-                    // 添加bbox属性（如果有）
-                    if (bbox != null) {
-                        paragraphOutput.append(" bbox=\"").append(bbox).append("\"");
-                    }
+                    // 注意：使用缓存版本时暂不计算段落bbox（性能优先）
+                    // TODO: 如需bbox，可以扩展GlobalMcidCache以缓存TextPosition
+
                     paragraphOutput.append(">")
                           .append(TextUtils.escapeHtml(paraText))
                           .append("</p>\n");

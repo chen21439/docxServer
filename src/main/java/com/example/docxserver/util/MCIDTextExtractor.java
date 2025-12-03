@@ -37,6 +37,19 @@ public class MCIDTextExtractor extends PDFStreamEngine {
     private final Map<Integer, StringBuilder> mcidTextMap = new HashMap<>();  // 每个MCID对应的文本
     private PDPage currentPage = null;  // 当前处理的页面（用于查找资源字典）
 
+    // ======= 性能优化：缓存当前目标MCID =======
+    // 避免每次 showGlyph() 都遍历整个栈
+    private Integer cachedTargetMCID = null;
+    private boolean cacheValid = false;
+
+    // ======= 性能调试开关 =======
+    // 设置为 true 跳过 /Properties 字典查找（验证性能问题）
+    private static final boolean SKIP_PROPERTIES_LOOKUP = true;
+
+    // 设置为 true 使用简单的单变量跟踪（不使用栈）
+    private static final boolean USE_SIMPLE_TRACKING = true;
+    private Integer simpleCurrentMCID = null;  // 简单模式下的当前MCID
+
     /**
      * 构造函数
      * @param targetMCIDs 目标MCID集合
@@ -62,13 +75,18 @@ public class MCIDTextExtractor extends PDFStreamEngine {
         addOperator(new org.apache.pdfbox.contentstream.operator.state.Save(this));
         addOperator(new org.apache.pdfbox.contentstream.operator.state.SetMatrix(this));
 
-        // 添加标记内容操作符 - 关键！使用栈来正确处理嵌套
+        // 添加标记内容操作符 - 关键！
         addOperator(new org.apache.pdfbox.contentstream.operator.markedcontent.BeginMarkedContentSequence(this) {
             @Override
             public void process(Operator operator, List<COSBase> arguments) throws IOException {
                 super.process(operator, arguments);
-                // BMC 操作符，没有MCID，压入 -1 表示无效MCID（保持栈平衡）
-                mcidStack.push(-1);
+                if (USE_SIMPLE_TRACKING) {
+                    // 简单模式：BMC 不改变当前MCID
+                } else {
+                    // 栈模式：压入 -1 表示无效MCID（保持栈平衡）
+                    mcidStack.push(-1);
+                    cacheValid = false;
+                }
             }
         });
 
@@ -83,21 +101,25 @@ public class MCIDTextExtractor extends PDFStreamEngine {
                     COSBase properties = arguments.get(1);
                     if (properties instanceof COSName) {
                         // 间接引用，需要从页面资源字典的 /Properties 中查找
-                        COSName propName = (COSName) properties;
-                        if (currentPage != null && currentPage.getResources() != null) {
-                            org.apache.pdfbox.cos.COSDictionary resourcesDict = currentPage.getResources().getCOSObject();
-                            if (resourcesDict != null) {
-                                org.apache.pdfbox.cos.COSDictionary propsDict =
-                                    (org.apache.pdfbox.cos.COSDictionary) resourcesDict.getDictionaryObject(COSName.PROPERTIES);
-                                if (propsDict != null) {
-                                    org.apache.pdfbox.cos.COSDictionary mcDict =
-                                        (org.apache.pdfbox.cos.COSDictionary) propsDict.getDictionaryObject(propName);
-                                    if (mcDict != null && mcDict.containsKey(COSName.MCID)) {
-                                        mcid = mcDict.getInt(COSName.MCID);
+                        // ======= 性能调试：跳过 /Properties 查找 =======
+                        if (!SKIP_PROPERTIES_LOOKUP) {
+                            COSName propName = (COSName) properties;
+                            if (currentPage != null && currentPage.getResources() != null) {
+                                org.apache.pdfbox.cos.COSDictionary resourcesDict = currentPage.getResources().getCOSObject();
+                                if (resourcesDict != null) {
+                                    org.apache.pdfbox.cos.COSDictionary propsDict =
+                                        (org.apache.pdfbox.cos.COSDictionary) resourcesDict.getDictionaryObject(COSName.PROPERTIES);
+                                    if (propsDict != null) {
+                                        org.apache.pdfbox.cos.COSDictionary mcDict =
+                                            (org.apache.pdfbox.cos.COSDictionary) propsDict.getDictionaryObject(propName);
+                                        if (mcDict != null && mcDict.containsKey(COSName.MCID)) {
+                                            mcid = mcDict.getInt(COSName.MCID);
+                                        }
                                     }
                                 }
                             }
                         }
+                        // ======= 性能调试结束 =======
                     } else if (properties instanceof org.apache.pdfbox.cos.COSDictionary) {
                         org.apache.pdfbox.cos.COSDictionary dict = (org.apache.pdfbox.cos.COSDictionary) properties;
                         if (dict.containsKey(COSName.MCID)) {
@@ -105,8 +127,15 @@ public class MCIDTextExtractor extends PDFStreamEngine {
                         }
                     }
                 }
-                // 压入MCID（如果没有找到MCID，压入-1保持栈平衡）
-                mcidStack.push(mcid != null ? mcid : -1);
+
+                if (USE_SIMPLE_TRACKING) {
+                    // 简单模式：直接设置当前MCID
+                    simpleCurrentMCID = mcid;
+                } else {
+                    // 栈模式：压入MCID
+                    mcidStack.push(mcid != null ? mcid : -1);
+                    cacheValid = false;
+                }
             }
         });
 
@@ -114,9 +143,15 @@ public class MCIDTextExtractor extends PDFStreamEngine {
             @Override
             public void process(Operator operator, List<COSBase> arguments) throws IOException {
                 super.process(operator, arguments);
-                // EMC 操作符，弹出当前层的MCID，恢复到父层
-                if (!mcidStack.isEmpty()) {
-                    mcidStack.pop();
+                if (USE_SIMPLE_TRACKING) {
+                    // 简单模式：清除当前MCID
+                    simpleCurrentMCID = null;
+                } else {
+                    // 栈模式：弹出当前层的MCID
+                    if (!mcidStack.isEmpty()) {
+                        mcidStack.pop();
+                    }
+                    cacheValid = false;
                 }
             }
         });
