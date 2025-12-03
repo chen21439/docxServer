@@ -7,6 +7,9 @@ import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDMarkedCo
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement;
 import org.apache.pdfbox.pdmodel.documentinterchange.markedcontent.PDMarkedContent;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.util.*;
 
@@ -20,6 +23,8 @@ import java.util.*;
  * 4. LBody 里的 L 作为子列表递归处理
  */
 public class PdfListParser {
+
+    private static final Logger log = LoggerFactory.getLogger(PdfListParser.class);
 
     private final PDDocument doc;
 
@@ -46,7 +51,8 @@ public class PdfListParser {
             return;
         }
 
-        System.out.println("[PdfListParser] 开始构建 MCID 文本映射...");
+        long startTime = System.currentTimeMillis();
+        log.info("开始构建 MCID 文本映射，共 {} 页...", doc.getNumberOfPages());
 
         for (int pageIndex = 0; pageIndex < doc.getNumberOfPages(); pageIndex++) {
             PDPage page = doc.getPage(pageIndex);
@@ -76,7 +82,8 @@ public class PdfListParser {
         }
 
         mapBuilt = true;
-        System.out.println("[PdfListParser] 构建 MCID 文本映射完成，共 " + mcidTextMap.size() + " 个条目");
+        long endTime = System.currentTimeMillis();
+        log.info("构建 MCID 文本映射完成，共 {} 个条目，耗时 {} ms", mcidTextMap.size(), (endTime - startTime));
     }
 
     /**
