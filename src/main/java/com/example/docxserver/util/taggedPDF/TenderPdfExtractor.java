@@ -6,6 +6,9 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FilenameFilter;
@@ -20,6 +23,8 @@ import java.util.*;
  * 调用 ParagraphMapperRefactored.extractPdfToXml() 提取表格和段落
  */
 public class TenderPdfExtractor {
+
+    private static final Logger log = LoggerFactory.getLogger(TenderPdfExtractor.class);
 
     // 配置：tender_ontology 上传目录（默认值，可通过命令行参数覆盖）
     public static String baseDir = "E:\\programFile\\AIProgram\\tender_ontology\\static\\upload\\25120110583313478093\\";
@@ -99,7 +104,7 @@ public class TenderPdfExtractor {
         // 输出目录自动使用PDF所在目录
         System.out.println("=== 从PDF独立提取表格结构到XML格式TXT（全量处理）===");
         ParagraphMapperRefactored.extractPdfToXml(taskId, pdfPath);
-
+        //ParagraphMapperRefactored.extractPdfToXml(taskId, "E:\\data\\docx_server\\d3b361d7ce9e42c8beeec5647d6c8261\\d3b361d7ce9e42c8beeec5647d6c8261.pdf");
         System.out.println();
         System.out.println("=== 提取完成 ===");
         System.out.println("输出目录: " + baseDir);
@@ -195,6 +200,9 @@ public class TenderPdfExtractor {
      * 2. 调用extractTextToIdMapFromDocx进行匹配验证
      */
     public static void compareDocxAndPdfParagraphs() throws Exception {
+        log.info("开始 compareDocxAndPdfParagraphs()");
+        long startTime = System.currentTimeMillis();
+
         // 查找DOCX文件
         File dir = new File(baseDir);
         File[] docxFiles = dir.listFiles(new FilenameFilter() {
@@ -205,15 +213,19 @@ public class TenderPdfExtractor {
         });
 
         if (docxFiles == null || docxFiles.length == 0) {
+            log.warn("未找到DOCX文件");
             System.err.println("未找到DOCX文件");
             return;
         }
 
         File docxFile = docxFiles[0];
         String docxTxtPath = baseDir + taskId + "_docx.txt";
+        log.info("使用DOCX文件: {}", docxFile.getName());
 
         // 调用带参数的重载方法
         compareDocxAndPdfParagraphs(docxFile, docxTxtPath, taskId);
+
+        log.info("完成 compareDocxAndPdfParagraphs(), 耗时: {} ms", System.currentTimeMillis() - startTime);
     }
 
     /**
@@ -224,14 +236,22 @@ public class TenderPdfExtractor {
      * @param currentTaskId 任务ID
      */
     public static void compareDocxAndPdfParagraphs(File docxFile, String docxTxtPath, String currentTaskId) throws Exception {
+        log.info("compareDocxAndPdfParagraphs 开始处理, docxFile={}", docxFile.getName());
+
         // 步骤1：将DOCX段落写入TXT
+        log.info("步骤1: 将DOCX段落写入TXT");
         System.out.println("=== 将DOCX段落写入TXT ===");
+        long step1Start = System.currentTimeMillis();
         int count = writeDocxParagraphsToTxt(docxFile, docxTxtPath);
+        log.info("步骤1完成: 写入 {} 个段落, 耗时: {} ms", count, System.currentTimeMillis() - step1Start);
         System.out.println("已写入 " + count + " 个段落到: " + docxTxtPath);
 
         // 步骤2：调用extractTextToIdMapFromDocx进行匹配验证
+        log.info("步骤2: 调用 extractTextToIdMapFromDocx 进行匹配验证");
         System.out.println("\n=== 调用匹配验证（表格外段落）===");
+        long step2Start = System.currentTimeMillis();
         ParagraphMapperRefactored.extractTextToIdMapFromDocx(docxTxtPath, currentTaskId);
+        log.info("步骤2完成: 匹配验证, 耗时: {} ms", System.currentTimeMillis() - step2Start);
     }
 
     /**
@@ -240,6 +260,9 @@ public class TenderPdfExtractor {
      * 2. 与PDF的_pdf.txt进行匹配验证
      */
     public static void compareDocxAndPdfTableParagraphs() throws Exception {
+        log.info("开始 compareDocxAndPdfTableParagraphs()");
+        long startTime = System.currentTimeMillis();
+
         // 查找DOCX文件
         File dir = new File(baseDir);
         File[] docxFiles = dir.listFiles(new FilenameFilter() {
@@ -250,12 +273,14 @@ public class TenderPdfExtractor {
         });
 
         if (docxFiles == null || docxFiles.length == 0) {
+            log.warn("未找到DOCX文件");
             System.err.println("未找到DOCX文件");
             return;
         }
 
         File docxFile = docxFiles[0];
         String docxTableTxtPath = baseDir + taskId + "_docx_table.txt";
+        log.info("使用DOCX文件: {}", docxFile.getName());
 
         // 查找最新的PDF表格文件
         final String currentTaskId = taskId;
@@ -269,6 +294,7 @@ public class TenderPdfExtractor {
         });
 
         if (pdfTableFiles == null || pdfTableFiles.length == 0) {
+            log.warn("未找到PDF表格文件: {}_pdf_*.txt", taskId);
             System.err.println("未找到PDF表格文件: " + taskId + "_pdf_*.txt");
             return;
         }
@@ -282,9 +308,12 @@ public class TenderPdfExtractor {
         });
 
         File pdfTableFile = pdfTableFiles[0];
+        log.info("使用PDF表格文件: {}", pdfTableFile.getName());
 
         // 调用带参数的重载方法
         compareDocxAndPdfTableParagraphs(docxFile, docxTableTxtPath, pdfTableFile);
+
+        log.info("完成 compareDocxAndPdfTableParagraphs(), 耗时: {} ms", System.currentTimeMillis() - startTime);
     }
 
     /**
@@ -295,16 +324,24 @@ public class TenderPdfExtractor {
      * @param pdfTableFile PDF表格TXT文件
      */
     public static void compareDocxAndPdfTableParagraphs(File docxFile, String docxTableTxtPath, File pdfTableFile) throws Exception {
+        log.info("compareDocxAndPdfTableParagraphs 开始处理, docxFile={}", docxFile.getName());
+
         // 步骤1：将DOCX表格段落写入TXT
+        log.info("步骤1: 将DOCX表格段落写入TXT");
         System.out.println("=== 将DOCX表格段落写入TXT ===");
+        long step1Start = System.currentTimeMillis();
         int count = writeDocxTableParagraphsToTxt(docxFile, docxTableTxtPath);
+        log.info("步骤1完成: 写入 {} 个表格段落, 耗时: {} ms", count, System.currentTimeMillis() - step1Start);
         System.out.println("已写入 " + count + " 个表格段落到: " + docxTableTxtPath);
 
         System.out.println("PDF表格文件: " + pdfTableFile.getName());
 
         // 步骤2：进行匹配验证
+        log.info("步骤2: 调用 compareTableFiles 进行匹配验证");
         System.out.println("\n=== 调用匹配验证（表格段落）===");
+        long step2Start = System.currentTimeMillis();
         compareTableFiles(docxTableTxtPath, pdfTableFile.getAbsolutePath());
+        log.info("步骤2完成: 匹配验证, 耗时: {} ms", System.currentTimeMillis() - step2Start);
     }
 
     /**

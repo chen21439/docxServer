@@ -152,9 +152,25 @@ public class PdfTableExtractor {
             log.info("第二遍：提取表格和段落...");
             long pass2Start = System.currentTimeMillis();
             Counter tableCounter = new Counter();
+            int rootKidIndex = 0;
+            int totalRootKids = structTreeRoot.getKids().size();
+            long lastLogTime = System.currentTimeMillis();
             for (Object kid : structTreeRoot.getKids()) {
                 if (kid instanceof PDStructureElement) {
                     PDStructureElement element = (PDStructureElement) kid;
+                    rootKidIndex++;
+
+                    // 每30秒或处理了一个Table/重要元素时打印进度
+                    long now = System.currentTimeMillis();
+                    String structType = element.getStructureType();
+                    if (now - lastLogTime > 30000 || "Table".equalsIgnoreCase(structType)) {
+                        log.info("第二遍进度: {}/{} ({}), 已提取表格:{}, 段落:{}, 耗时:{}ms",
+                            rootKidIndex, totalRootKids, structType,
+                            tableCounter.tableIndex, tableCounter.paragraphIndex,
+                            now - pass2Start);
+                        lastLogTime = now;
+                    }
+
                     extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid);
                 }
             }
@@ -418,10 +434,16 @@ public class PdfTableExtractor {
 
         String structType = element.getStructureType();
 
+        // 每10秒打印一次进度
+        tableCounter.logProgressIfNeeded(structType);
+
         // 如果是Table元素
         if ("Table".equalsIgnoreCase(structType)) {
             int tableIndex = tableCounter.tableIndex++;
             String tableId = IdUtils.formatTableId(tableIndex);
+            // Table 开始时强制打印进度并重置行计数
+            tableCounter.logProgress("Table-Start " + tableId);
+            tableCounter.startTable(tableId);
 
             // 收集整个表格的所有TextPosition（用于计算表格整体bbox，按页分组）
             Map<PDPage, List<TextPosition>> tablePositionsByPage = new HashMap<>();
@@ -525,15 +547,20 @@ public class PdfTableExtractor {
                                     tableContent.append("</").append(tagName).append(">\n");
 
                                     colIndex++;
+                                    tableCounter.incrementCell();
                                 }
                             }
                         }
 
                         tableContent.append("  </tr>\n");
                         rowIndex++;
+                        tableCounter.incrementRow(tableId);
                     }
                 }
             }
+
+            // 表格处理完成
+            tableCounter.finishTable(tableId);
 
             // 构建表格开始标签（带page和bbox属性）
             tableOutput.append("<table id=\"").append(tableId).append("\" type=\"Table\"");

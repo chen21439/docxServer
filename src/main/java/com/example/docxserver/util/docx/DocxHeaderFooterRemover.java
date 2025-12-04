@@ -1,6 +1,8 @@
 package com.example.docxserver.util.docx;
 
 import org.apache.poi.xwpf.usermodel.*;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTSectPr;
 
 import java.io.*;
@@ -8,7 +10,7 @@ import java.util.List;
 
 /**
  * DOCX 页眉页脚页码移除工具
- * 在转换PDF前移除页眉页脚，避免干扰结构解析
+ * 在转换PDF前移除页眉页脚和批注，避免干扰结构解析
  */
 public class DocxHeaderFooterRemover {
 
@@ -33,6 +35,9 @@ public class DocxHeaderFooterRemover {
 
             // 移除所有页脚
             removeFooters(document);
+
+            // 移除所有批注
+            removeComments(document);
 
             // 保存修改后的文档（覆盖原文件）
             try (FileOutputStream fos = new FileOutputStream(file)) {
@@ -63,6 +68,9 @@ public class DocxHeaderFooterRemover {
 
             // 移除所有页脚
             removeFooters(document);
+
+            // 移除所有批注
+            removeComments(document);
 
             // 保存到新文件
             try (FileOutputStream fos = new FileOutputStream(outputPath)) {
@@ -223,5 +231,103 @@ public class DocxHeaderFooterRemover {
         }
 
         return false;
+    }
+
+    /**
+     * 移除文档中的所有批注
+     * 包括：
+     * 1. 段落级别的批注标记（commentRangeStart, commentRangeEnd, commentReference）
+     * 2. comments.xml 中的批注定义
+     */
+    private static void removeComments(XWPFDocument document) {
+        // 1. 移除文档主体中的批注标记
+        for (IBodyElement bodyElement : document.getBodyElements()) {
+            if (bodyElement instanceof XWPFParagraph) {
+                removeCommentMarksFromParagraph((XWPFParagraph) bodyElement);
+            } else if (bodyElement instanceof XWPFTable) {
+                removeCommentMarksFromTable((XWPFTable) bodyElement);
+            }
+        }
+
+        // 2. 移除页眉中的批注标记
+        for (XWPFHeader header : document.getHeaderList()) {
+            for (IBodyElement bodyElement : header.getBodyElements()) {
+                if (bodyElement instanceof XWPFParagraph) {
+                    removeCommentMarksFromParagraph((XWPFParagraph) bodyElement);
+                } else if (bodyElement instanceof XWPFTable) {
+                    removeCommentMarksFromTable((XWPFTable) bodyElement);
+                }
+            }
+        }
+
+        // 3. 移除页脚中的批注标记
+        for (XWPFFooter footer : document.getFooterList()) {
+            for (IBodyElement bodyElement : footer.getBodyElements()) {
+                if (bodyElement instanceof XWPFParagraph) {
+                    removeCommentMarksFromParagraph((XWPFParagraph) bodyElement);
+                } else if (bodyElement instanceof XWPFTable) {
+                    removeCommentMarksFromTable((XWPFTable) bodyElement);
+                }
+            }
+        }
+
+        // 4. 清空 comments.xml 中的批注定义
+        XWPFComments comments = document.getDocComments();
+        if (comments != null) {
+            // 获取所有批注并逐个删除（POI 5.x 返回 List）
+            List<XWPFComment> allComments = comments.getComments();
+            if (allComments != null) {
+                for (int i = allComments.size() - 1; i >= 0; i--) {
+                    comments.removeComment(i);
+                }
+            }
+        }
+    }
+
+    /**
+     * 从段落中移除批注标记
+     */
+    private static void removeCommentMarksFromParagraph(XWPFParagraph paragraph) {
+        CTP ctp = paragraph.getCTP();
+
+        // 移除段落级别的批注标记
+        // commentRangeStart
+        while (ctp.sizeOfCommentRangeStartArray() > 0) {
+            ctp.removeCommentRangeStart(0);
+        }
+        // commentRangeEnd
+        while (ctp.sizeOfCommentRangeEndArray() > 0) {
+            ctp.removeCommentRangeEnd(0);
+        }
+
+        // 遍历所有 run，移除 run 级别的批注标记
+        List<XWPFRun> runs = paragraph.getRuns();
+        if (runs != null) {
+            for (XWPFRun run : runs) {
+                CTR ctr = run.getCTR();
+                // commentReference - 批注引用标记
+                while (ctr.sizeOfCommentReferenceArray() > 0) {
+                    ctr.removeCommentReference(0);
+                }
+            }
+        }
+    }
+
+    /**
+     * 从表格中移除批注标记（递归处理嵌套表格）
+     */
+    private static void removeCommentMarksFromTable(XWPFTable table) {
+        for (XWPFTableRow row : table.getRows()) {
+            for (XWPFTableCell cell : row.getTableCells()) {
+                for (IBodyElement bodyElement : cell.getBodyElements()) {
+                    if (bodyElement instanceof XWPFParagraph) {
+                        removeCommentMarksFromParagraph((XWPFParagraph) bodyElement);
+                    } else if (bodyElement instanceof XWPFTable) {
+                        // 递归处理嵌套表格
+                        removeCommentMarksFromTable((XWPFTable) bodyElement);
+                    }
+                }
+            }
+        }
     }
 }
