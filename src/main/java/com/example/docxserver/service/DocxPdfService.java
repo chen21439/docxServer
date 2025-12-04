@@ -3,6 +3,9 @@ package com.example.docxserver.service;
 import com.example.docxserver.util.AsposeCloudConverter;
 import com.example.docxserver.util.docx.DocxHeaderFooterRemover;
 import com.example.docxserver.util.taggedPDF.PdfTableExtractor;
+import com.example.docxserver.util.tagged.PdfTextMatcher;
+import com.example.docxserver.util.tagged.dto.MatchRequest;
+import com.example.docxserver.util.tagged.dto.MatchResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -331,7 +334,14 @@ public class DocxPdfService {
         statusData.put("updateTime", System.currentTimeMillis());
 
         if (extra != null) {
-            statusData.putAll(extra);
+            // 过滤掉不需要暴露的路径字段
+            for (Map.Entry<String, Object> entry : extra.entrySet()) {
+                String key = entry.getKey();
+                // 排除路径相关字段
+                if (!"pdfPath".equals(key) && !"txtPath".equals(key) && !"paragraphTxtPath".equals(key)) {
+                    statusData.put(key, entry.getValue());
+                }
+            }
         }
 
         try {
@@ -397,4 +407,35 @@ public class DocxPdfService {
         return result;
     }
 
+    /**
+     * 匹配段落：根据用户提供的 [{pid, txt}] 数组查找 PDF 中的 page 和 bbox
+     *
+     * @param request 匹配请求（包含 taskId 和段落列表）
+     * @return 匹配响应（包含 page, bbox, matchType 等）
+     * @throws IOException 文件读取异常
+     */
+    public MatchResponse matchParagraphs(MatchRequest request) throws IOException {
+        String taskId = request.getTaskId();
+        String taskDir = getTaskDir(taskId);
+
+        // 验证任务目录存在
+        File taskDirFile = new File(taskDir);
+        if (!taskDirFile.exists() || !taskDirFile.isDirectory()) {
+            throw new IOException("任务不存在: " + taskId);
+        }
+
+        log.info("[taskId: {}] 开始匹配段落，共 {} 个", taskId,
+                request.getParagraphs() != null ? request.getParagraphs().size() : 0);
+
+        // 调用匹配器
+        MatchResponse response = PdfTextMatcher.matchWithResponse(request, taskDir + File.separator);
+
+        log.info("[taskId: {}] 匹配完成，匹配率: {}% ({}/{})",
+                taskId,
+                String.format("%.1f", response.getStatistics().getMatchRate()),
+                response.getStatistics().getFoundCount(),
+                response.getStatistics().getTotal());
+
+        return response;
+    }
 }

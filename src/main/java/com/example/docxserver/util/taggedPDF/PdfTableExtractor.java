@@ -182,31 +182,88 @@ public class PdfTableExtractor {
     }
 
     /**
-     * 生成聚合文件内容（合并表格和段落，按page和bbox排序，不包含mcid）
+     * 生成聚合文件内容
+     *
+     * 逻辑：以段落文件为基础，根据表格的page和bbox找到合适位置插入表格
+     *
+     * 1. 解析段落文件，保持原有顺序
+     * 2. 解析表格文件，提取每个表格的page和bbox
+     * 3. 遍历段落，找到第一个"page更大"或"同page但Y更大"的段落位置，在其前面插入表格
+     * 4. 如果没有找到合适位置，表格追加到末尾
      *
      * @param tableContent 表格XML内容
      * @param paragraphContent 段落XML内容
      * @return 聚合后的XML内容
      */
     private static String generateMergedContent(String tableContent, String paragraphContent) {
-        List<MergedElement> elements = new ArrayList<>();
+        // 1. 解析段落（保持原有顺序）
+        List<MergedElement> paragraphs = new ArrayList<>();
+        parseParagraphElements(paragraphContent, paragraphs);
 
-        // 解析表格内容（每个<table>...</table>作为一个元素）
-        parseTableElements(tableContent, elements);
+        // 2. 解析表格
+        List<MergedElement> tables = new ArrayList<>();
+        parseTableElements(tableContent, tables);
 
-        // 解析段落内容（每个<p>...</p>作为一个元素）
-        parseParagraphElements(paragraphContent, elements);
+        // 3. 按表格的page和bbox排序（确保表格按顺序插入）
+        Collections.sort(tables);
 
-        // 按page和bbox排序
-        Collections.sort(elements);
+        // 4. 将表格插入到段落列表的合适位置
+        for (MergedElement table : tables) {
+            int insertIndex = findInsertPosition(paragraphs, table);
+            paragraphs.add(insertIndex, table);
+        }
 
-        // 生成输出
+        // 5. 生成输出
         StringBuilder result = new StringBuilder();
-        for (MergedElement element : elements) {
+        for (MergedElement element : paragraphs) {
             result.append(element.getContent());
         }
 
         return result.toString();
+    }
+
+    /**
+     * 找到表格在段落列表中的插入位置
+     *
+     * 规则（左下坐标系：Y值越大越靠上）：
+     * 1. 找到最后一个"在表格之前或同位置"的元素（同页且Y>=表格Y，或页码<表格页）
+     * 2. 在该元素之后插入表格
+     *
+     * 这样可以确保表格插入到正确的位置，即使段落顺序不是严格从上到下
+     *
+     * @param paragraphs 段落列表（已包含之前插入的表格）
+     * @param table 要插入的表格
+     * @return 插入位置索引
+     */
+    private static int findInsertPosition(List<MergedElement> paragraphs, MergedElement table) {
+        int tablePage = table.getFirstPage();
+        double tableY = table.getFirstBboxY();
+
+        // 找到最后一个"在表格之前或同位置"的元素
+        int lastBeforeIndex = -1;
+
+        for (int i = 0; i < paragraphs.size(); i++) {
+            MergedElement para = paragraphs.get(i);
+            int paraPage = para.getFirstPage();
+            double paraY = para.getFirstBboxY();
+
+            // 判断段落是否在表格之前或同位置（左下坐标系：Y越大越靠上）
+            boolean isBeforeOrSame = false;
+            if (paraPage < tablePage) {
+                // 段落页码更小，在表格之前
+                isBeforeOrSame = true;
+            } else if (paraPage == tablePage && paraY >= tableY) {
+                // 同一页，段落Y坐标更大或相等（更靠上或同位置），在表格之前
+                isBeforeOrSame = true;
+            }
+
+            if (isBeforeOrSame) {
+                lastBeforeIndex = i;
+            }
+        }
+
+        // 在最后一个"之前"元素的后面插入
+        return lastBeforeIndex + 1;
     }
 
     /**
@@ -437,13 +494,19 @@ public class PdfTableExtractor {
                                     tableContent.append("    <").append(tagName).append(">");
                                     tableContent.append("<p id=\"").append(cellId).append("\"");
 
+                                    // 获取MCID和页码信息
+                                    McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(cellMcidsByPage, doc);
+
                                     // 可选：添加MCID属性
                                     if (includeMcid) {
-                                        McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(cellMcidsByPage, doc);
                                         if (mcidPageInfo.mcidStr != null && !mcidPageInfo.mcidStr.isEmpty()) {
                                             tableContent.append(" mcid=\"").append(TextUtils.escapeHtml(mcidPageInfo.mcidStr)).append("\"");
-                                            tableContent.append(" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
                                         }
+                                    }
+
+                                    // 始终添加page属性（聚合文件需要）
+                                    if (mcidPageInfo.pageStr != null && !mcidPageInfo.pageStr.isEmpty()) {
+                                        tableContent.append(" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
                                     }
 
                                     // 计算单元格bbox（按页分组）

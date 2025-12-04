@@ -18,7 +18,7 @@ public class MergedElement implements Comparable<MergedElement> {
     private String pageStr;      // 页码字符串（如 "5" 或 "16|17"）
     private String bboxStr;      // bbox字符串（如 "89.85,77.43,494.94,769.84" 或带|的跨页格式）
     private int firstPage;       // 第一页的页码（用于排序）
-    private double firstBboxY;   // 第一页bbox的Y坐标（用于排序，取minY）
+    private double firstBboxY;   // 第一页bbox的Y坐标（用于排序，取maxY，左下坐标系中maxY是元素顶部）
 
     public MergedElement(ElementType type, String content, String pageStr, String bboxStr) {
         this.type = type;
@@ -52,28 +52,33 @@ public class MergedElement implements Comparable<MergedElement> {
     }
 
     /**
-     * 解析第一页bbox的Y坐标（minY，用于从上到下排序）
+     * 解析第一页bbox的Y坐标（maxY，用于从上到下排序）
+     *
+     * 左下坐标系：Y值越大越靠近页面顶部
+     * bbox格式: x0,y0,x1,y1 其中 y1 是 maxY（元素顶部）
      */
     private double parseFirstBboxY(String bboxStr) {
         if (bboxStr == null || bboxStr.isEmpty()) {
-            return Double.MAX_VALUE;
+            return -Double.MAX_VALUE;  // 没有bbox的元素排到最后
         }
         try {
             // 取第一个bbox（可能是单个或用|分隔的跨页格式）
             String firstBbox = bboxStr.split("\\|")[0].trim();
             // bbox格式: x0,y0,x1,y1
             String[] parts = firstBbox.split(",");
-            if (parts.length >= 2) {
-                return Double.parseDouble(parts[1].trim()); // y0 (minY)
+            if (parts.length >= 4) {
+                return Double.parseDouble(parts[3].trim()); // y1 (maxY，元素顶部)
             }
         } catch (NumberFormatException e) {
             // 忽略解析错误
         }
-        return Double.MAX_VALUE;
+        return -Double.MAX_VALUE;
     }
 
     /**
      * 比较方法：先按页码排序，再按Y坐标排序（从上到下）
+     *
+     * 左下坐标系：Y值越大越靠上，所以排序时Y值大的在前
      */
     @Override
     public int compareTo(MergedElement other) {
@@ -83,8 +88,8 @@ public class MergedElement implements Comparable<MergedElement> {
             return pageCompare;
         }
 
-        // 2. 同一页内按Y坐标排序（minY越小越靠上）
-        return Double.compare(this.firstBboxY, other.firstBboxY);
+        // 2. 同一页内按Y坐标排序（左下坐标系：maxY越大越靠上，所以降序）
+        return Double.compare(other.firstBboxY, this.firstBboxY);
     }
 
     // Getters

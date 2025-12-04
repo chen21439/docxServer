@@ -21,12 +21,24 @@ import java.util.*;
  */
 public class TenderPdfExtractor {
 
-    // 配置：tender_ontology 上传目录
+    // 配置：tender_ontology 上传目录（默认值，可通过命令行参数覆盖）
     public static String baseDir = "E:\\programFile\\AIProgram\\tender_ontology\\static\\upload\\25120110583313478093\\";
     public static String taskId = "25120110583313478093";
 
-    public static void main(String[] args) throws Exception {
+    // tender_ontology 上传目录的基础路径
+    private static final String UPLOAD_BASE_PATH = "E:\\programFile\\AIProgram\\tender_ontology\\static\\upload\\";
 
+    public static void main(String[] args) throws Exception {
+        // 支持通过命令行参数传入 taskId
+        // 用法: java TenderPdfExtractor <taskId>
+        if (args.length > 0 && args[0] != null && !args[0].trim().isEmpty()) {
+            taskId = args[0].trim();
+            baseDir = UPLOAD_BASE_PATH + taskId + "\\";
+            System.out.println("=== 使用命令行参数 ===");
+            System.out.println("taskId: " + taskId);
+            System.out.println("baseDir: " + baseDir);
+            System.out.println();
+        }
 
         // 查找目录中的PDF文件
         File dir = new File(baseDir);
@@ -200,6 +212,18 @@ public class TenderPdfExtractor {
         File docxFile = docxFiles[0];
         String docxTxtPath = baseDir + taskId + "_docx.txt";
 
+        // 调用带参数的重载方法
+        compareDocxAndPdfParagraphs(docxFile, docxTxtPath, taskId);
+    }
+
+    /**
+     * 比较DOCX和PDF的段落（表格外段落）- 带参数版本
+     *
+     * @param docxFile DOCX文件
+     * @param docxTxtPath 输出的DOCX段落TXT文件路径
+     * @param currentTaskId 任务ID
+     */
+    public static void compareDocxAndPdfParagraphs(File docxFile, String docxTxtPath, String currentTaskId) throws Exception {
         // 步骤1：将DOCX段落写入TXT
         System.out.println("=== 将DOCX段落写入TXT ===");
         int count = writeDocxParagraphsToTxt(docxFile, docxTxtPath);
@@ -207,7 +231,7 @@ public class TenderPdfExtractor {
 
         // 步骤2：调用extractTextToIdMapFromDocx进行匹配验证
         System.out.println("\n=== 调用匹配验证（表格外段落）===");
-        ParagraphMapperRefactored.extractTextToIdMapFromDocx(docxTxtPath, taskId);
+        ParagraphMapperRefactored.extractTextToIdMapFromDocx(docxTxtPath, currentTaskId);
     }
 
     /**
@@ -233,16 +257,12 @@ public class TenderPdfExtractor {
         File docxFile = docxFiles[0];
         String docxTableTxtPath = baseDir + taskId + "_docx_table.txt";
 
-        // 步骤1：将DOCX表格段落写入TXT
-        System.out.println("=== 将DOCX表格段落写入TXT ===");
-        int count = writeDocxTableParagraphsToTxt(docxFile, docxTableTxtPath);
-        System.out.println("已写入 " + count + " 个表格段落到: " + docxTableTxtPath);
-
-        // 步骤2：查找最新的PDF表格文件
+        // 查找最新的PDF表格文件
+        final String currentTaskId = taskId;
         File[] pdfTableFiles = dir.listFiles(new FilenameFilter() {
             @Override
             public boolean accept(File d, String name) {
-                return name.startsWith(taskId + "_pdf_") &&
+                return name.startsWith(currentTaskId + "_pdf_") &&
                        name.endsWith(".txt") &&
                        !name.contains("paragraph");
             }
@@ -262,9 +282,27 @@ public class TenderPdfExtractor {
         });
 
         File pdfTableFile = pdfTableFiles[0];
+
+        // 调用带参数的重载方法
+        compareDocxAndPdfTableParagraphs(docxFile, docxTableTxtPath, pdfTableFile);
+    }
+
+    /**
+     * 比较DOCX和PDF的表格段落 - 带参数版本
+     *
+     * @param docxFile DOCX文件
+     * @param docxTableTxtPath 输出的DOCX表格段落TXT文件路径
+     * @param pdfTableFile PDF表格TXT文件
+     */
+    public static void compareDocxAndPdfTableParagraphs(File docxFile, String docxTableTxtPath, File pdfTableFile) throws Exception {
+        // 步骤1：将DOCX表格段落写入TXT
+        System.out.println("=== 将DOCX表格段落写入TXT ===");
+        int count = writeDocxTableParagraphsToTxt(docxFile, docxTableTxtPath);
+        System.out.println("已写入 " + count + " 个表格段落到: " + docxTableTxtPath);
+
         System.out.println("PDF表格文件: " + pdfTableFile.getName());
 
-        // 步骤3：进行匹配验证
+        // 步骤2：进行匹配验证
         System.out.println("\n=== 调用匹配验证（表格段落）===");
         compareTableFiles(docxTableTxtPath, pdfTableFile.getAbsolutePath());
     }
