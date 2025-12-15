@@ -155,6 +155,14 @@ public class PdfTableExtractor {
             int rootKidIndex = 0;
             int totalRootKids = structTreeRoot.getKids().size();
             long lastLogTime = System.currentTimeMillis();
+
+            // 创建页面MCID缓存（核心优化：每页只解析一次）
+            PageMcidCache mcidCache = new PageMcidCache(doc);
+
+            // 预热：一次性解析所有页面的 MCID（单线程，~2-3秒/100页）
+            // 预热后，后续处理时缓存就是纯只读，适合并发
+            mcidCache.preloadAllPages();
+
             for (Object kid : structTreeRoot.getKids()) {
                 if (kid instanceof PDStructureElement) {
                     PDStructureElement element = (PDStructureElement) kid;
@@ -171,11 +179,13 @@ public class PdfTableExtractor {
                         lastLogTime = now;
                     }
 
-                    extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid);
+                    extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid, mcidCache);
                 }
             }
             long pass2End = System.currentTimeMillis();
 
+            // 打印缓存统计
+            log.info(mcidCache.getStats());
             log.info("共提取 {} 个表格, {} 个段落，第二遍耗时: {} ms",
                     tableCounter.tableIndex, tableCounter.paragraphIndex, (pass2End - pass2Start));
         } finally {
@@ -395,22 +405,14 @@ public class PdfTableExtractor {
             Counter tableCounter,
             PDDocument doc,
             Map<PDPage, Set<Integer>> tableMCIDsByPage) throws IOException {
-        extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, null, null, true);
+        // 注意：此重载方法不使用缓存，仅用于向后兼容
+        // 新代码应使用带 mcidCache 参数的版本
+        extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, null, null, true, null);
     }
 
     /**
-     * 从结构元素中递归提取表格（支持页面过滤和MCID控制）
-     *
-     * @param element 当前结构元素
-     * @param tableOutput 表格输出缓冲区
-     * @param paragraphOutput 段落输出缓冲区
-     * @param tableCounter 表格计数器
-     * @param doc PDF文档对象
-     * @param tableMCIDsByPage 表格MCID按页分桶的映射
-     * @param targetPage 目标页面（null表示所有页面）
-     * @param structTreeRoot 结构树根节点（用于判断是否是root的直接子元素）
-     * @param includeMcid 是否在输出中包含MCID和page属性
-     * @throws IOException 文件读取或文本提取异常
+     * 从结构元素中递归提取表格（支持页面过滤和MCID控制，不使用缓存）
+     * 注意：此方法不使用缓存，仅用于向后兼容
      */
     private static void extractTablesFromElement(
             PDStructureElement element,
@@ -422,6 +424,35 @@ public class PdfTableExtractor {
             PDPage targetPage,
             PDStructureTreeRoot structTreeRoot,
             boolean includeMcid) throws IOException {
+        extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid, null);
+    }
+
+    /**
+     * 从结构元素中递归提取表格（支持页面过滤和MCID控制，使用缓存优化）
+     *
+     * @param element 当前结构元素
+     * @param tableOutput 表格输出缓冲区
+     * @param paragraphOutput 段落输出缓冲区
+     * @param tableCounter 表格计数器
+     * @param doc PDF文档对象
+     * @param tableMCIDsByPage 表格MCID按页分桶的映射
+     * @param targetPage 目标页面（null表示所有页面）
+     * @param structTreeRoot 结构树根节点（用于判断是否是root的直接子元素）
+     * @param includeMcid 是否在输出中包含MCID和page属性
+     * @param mcidCache 页面MCID缓存（核心优化：每页只解析一次）
+     * @throws IOException 文件读取或文本提取异常
+     */
+    private static void extractTablesFromElement(
+            PDStructureElement element,
+            StringBuilder tableOutput,
+            StringBuilder paragraphOutput,
+            Counter tableCounter,
+            PDDocument doc,
+            Map<PDPage, Set<Integer>> tableMCIDsByPage,
+            PDPage targetPage,
+            PDStructureTreeRoot structTreeRoot,
+            boolean includeMcid,
+            PageMcidCache mcidCache) throws IOException {
 
         // 页面过滤：如果指定了目标页面，检查当前元素是否属于该页
         if (targetPage != null) {
@@ -474,8 +505,8 @@ public class PdfTableExtractor {
                                 if ("TD".equalsIgnoreCase(cellType) || "TH".equalsIgnoreCase(cellType)) {
                                     String cellId = rowId + "-c" + String.format("%03d", colIndex + 1) + "-p001";
 
-                                    // 提取单元格文本
-                                    TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(cellElement, doc);
+                                    // 提取单元格文本（使用缓存优化版）
+                                    TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(cellElement, doc, mcidCache);
                                     String cellText = textWithPositions.getText();
                                     cellText = TextUtils.removeZeroWidthChars(cellText);
 
@@ -634,8 +665,8 @@ public class PdfTableExtractor {
                     return;
                 }
 
-                // 提取元素文本和TextPosition（用于计算bbox）
-                TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(element, doc);
+                // 提取元素文本和TextPosition（用于计算bbox，使用缓存优化版）
+                TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(element, doc, mcidCache);
                 String paraText = textWithPositions.getText();
                 // 去除零宽字符（保留换行、空格、标点等）
                 paraText = TextUtils.removeZeroWidthChars(paraText);
@@ -681,7 +712,7 @@ public class PdfTableExtractor {
         for (Object kid : element.getKids()) {
             if (kid instanceof PDStructureElement) {
                 PDStructureElement childElement = (PDStructureElement) kid;
-                extractTablesFromElement(childElement, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid);
+                extractTablesFromElement(childElement, tableOutput, paragraphOutput, tableCounter, doc, tableMCIDsByPage, targetPage, structTreeRoot, includeMcid, mcidCache);
             }
         }
     }

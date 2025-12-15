@@ -113,11 +113,44 @@
         </dependency>
     </dependencies>
 
+    <!-- 本地 JAR 依赖（按文件是否存在自动激活） -->
+    <profiles>
+        <profile>
+            <id>aspose-words-local</id>
+
+            <!-- 只有当 lib/aspose-words-24.7-jdk17.jar 存在时才激活 -->
+            <activation>
+                <file>
+                    <exists>${basedir}/lib/aspose-words-24.7-jdk17.jar</exists>
+                </file>
+            </activation>
+
+            <!-- 版本集中管理 -->
+            <properties>
+                <aspose-words.version>24.7</aspose-words.version>
+            </properties>
+
+            <dependencies>
+                <dependency>
+                    <groupId>com.aspose</groupId>
+                    <artifactId>aspose-words</artifactId>
+                    <version>${aspose-words.version}</version>
+                    <scope>system</scope>
+                    <systemPath>${project.basedir}/lib/aspose-words-24.7-jdk17.jar</systemPath>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>
+
     <build>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <!-- 打包时包含 system scope 依赖 -->
+                    <includeSystemScope>true</includeSystemScope>
+                </configuration>
             </plugin>
         </plugins>
     </build>

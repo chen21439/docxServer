@@ -13,8 +13,110 @@ import java.util.*;
 /**
  * PDF文本提取器
  * 负责从PDF结构元素中提取文本内容
+ *
+ * 优化版本支持页面级MCID缓存，避免重复解析页面内容流
  */
 public class PdfTextExtractor {
+
+    /**
+     * 从结构元素中提取文本及其TextPosition列表（使用缓存优化版）
+     *
+     * 核心优化：
+     * 1. 使用 PageMcidCache 缓存已解析页面的 MCID → 文本映射
+     * 2. 每个页面只解析一次，后续请求直接从缓存获取
+     * 3. 性能提升：从 O(单元格数 × 页数) 降低到 O(页数)
+     *
+     * @param element 结构元素
+     * @param doc PDF文档
+     * @param cache 页面MCID缓存（按需解析并缓存）
+     * @return TextWithPositions对象（包含文本和TextPosition列表）
+     * @throws IOException IO异常
+     */
+    public static TextWithPositions extractTextWithPositions(
+            PDStructureElement element,
+            PDDocument doc,
+            PageMcidCache cache) throws IOException {
+
+        // 如果没有提供缓存，回退到原来的非缓存版本
+        if (cache == null) {
+            return extractTextWithPositions(element, doc);
+        }
+
+        // 1. 优先使用 /ActualText
+        String actualText = element.getActualText();
+        if (actualText != null && !actualText.isEmpty()) {
+            return new TextWithPositions(actualText, new ArrayList<TextPosition>());
+        }
+
+        // 2. 收集该元素后代的MCID，按页分桶
+        Map<PDPage, Set<Integer>> mcidsByPage = McidCollector.collectMcidsByPage(element, doc, false);
+
+        if (mcidsByPage.isEmpty()) {
+            // 没有MCID，尝试递归提取子元素的ActualText
+            String text = extractTextFromChildrenActualText(element);
+            return new TextWithPositions(text, new ArrayList<TextPosition>());
+        }
+
+        // 3. 从缓存获取文本和位置（只遍历涉及的页面，不遍历所有页面）
+        StringBuilder resultText = new StringBuilder();
+        List<TextPosition> allPositions = new ArrayList<>();
+        Map<PDPage, List<TextPosition>> positionsByPage = new HashMap<>();
+
+        try {
+            // 只遍历该单元格涉及的页面（而不是所有184页）
+            // 按页码排序以保持文本顺序
+            List<PDPage> involvedPages = new ArrayList<>(mcidsByPage.keySet());
+            involvedPages.sort((a, b) -> {
+                int pageA = doc.getPages().indexOf(a);
+                int pageB = doc.getPages().indexOf(b);
+                return Integer.compare(pageA, pageB);
+            });
+
+            for (PDPage page : involvedPages) {
+                Set<Integer> mcids = mcidsByPage.get(page);
+
+                if (mcids != null && !mcids.isEmpty()) {
+                    // 从缓存批量获取该页的MCID文本（O(1) 查找）
+                    Map<Integer, PageMcidCache.McidTextInfo> mcidInfos = cache.getAll(page, mcids);
+
+                    // 按MCID顺序拼接文本（保持稳定的顺序）
+                    List<Integer> sortedMcids = new ArrayList<>(mcids);
+                    Collections.sort(sortedMcids);
+
+                    List<TextPosition> pagePositions = new ArrayList<>();
+                    StringBuilder pageText = new StringBuilder();
+
+                    for (Integer mcid : sortedMcids) {
+                        PageMcidCache.McidTextInfo info = mcidInfos.get(mcid);
+                        if (info != null) {
+                            pageText.append(info.getText());
+                            pagePositions.addAll(info.getPositions());
+                        }
+                    }
+
+                    String pageTextStr = pageText.toString().trim();
+                    if (!pageTextStr.isEmpty()) {
+                        if (resultText.length() > 0) {
+                            resultText.append(" ");
+                        }
+                        resultText.append(pageTextStr);
+                    }
+
+                    // 收集位置信息
+                    allPositions.addAll(pagePositions);
+                    if (!pagePositions.isEmpty()) {
+                        positionsByPage.put(page, new ArrayList<>(pagePositions));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("      [错误] MCID文本提取失败(缓存版): " + e.getMessage());
+            e.printStackTrace();
+            return new TextWithPositions("", new ArrayList<TextPosition>());
+        }
+
+        return new TextWithPositions(resultText.toString().trim(), allPositions, positionsByPage);
+    }
 
     /**
      * 从结构元素中提取文本（使用MCID按页分桶的方法）

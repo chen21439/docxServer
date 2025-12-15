@@ -7,10 +7,12 @@ import com.example.docxserver.util.tagged.PdfTextMatcher;
 import com.example.docxserver.util.tagged.dto.MatchRequest;
 import com.example.docxserver.util.tagged.dto.MatchResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import javax.annotation.PostConstruct;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -30,11 +32,23 @@ import java.util.concurrent.CompletableFuture;
 public class DocxPdfService {
 
     /**
-     * 数据存储基础目录
-     * - Linux: /data/docx_server
-     * - Windows: 自动解析为当前盘符，如 E:\data\docx_server
+     * 数据存储基础目录（从配置文件读取）
+     * - dev环境: /data/docx_server
+     * - test环境: /data/LLM_group/ontology/java/document
      */
-    private static final String BASE_PATH = "/data/docx_server";
+    @Value("${docx.storage.base-path:/data/docx_server}")
+    private String basePath;
+
+    @PostConstruct
+    public void init() {
+        log.info("文档存储基础目录: {}", basePath);
+        // 确保基础目录存在
+        File baseDir = new File(basePath);
+        if (!baseDir.exists()) {
+            boolean created = baseDir.mkdirs();
+            log.info("创建基础目录: {}, 结果: {}", basePath, created);
+        }
+    }
 
     /**
      * 上传并保存DOCX文件
@@ -50,7 +64,7 @@ public class DocxPdfService {
         String taskId = UUID.randomUUID().toString().replace("-", "");
 
         // 创建任务目录
-        File taskDir = new File(BASE_PATH, taskId);
+        File taskDir = new File(basePath, taskId);
         if (!taskDir.exists()) {
             boolean created = taskDir.mkdirs();
             log.info("创建任务目录: {}, 结果: {}", taskDir.getAbsolutePath(), created);
@@ -299,7 +313,7 @@ public class DocxPdfService {
      * 根据taskId获取任务目录
      */
     public String getTaskDir(String taskId) {
-        return new File(BASE_PATH, taskId).getAbsolutePath();
+        return new File(basePath, taskId).getAbsolutePath();
     }
 
     /**
@@ -324,7 +338,7 @@ public class DocxPdfService {
      * @param extra 额外信息（可选）
      */
     public void updateTaskStatus(String taskId, String status, String message, Map<String, Object> extra) {
-        File taskDir = new File(BASE_PATH, taskId);
+        File taskDir = new File(basePath, taskId);
         File statusFile = new File(taskDir, STATUS_FILE_NAME);
 
         Map<String, Object> statusData = new HashMap<>();
@@ -368,7 +382,7 @@ public class DocxPdfService {
         result.put("taskId", taskId);
 
         // 获取任务目录
-        File taskDir = new File(BASE_PATH, taskId);
+        File taskDir = new File(basePath, taskId);
 
         // 检查任务是否存在
         if (!taskDir.exists() || !taskDir.isDirectory()) {

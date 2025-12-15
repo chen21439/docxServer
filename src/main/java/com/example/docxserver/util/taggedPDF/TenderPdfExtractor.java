@@ -103,8 +103,8 @@ public class TenderPdfExtractor {
         // 调用 ParagraphMapperRefactored.extractPdfToXml 提取表格和段落
         // 输出目录自动使用PDF所在目录
         System.out.println("=== 从PDF独立提取表格结构到XML格式TXT（全量处理）===");
-        ParagraphMapperRefactored.extractPdfToXml(taskId, pdfPath);
-        //ParagraphMapperRefactored.extractPdfToXml(taskId, "E:\\data\\docx_server\\d3b361d7ce9e42c8beeec5647d6c8261\\d3b361d7ce9e42c8beeec5647d6c8261.pdf");
+        //ParagraphMapperRefactored.extractPdfToXml(taskId, pdfPath);
+        ParagraphMapperRefactored.extractPdfToXml(taskId, "E:\\data\\docx_server\\d3b361d7ce9e42c8beeec5647d6c8261\\d3b361d7ce9e42c8beeec5647d6c8261.pdf");
         System.out.println();
         System.out.println("=== 提取完成 ===");
         System.out.println("输出目录: " + baseDir);
