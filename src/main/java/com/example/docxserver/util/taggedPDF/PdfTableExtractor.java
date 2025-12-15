@@ -1,5 +1,6 @@
 package com.example.docxserver.util.taggedPDF;
 
+import com.example.docxserver.util.aspose.LineLevelArtifactGenerator;
 import com.example.docxserver.util.taggedPDF.dto.Counter;
 import com.example.docxserver.util.taggedPDF.dto.McidPageInfo;
 import com.example.docxserver.util.taggedPDF.dto.MergedElement;

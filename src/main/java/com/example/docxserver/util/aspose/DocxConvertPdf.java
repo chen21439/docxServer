@@ -36,10 +36,11 @@ public class DocxConvertPdf {
     public static void convert(String docxPath, String pdfPath) throws Exception {
         Document doc = new Document(docxPath);
 
-        // 配置 PDF 保存选项，生成 PDF/A-4 Tagged PDF
+        // 配置 PDF 保存选项，生成 PDF/UA-2 Tagged PDF
         PdfSaveOptions saveOptions = new PdfSaveOptions();
-        saveOptions.setCompliance(PdfCompliance.PDF_A_4);
+        saveOptions.setCompliance(PdfCompliance.PDF_UA_2);
         saveOptions.setExportDocumentStructure(true);  // 生成 Tagged PDF
+        saveOptions.getOutlineOptions().setDefaultBookmarksOutlineLevel(1);  // 书签大纲级别
 
         doc.save(pdfPath, saveOptions);
     }
