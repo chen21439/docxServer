@@ -6,6 +6,9 @@ import com.aspose.words.PdfSaveOptions;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.example.docxserver.util.taggedPDF.PdfTableExtractor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
@@ -21,10 +24,14 @@ import java.util.List;
  */
 public class DocxConvertPdf {
 
+    private static final Logger log = LoggerFactory.getLogger(DocxConvertPdf.class);
     private static final String JSON_FILE_NAME = "docx_covert_pdf_status.json";
     private static final ObjectMapper mapper = new ObjectMapper()
             .enable(SerializationFeature.INDENT_OUTPUT);
     private static final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+
+    /** 覆盖模式：true=转换所有文件并覆盖记录，false=只转换未转换/失败的文件 */
+    private static final boolean OVERWRITE_MODE = true;
 
     /**
      * 将 docx 文件转换为 pdf
@@ -66,12 +73,20 @@ public class DocxConvertPdf {
             System.out.println("创建 pdf 目录: " + pdfDir.getAbsolutePath());
         }
 
-        // 读取或创建 JSON 状态文件
-        ObjectNode root = loadOrCreateJson(jsonFile);
+        // 覆盖模式：重置 JSON 状态文件
+        ObjectNode root;
+        if (OVERWRITE_MODE) {
+            root = mapper.createObjectNode();
+            root.put("version", "1.0");
+            root.putNull("lastUpdate");
+            root.set("conversions", mapper.createObjectNode());
+            System.out.println("[覆盖模式] 重置状态文件，将转换所有文件");
+        } else {
+            root = loadOrCreateJson(jsonFile);
+        }
         ObjectNode conversions = (ObjectNode) root.get("conversions");
 
-        // 扫描 docx 目录，找出需要转换的文件
-        List<File> pendingFiles = new ArrayList<>();
+        // 扫描 docx 目录
         File[] files = docxDir.listFiles((dir, name) -> name.toLowerCase().endsWith(".docx"));
 
         if (files == null || files.length == 0) {
@@ -79,27 +94,37 @@ public class DocxConvertPdf {
             return;
         }
 
-        for (File file : files) {
-            String fileName = file.getName();
-            if (!conversions.has(fileName)) {
-                // 新文件，添加到待转换列表
+        // 确定待转换文件列表
+        List<File> pendingFiles = new ArrayList<>();
+        if (OVERWRITE_MODE) {
+            // 覆盖模式：转换所有文件
+            for (File file : files) {
                 pendingFiles.add(file);
-            } else {
-                String status = conversions.get(fileName).get("status").asText();
-                if ("pending".equals(status) || "failed".equals(status)) {
+            }
+        } else {
+            // 增量模式：只转换未转换/失败的文件
+            for (File file : files) {
+                String fileName = file.getName();
+                if (!conversions.has(fileName)) {
                     pendingFiles.add(file);
+                } else {
+                    String status = conversions.get(fileName).get("status").asText();
+                    if ("pending".equals(status) || "failed".equals(status)) {
+                        pendingFiles.add(file);
+                    }
                 }
             }
         }
 
         System.out.println("========================================");
         System.out.println("工作目录: " + workDir);
+        System.out.println("模式: " + (OVERWRITE_MODE ? "覆盖" : "增量"));
         System.out.println("总文件数: " + files.length);
         System.out.println("待转换数: " + pendingFiles.size());
         System.out.println("========================================\n");
 
         if (pendingFiles.isEmpty()) {
-            System.out.println("所有文件已转换完成");
+            System.out.println("没有需要转换的文件");
             return;
         }
 
@@ -129,6 +154,9 @@ public class DocxConvertPdf {
 
                 System.out.println("  -> 成功 (" + elapsed + " ms)");
                 successCount++;
+
+                // 提取行级别文本
+                extractLineLevel(pdfFile);
 
             } catch (Exception e) {
                 fileNode.put("status", "failed");
@@ -221,13 +249,175 @@ public class DocxConvertPdf {
         }
     }
 
+    /** JSON 输出目录 */
+    private static final String JSON_OUTPUT_DIR = "E:/models/data/Section/tender_document/test";
+
+    /**
+     * 提取 PDF 的行级别文本
+     *
+     * @param pdfFile PDF 文件
+     */
+    private static void extractLineLevel(File pdfFile) {
+        try {
+            String pdfName = pdfFile.getName();
+            String taskId = pdfName.substring(0, pdfName.lastIndexOf('.'));
+
+            // 确保输出目录存在
+            File outputDirFile = new File(JSON_OUTPUT_DIR);
+            if (!outputDirFile.exists()) {
+                outputDirFile.mkdirs();
+            }
+
+            System.out.println("  -> 提取行级别文本...");
+            long startTime = System.currentTimeMillis();
+
+            LineLevelArtifactGenerator.generate(taskId, pdfFile.getAbsolutePath(), JSON_OUTPUT_DIR);
+
+            long elapsed = System.currentTimeMillis() - startTime;
+            System.out.println("  -> 行级别提取完成 (" + elapsed + " ms)");
+
+        } catch (Exception e) {
+            log.error("行级别提取失败: {}", e.getMessage(), e);
+            System.err.println("  -> 行级别提取失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 单文件转换（调试用）
+     *
+     * @param docxPath docx 文件路径
+     */
+    public static void convertSingle(String docxPath) {
+        File docxFile = new File(docxPath);
+        if (!docxFile.exists()) {
+            System.err.println("文件不存在: " + docxPath);
+            return;
+        }
+
+        // PDF 输出到同目录
+        String pdfPath = docxPath.substring(0, docxPath.lastIndexOf('.')) + ".pdf";
+        File pdfFile = new File(pdfPath);
+
+        System.out.println("转换: " + docxFile.getName());
+
+        try {
+            long startTime = System.currentTimeMillis();
+            convert(docxPath, pdfPath);
+            long elapsed = System.currentTimeMillis() - startTime;
+            System.out.println("  -> 转换成功 (" + elapsed + " ms)");
+
+            // 提取行级别文本
+            extractLineLevel(pdfFile);
+
+        } catch (Exception e) {
+            System.err.println("  -> 转换失败: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
     public static void main(String[] args) {
         String workDir = "E:/models/data";
 
-        // 打印当前状态
-        printStatus(workDir);
-
-        // 执行批量转换
+        // 批量转换模式（转换所有未转换的文件）
         batchConvert(workDir);
+
+        // 只转换一个文件（从待转换列表中取第一个）
+        // convertOne(workDir);
+    }
+
+    /**
+     * 只转换一个文件（从待转换列表中取第一个）
+     *
+     * @param workDir 工作目录路径
+     */
+    public static void convertOne(String workDir) {
+        File docxDir = new File(workDir, "docx");
+        File pdfDir = new File(workDir, "pdf");
+        File jsonFile = new File(workDir, JSON_FILE_NAME);
+
+        if (!docxDir.exists() || !docxDir.isDirectory()) {
+            System.err.println("docx 目录不存在: " + docxDir.getAbsolutePath());
+            return;
+        }
+
+        // 确保 pdf 输出目录存在
+        if (!pdfDir.exists()) {
+            pdfDir.mkdirs();
+        }
+
+        // 读取或创建 JSON 状态文件
+        ObjectNode root = loadOrCreateJson(jsonFile);
+        ObjectNode conversions = (ObjectNode) root.get("conversions");
+
+        // 扫描 docx 目录，找出第一个需要转换的文件
+        File[] files = docxDir.listFiles((dir, name) -> name.toLowerCase().endsWith(".docx"));
+
+        if (files == null || files.length == 0) {
+            System.out.println("没有找到 .docx 文件");
+            return;
+        }
+
+        File pendingFile = null;
+        for (File file : files) {
+            String fileName = file.getName();
+            if (!conversions.has(fileName)) {
+                pendingFile = file;
+                break;
+            } else {
+                String status = conversions.get(fileName).get("status").asText();
+                if ("pending".equals(status) || "failed".equals(status)) {
+                    pendingFile = file;
+                    break;
+                }
+            }
+        }
+
+        if (pendingFile == null) {
+            System.out.println("所有文件已转换完成，没有待转换的文件");
+            return;
+        }
+
+        // 转换这一个文件
+        String fileName = pendingFile.getName();
+        String pdfName = fileName.substring(0, fileName.lastIndexOf('.')) + ".pdf";
+        File pdfFile = new File(pdfDir, pdfName);
+
+        System.out.println("========================================");
+        System.out.println("转换单个文件: " + fileName);
+        System.out.println("========================================");
+
+        ObjectNode fileNode = mapper.createObjectNode();
+        long startTime = System.currentTimeMillis();
+
+        try {
+            convert(pendingFile.getAbsolutePath(), pdfFile.getAbsolutePath());
+            long elapsed = System.currentTimeMillis() - startTime;
+
+            fileNode.put("status", "converted");
+            fileNode.put("pdfPath", pdfName);
+            fileNode.put("convertTime", LocalDateTime.now().format(formatter));
+            fileNode.put("elapsedMs", elapsed);
+            fileNode.putNull("error");
+
+            System.out.println("  -> 转换成功 (" + elapsed + " ms)");
+
+            // 提取行级别文本
+            extractLineLevel(pdfFile);
+
+        } catch (Exception e) {
+            fileNode.put("status", "failed");
+            fileNode.putNull("pdfPath");
+            fileNode.put("convertTime", LocalDateTime.now().format(formatter));
+            fileNode.put("error", e.getMessage());
+
+            System.err.println("  -> 转换失败: " + e.getMessage());
+            e.printStackTrace();
+        }
+
+        conversions.set(fileName, fileNode);
+        root.put("lastUpdate", LocalDateTime.now().format(formatter));
+        saveJson(jsonFile, root);
+
+        System.out.println("========================================");
     }
 }
