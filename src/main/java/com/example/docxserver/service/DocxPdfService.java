@@ -1,6 +1,6 @@
 package com.example.docxserver.service;
 
-import com.example.docxserver.util.AsposeCloudConverter;
+import com.example.docxserver.util.aspose.DocxConvertPdf;
 import com.example.docxserver.util.docx.DocxHeaderFooterRemover;
 import com.example.docxserver.util.taggedPDF.PdfTableExtractor;
 import com.example.docxserver.util.tagged.PdfTextMatcher;
@@ -141,7 +141,7 @@ public class DocxPdfService {
     }
 
     /**
-     * 完整处理流程：上传DOCX -> 远程转换PDF -> 解析PDF得到TXT（默认不包含MCID）
+     * 完整处理流程：上传DOCX -> 本机转换PDF -> 解析PDF得到TXT（默认不包含MCID）
      *
      * @param file DOCX文件
      * @return 包含处理结果的Map
@@ -152,7 +152,7 @@ public class DocxPdfService {
     }
 
     /**
-     * 完整处理流程：上传DOCX -> 远程转换PDF -> 解析PDF得到TXT（可控制MCID输出）
+     * 完整处理流程：上传DOCX -> 本机转换PDF -> 解析PDF得到TXT（可控制MCID输出）
      *
      * @param file DOCX文件
      * @param includeMcid 是否在TXT输出中包含MCID和page属性
@@ -183,17 +183,14 @@ public class DocxPdfService {
             DocxHeaderFooterRemover.removeHeaderFooter(docxPath);
             log.info("[taskId: {}] 页眉页脚页码已移除", taskId);
 
-            // Step 2: 调用Aspose Cloud API转换DOCX为PDF
-            log.info("[taskId: {}] Step 2: 调用Aspose Cloud转换DOCX为PDF...", taskId);
+            // Step 2: 使用本机Aspose.Words JAR转换DOCX为PDF
+            log.info("[taskId: {}] Step 2: 使用本机Aspose.Words转换DOCX为PDF...", taskId);
             updateTaskStatus(taskId, STATUS_CONVERTING, "正在转换PDF", null);
 
             // PDF输出路径：与DOCX同目录，文件名改为.pdf
             String pdfPath = taskDir + File.separator + taskId + ".pdf";
 
-            boolean convertSuccess = AsposeCloudConverter.convert(docxPath, pdfPath);
-            if (!convertSuccess) {
-                throw new IOException("Aspose Cloud转换失败");
-            }
+            DocxConvertPdf.convert(docxPath, pdfPath);
 
             File pdfFile = new File(pdfPath);
             if (!pdfFile.exists()) {
@@ -259,15 +256,12 @@ public class DocxPdfService {
             DocxHeaderFooterRemover.removeHeaderFooter(docxPath);
             log.info("[taskId: {}] 页眉页脚页码已移除", taskId);
 
-            // Step 2: 调用Aspose Cloud API转换DOCX为PDF
-            log.info("[taskId: {}] Step 2: 调用Aspose Cloud转换DOCX为PDF...", taskId);
+            // Step 2: 使用本机Aspose.Words JAR转换DOCX为PDF
+            log.info("[taskId: {}] Step 2: 使用本机Aspose.Words转换DOCX为PDF...", taskId);
             updateTaskStatus(taskId, STATUS_CONVERTING, "正在转换PDF", null);
 
             String pdfPath = taskDir + File.separator + taskId + ".pdf";
-            boolean convertSuccess = AsposeCloudConverter.convert(docxPath, pdfPath);
-            if (!convertSuccess) {
-                throw new IOException("Aspose Cloud转换失败");
-            }
+            DocxConvertPdf.convert(docxPath, pdfPath);
 
             File pdfFile = new File(pdfPath);
             if (!pdfFile.exists()) {

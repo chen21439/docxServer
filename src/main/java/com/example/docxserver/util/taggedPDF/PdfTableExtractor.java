@@ -1,6 +1,8 @@
 package com.example.docxserver.util.taggedPDF;
 
 import com.example.docxserver.util.aspose.LineLevelArtifactGenerator;
+import com.example.docxserver.util.aspose.typeUtil.PdfListParser;
+import com.example.docxserver.util.aspose.typeUtil.PdfTocParser;
 import com.example.docxserver.util.taggedPDF.dto.Counter;
 import com.example.docxserver.util.taggedPDF.dto.McidPageInfo;
 import com.example.docxserver.util.taggedPDF.dto.MergedElement;
@@ -36,6 +38,12 @@ public class PdfTableExtractor {
      * 使用 ThreadLocal 保证线程安全，每个文档处理完后需要清理
      */
     private static final ThreadLocal<PdfListParser> sharedListParser = new ThreadLocal<>();
+
+    /**
+     * 共享的 PdfTocParser（避免每个 TOC 元素都重新构建 MCID 映射）
+     * 使用 ThreadLocal 保证线程安全，每个文档处理完后需要清理
+     */
+    private static final ThreadLocal<PdfTocParser> sharedTocParser = new ThreadLocal<>();
 
     /**
      * 从PDF提取表格和段落结构到XML格式
@@ -190,8 +198,9 @@ public class PdfTableExtractor {
             log.info("共提取 {} 个表格, {} 个段落，第二遍耗时: {} ms",
                     tableCounter.tableIndex, tableCounter.paragraphIndex, (pass2End - pass2Start));
         } finally {
-            // 清理共享的 PdfListParser，避免内存泄漏
+            // 清理共享的 Parser，避免内存泄漏
             sharedListParser.remove();
+            sharedTocParser.remove();
         }
 
         // 写入表格文件
@@ -675,6 +684,15 @@ public class PdfTableExtractor {
                     return;
                 }
 
+                // ============ 特殊处理：表格外的 TOC 元素 ============
+                // 使用 PdfTocParser 按照正确的逻辑解析目录
+                // 每个 TOCI 作为一个独立的段落
+                if ("TOC".equalsIgnoreCase(structType)) {
+                    extractTocWithParser(element, paragraphOutput, tableCounter, doc, includeMcid);
+                    // 不再递归处理 TOC 的子元素（已在 extractTocWithParser 中处理）
+                    return;
+                }
+
                 // 提取元素文本和TextPosition（用于计算bbox，使用缓存优化版）
                 TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(element, doc, mcidCache);
                 String paraText = textWithPositions.getText();
@@ -1018,16 +1036,42 @@ public class PdfTableExtractor {
                 int paraIndex = tableCounter.paragraphIndex++;
                 String paraId = IdUtils.formatParagraphId(paraIndex);
 
+                // 使用 LI 元素提取 TextPosition 用于计算 bbox
+                PDStructureElement liElement = item.liElement;
+                TextWithPositions textWithPositions = null;
+                String bbox = null;
+                Map<PDPage, Set<Integer>> mcidsByPage = null;
+
+                if (liElement != null) {
+                    // 从 LI 元素提取位置信息
+                    textWithPositions = PdfTextExtractor.extractTextWithPositions(liElement, doc);
+                    // 计算 bbox（按页分组，支持跨页）
+                    bbox = computeBoundingBoxByPage(textWithPositions.getPositionsByPage(), doc);
+                    if (bbox == null) {
+                        // fallback: 使用旧方法（单页情况）
+                        bbox = computeBoundingBox(textWithPositions.getPositions());
+                    }
+                    // 收集 MCID 信息
+                    mcidsByPage = McidCollector.collectMcidsByPage(liElement, doc, false);
+                } else {
+                    // fallback: 使用整个 L 元素的 MCID
+                    mcidsByPage = McidCollector.collectMcidsByPage(listElement, doc, false);
+                }
+
                 // 输出 XML
                 paragraphOutput.append("<p id=\"").append(paraId)
                       .append("\" type=\"LI\"");
 
-                // 根据参数决定是否输出 MCID 和 page（简化处理，使用整个 L 元素的 MCID）
-                if (includeMcid) {
-                    Map<PDPage, Set<Integer>> mcidsByPage = McidCollector.collectMcidsByPage(listElement, doc, false);
+                // 根据参数决定是否输出 MCID 和 page
+                if (includeMcid && mcidsByPage != null) {
                     McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(mcidsByPage, doc);
                     paragraphOutput.append(" mcid=\"").append(TextUtils.escapeHtml(mcidPageInfo.mcidStr))
                           .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
+                }
+
+                // 添加 bbox 属性
+                if (bbox != null) {
+                    paragraphOutput.append(" bbox=\"").append(bbox).append("\"");
                 }
 
                 paragraphOutput.append(">")
@@ -1038,6 +1082,120 @@ public class PdfTableExtractor {
             // 递归处理子列表
             for (List<PdfListParser.ListItem> subList : item.children) {
                 outputListItems(subList, paragraphOutput, tableCounter, doc, listElement, includeMcid);
+            }
+        }
+    }
+
+    /**
+     * 使用 PdfTocParser 解析目录
+     *
+     * 核心逻辑：
+     * 1. 获取或创建共享的 PdfTocParser（避免每个 TOC 都重新构建 MCID 映射）
+     * 2. 调用 parseToc 解析 TOC 元素
+     * 3. 将解析结果扁平化输出为段落（每个 TOCI 作为独立段落）
+     *
+     * @param tocElement TOC 元素
+     * @param paragraphOutput 段落输出缓冲区
+     * @param tableCounter 计数器
+     * @param doc PDF 文档
+     * @param includeMcid 是否包含 MCID 属性
+     * @throws IOException IO异常
+     */
+    private static void extractTocWithParser(
+            PDStructureElement tocElement,
+            StringBuilder paragraphOutput,
+            Counter tableCounter,
+            PDDocument doc,
+            boolean includeMcid) throws IOException {
+
+        // 获取或创建共享的 TocParser（只构建一次 MCID 映射）
+        PdfTocParser parser = sharedTocParser.get();
+        if (parser == null) {
+            parser = new PdfTocParser(doc);
+            parser.buildMcidTextMap();
+            sharedTocParser.set(parser);
+            log.info("创建共享的 PdfTocParser（MCID 映射只构建一次）");
+        }
+
+        // 解析目录
+        List<PdfTocParser.TocItem> items = parser.parseToc(tocElement, 1);
+
+        // 递归输出所有目录条目
+        outputTocItems(items, paragraphOutput, tableCounter, doc, tocElement, includeMcid);
+    }
+
+    /**
+     * 递归输出目录条目
+     *
+     * @param items 目录条目列表
+     * @param paragraphOutput 段落输出缓冲区
+     * @param tableCounter 计数器
+     * @param doc PDF 文档
+     * @param tocElement TOC 元素（用于获取 MCID）
+     * @param includeMcid 是否包含 MCID 属性
+     */
+    private static void outputTocItems(
+            List<PdfTocParser.TocItem> items,
+            StringBuilder paragraphOutput,
+            Counter tableCounter,
+            PDDocument doc,
+            PDStructureElement tocElement,
+            boolean includeMcid) throws IOException {
+
+        for (PdfTocParser.TocItem item : items) {
+            String fullText = item.text;
+            fullText = TextUtils.removeZeroWidthChars(fullText);
+
+            // 只有文本非空时才输出
+            if (fullText != null && !fullText.trim().isEmpty()) {
+                int paraIndex = tableCounter.paragraphIndex++;
+                String paraId = IdUtils.formatParagraphId(paraIndex);
+
+                // 使用 TOCI 元素提取 TextPosition 用于计算 bbox
+                PDStructureElement tociElement = item.tociElement;
+                String bbox = null;
+                Map<PDPage, Set<Integer>> mcidsByPage = null;
+
+                if (tociElement != null) {
+                    // 从 TOCI 元素提取位置信息
+                    TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(tociElement, doc);
+                    // 计算 bbox（按页分组，支持跨页）
+                    bbox = computeBoundingBoxByPage(textWithPositions.getPositionsByPage(), doc);
+                    if (bbox == null) {
+                        // fallback: 使用旧方法（单页情况）
+                        bbox = computeBoundingBox(textWithPositions.getPositions());
+                    }
+                    // 收集 MCID 信息
+                    mcidsByPage = McidCollector.collectMcidsByPage(tociElement, doc, false);
+                } else {
+                    // fallback: 使用整个 TOC 元素的 MCID
+                    mcidsByPage = McidCollector.collectMcidsByPage(tocElement, doc, false);
+                }
+
+                // 输出 XML
+                paragraphOutput.append("<p id=\"").append(paraId)
+                      .append("\" type=\"TOCI\"");
+
+                // 根据参数决定是否输出 MCID 和 page
+                if (includeMcid && mcidsByPage != null) {
+                    McidPageInfo mcidPageInfo = McidCollector.formatMcidsWithPage(mcidsByPage, doc);
+                    paragraphOutput.append(" mcid=\"").append(TextUtils.escapeHtml(mcidPageInfo.mcidStr))
+                          .append("\" page=\"").append(TextUtils.escapeHtml(mcidPageInfo.pageStr)).append("\"");
+                }
+
+                // 添加 bbox 属性
+                if (bbox != null) {
+                    paragraphOutput.append(" bbox=\"").append(bbox).append("\"");
+                }
+
+                paragraphOutput.append(">")
+                      .append(TextUtils.escapeHtml(fullText))
+                      .append("</p>\n");
+            }
+
+            // 递归处理子目录条目
+            if (item.children != null && !item.children.isEmpty()) {
+                outputTocItems(item.children, paragraphOutput, tableCounter, doc, tocElement, includeMcid);
             }
         }
     }

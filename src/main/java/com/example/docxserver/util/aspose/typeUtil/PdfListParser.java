@@ -1,4 +1,4 @@
-package com.example.docxserver.util.taggedPDF;
+package com.example.docxserver.util.aspose.typeUtil;
 
 import com.example.docxserver.util.MCIDTextExtractor;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -157,7 +157,7 @@ public class PdfListParser {
             return null;
         }
 
-        return new ListItem(level, label, text, subLists);
+        return new ListItem(level, label, text, subLists, liElement);
     }
 
     /**
@@ -290,12 +290,14 @@ public class PdfListParser {
         public final String label;        // 标签（如 "1."、"•"）
         public final String text;         // 主体文本
         public final List<List<ListItem>> children;  // 子列表
+        public final PDStructureElement liElement;   // LI 结构元素引用（用于提取 bbox）
 
-        public ListItem(int level, String label, String text, List<List<ListItem>> children) {
+        public ListItem(int level, String label, String text, List<List<ListItem>> children, PDStructureElement liElement) {
             this.level = level;
             this.label = label;
             this.text = text;
             this.children = children != null ? children : new ArrayList<>();
+            this.liElement = liElement;
         }
 
         @Override

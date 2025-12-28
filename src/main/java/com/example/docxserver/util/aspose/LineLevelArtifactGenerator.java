@@ -31,7 +31,8 @@ import java.util.*;
  * class 分类：
  * - fstline: 段落（P）的第一行
  * - para: 段落（P）的其他行
- * - title: 标题（H1-H6）
+ * - section: 标题（H1-H6）
+ * - list_item: 列表项（LI, LBody）
  * - table: 表格
  */
 public class LineLevelArtifactGenerator {
@@ -45,8 +46,22 @@ public class LineLevelArtifactGenerator {
     // class 常量
     private static final String CLASS_FSTLINE = "fstline";
     private static final String CLASS_PARA = "para";
-    private static final String CLASS_TITLE = "title";
+    private static final String CLASS_TITLE = "section";
     private static final String CLASS_TABLE = "table";
+    private static final String CLASS_LIST_ITEM = "list_item";
+
+    /**
+     * Bbox 计算结果（包含溢出标志）
+     */
+    private static class BboxResult {
+        final int[] box;
+        final boolean overflow;
+
+        BboxResult(int[] box, boolean overflow) {
+            this.box = box;
+            this.overflow = overflow;
+        }
+    }
 
     /**
      * 生成行级别 artifact 文件（JSON 格式）
@@ -110,10 +125,14 @@ public class LineLevelArtifactGenerator {
             log.info("共提取 {} 个元素", elements.size());
         }
 
-        // 添加数组索引 id
+        // 添加数组索引 id 和 line_id
         for (int i = 0; i < elements.size(); i++) {
             elements.get(i).put("id", i);
+            elements.get(i).put("line_id", i);
         }
+
+        // 设置 parent_id 和 relation
+        setParentIdAndRelation(elements);
 
         // 写入 JSON 文件
         mapper.writeValue(new File(outputPath), elements);
@@ -171,51 +190,76 @@ public class LineLevelArtifactGenerator {
             // 如果不属于表格，提取文本并按行切分
             if (!hasTableMcid) {
                 TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(element, doc, mcidCache);
-                List<TextPosition> positions = textWithPositions.getPositions();
                 String fullText = textWithPositions.getText();
 
-                if (fullText != null && !fullText.trim().isEmpty() && !positions.isEmpty()) {
-                    // 按行切分
-                    List<LineLevelExtractor.LineInfo> lines = LineLevelExtractor.splitIntoLines(positions);
-
-                    // 获取页码和页面高度
+                if (fullText != null && !fullText.trim().isEmpty()) {
+                    // 获取按页分组的 TextPosition
                     Map<PDPage, List<TextPosition>> positionsByPage = textWithPositions.getPositionsByPage();
-                    int pageNum = 1;
-                    float pageHeight = 842;  // 默认 A4 高度
+
                     if (positionsByPage != null && !positionsByPage.isEmpty()) {
-                        PDPage firstPage = positionsByPage.keySet().iterator().next();
-                        pageNum = doc.getPages().indexOf(firstPage) + 1;
-                        PDRectangle mediaBox = firstPage.getMediaBox();
-                        pageHeight = mediaBox.getHeight();
-                    }
+                        // 按页码排序
+                        List<Map.Entry<PDPage, List<TextPosition>>> sortedEntries = new ArrayList<>(positionsByPage.entrySet());
+                        sortedEntries.sort((a, b) -> {
+                            int pageA = doc.getPages().indexOf(a.getKey());
+                            int pageB = doc.getPages().indexOf(b.getKey());
+                            return Integer.compare(pageA, pageB);
+                        });
 
-                    // 确定 class 类型
-                    String classType = getClassType(structType);
-                    boolean isFirstLine = true;
+                        // 确定 class 类型
+                        String classType = getClassType(structType);
+                        boolean isFirstLine = true;
 
-                    // 输出每一行
-                    for (LineLevelExtractor.LineInfo line : lines) {
-                        String lineText = line.getText();
-                        lineText = TextUtils.removeZeroWidthChars(lineText);
+                        // 按页处理（支持跨页段落）
+                        for (Map.Entry<PDPage, List<TextPosition>> entry : sortedEntries) {
+                            PDPage page = entry.getKey();
+                            List<TextPosition> pagePositions = entry.getValue();
 
-                        if (lineText != null && !lineText.trim().isEmpty()) {
-                            lineIdCounter[0]++;
-                            String lineId = "L" + String.format("%05d", lineIdCounter[0]);
+                            if (pagePositions.isEmpty()) {
+                                continue;
+                            }
 
-                            Map<String, Object> elem = new LinkedHashMap<>();
-                            elem.put("line_id", lineId);
-                            elem.put("class", isFirstLine && "P".equalsIgnoreCase(structType) ? CLASS_FSTLINE : classType);
-                            elem.put("page", String.valueOf(pageNum));
-                            elem.put("box", parseBboxToImageCoords(line.getBbox(), pageHeight));
-                            elem.put("text", lineText.trim());
+                            int pageNum = doc.getPages().indexOf(page);  // 从 0 开始编号
+                            PDRectangle mediaBox = page.getMediaBox();
+                            float pageWidth = mediaBox.getWidth();
+                            float pageHeight = mediaBox.getHeight();
 
-                            elements.add(elem);
-                            isFirstLine = false;
+                            // 对该页的 TextPosition 按行切分
+                            List<LineLevelExtractor.LineInfo> lines = LineLevelExtractor.splitIntoLines(pagePositions);
+
+                            // 输出每一行
+                            for (LineLevelExtractor.LineInfo line : lines) {
+                                String lineText = line.getText();
+                                lineText = TextUtils.removeZeroWidthChars(lineText);
+
+                                if (lineText != null && !lineText.trim().isEmpty()) {
+                                    BboxResult bboxResult = parseBboxToImageCoords(line.getBbox(), pageWidth, pageHeight);
+
+                                    Map<String, Object> elem = new LinkedHashMap<>();
+                                    elem.put("class", isFirstLine && "P".equalsIgnoreCase(structType) ? CLASS_FSTLINE : classType);
+                                    elem.put("page", String.valueOf(pageNum));
+                                    elem.put("box", bboxResult.box);
+                                    elem.put("text", lineText.trim());
+                                    elem.put("is_meta", "");
+                                    elem.put("parent_id", "");
+                                    elem.put("relation", "");
+                                    // 保存原始结构类型（用于 section 层级判断）
+                                    if (CLASS_TITLE.equals(classType)) {
+                                        elem.put("_struct_type", structType);
+                                    }
+                                    // 只有溢出时才添加 overflow 字段
+                                    if (bboxResult.overflow) {
+                                        elem.put("overflow", true);
+                                    }
+
+                                    elements.add(elem);
+                                    isFirstLine = false;
+                                }
+                            }
                         }
-                    }
 
-                    // 已处理，不递归子元素
-                    return;
+                        // 已处理，不递归子元素
+                        return;
+                    }
                 }
             }
         }
@@ -256,15 +300,14 @@ public class LineLevelArtifactGenerator {
 
         if (positionsByPage.isEmpty()) {
             // 空表格，生成一个空元素
-            lineIdCounter[0]++;
-            String lineId = "L" + String.format("%05d", lineIdCounter[0]);
-
             Map<String, Object> elem = new LinkedHashMap<>();
-            elem.put("line_id", lineId);
             elem.put("class", CLASS_TABLE);
             elem.put("page", "");
             elem.put("box", new int[]{0, 0, 0, 0});
             elem.put("text", "");
+            elem.put("is_meta", "");
+            elem.put("parent_id", "");
+            elem.put("relation", "");
             elements.add(elem);
             return;
         }
@@ -278,30 +321,41 @@ public class LineLevelArtifactGenerator {
         });
 
         // 每页生成一个元素
+        int tablePageIndex = 0;  // 用于标记跨页表格的页索引
         for (Map.Entry<PDPage, List<TextPosition>> entry : sortedEntries) {
             PDPage page = entry.getKey();
             List<TextPosition> positions = entry.getValue();
-            int pageNum = doc.getPages().indexOf(page) + 1;
+            int pageNum = doc.getPages().indexOf(page);  // 从 0 开始编号
 
-            // 获取页面高度
+            // 获取页面尺寸
             PDRectangle mediaBox = page.getMediaBox();
+            float pageWidth = mediaBox.getWidth();
             float pageHeight = mediaBox.getHeight();
-
-            lineIdCounter[0]++;
-            String lineId = "L" + String.format("%05d", lineIdCounter[0]);
 
             // 第一行文字
             String firstLine = extractFirstLine(positions);
             firstLine = TextUtils.removeZeroWidthChars(firstLine);
 
+            // 计算 bbox（带溢出检测）
+            BboxResult bboxResult = computeBoundingBoxToImageCoords(positions, pageWidth, pageHeight);
+
             Map<String, Object> elem = new LinkedHashMap<>();
-            elem.put("line_id", lineId);
             elem.put("class", CLASS_TABLE);
             elem.put("page", String.valueOf(pageNum));
-            elem.put("box", computeBoundingBoxToImageCoords(positions, pageHeight));
+            elem.put("box", bboxResult.box);
             elem.put("text", firstLine != null ? firstLine.trim() : "");
+            elem.put("is_meta", "");
+            elem.put("parent_id", "");
+            elem.put("relation", "");
+            // 标记跨页表格的页索引（0=第一页或单页，>0=后续页）
+            elem.put("_table_page_index", tablePageIndex);
+            // 只有溢出时才添加 overflow 字段
+            if (bboxResult.overflow) {
+                elem.put("overflow", true);
+            }
 
             elements.add(elem);
+            tablePageIndex++;
         }
     }
 
@@ -316,6 +370,11 @@ public class LineLevelArtifactGenerator {
         if (type.equals("H") || type.equals("H1") || type.equals("H2") ||
             type.equals("H3") || type.equals("H4") || type.equals("H5") || type.equals("H6")) {
             return CLASS_TITLE;
+        }
+
+        // 列表项类型
+        if (type.equals("LI") || type.equals("LBODY")) {
+            return CLASS_LIST_ITEM;
         }
 
         // 段落类型（P 的第一行会在调用处特殊处理为 fstline）
@@ -464,7 +523,7 @@ public class LineLevelArtifactGenerator {
     }
 
     /**
-     * 将 bbox 字符串解析并转换为图像坐标系
+     * 将 bbox 字符串解析并转换为图像坐标系（带溢出检测和裁剪）
      *
      * PDF 坐标系：左下角为原点，Y 轴向上（minY=底部，maxY=顶部）
      * 图像坐标系：左上角为原点，Y 轴向下
@@ -475,17 +534,18 @@ public class LineLevelArtifactGenerator {
      * - 原 [minX, minY, maxX, maxY] -> [minX, pageHeight-maxY, maxX, pageHeight-minY]
      *
      * @param bbox       bbox 字符串 "minX,minY,maxX,maxY"
+     * @param pageWidth  页面宽度
      * @param pageHeight 页面高度
-     * @return 图像坐标系的 bbox [x0, y0, x1, y1]
+     * @return BboxResult 包含图像坐标系的 bbox 和溢出标志
      */
-    private static int[] parseBboxToImageCoords(String bbox, float pageHeight) {
+    private static BboxResult parseBboxToImageCoords(String bbox, float pageWidth, float pageHeight) {
         if (bbox == null || bbox.isEmpty()) {
-            return new int[]{0, 0, 0, 0};
+            return new BboxResult(new int[]{0, 0, 0, 0}, false);
         }
 
         String[] parts = bbox.split(",");
         if (parts.length != 4) {
-            return new int[]{0, 0, 0, 0};
+            return new BboxResult(new int[]{0, 0, 0, 0}, false);
         }
 
         try {
@@ -498,27 +558,40 @@ public class LineLevelArtifactGenerator {
             float imageY0 = pageHeight - maxY;  // PDF 顶部 -> 图像顶部
             float imageY1 = pageHeight - minY;  // PDF 底部 -> 图像底部
 
-            return new int[]{
-                Math.round(minX),
-                Math.round(imageY0),
-                Math.round(maxX),
-                Math.round(imageY1)
-            };
+            int x0 = Math.round(minX);
+            int y0 = Math.round(imageY0);
+            int x1 = Math.round(maxX);
+            int y1 = Math.round(imageY1);
+
+            // 检测溢出并裁剪
+            int pageW = Math.round(pageWidth);
+            int pageH = Math.round(pageHeight);
+            boolean overflow = x0 < 0 || y0 < 0 || x1 > pageW || y1 > pageH;
+
+            if (overflow) {
+                x0 = Math.max(0, Math.min(x0, pageW));
+                y0 = Math.max(0, Math.min(y0, pageH));
+                x1 = Math.max(0, Math.min(x1, pageW));
+                y1 = Math.max(0, Math.min(y1, pageH));
+            }
+
+            return new BboxResult(new int[]{x0, y0, x1, y1}, overflow);
         } catch (NumberFormatException e) {
-            return new int[]{0, 0, 0, 0};
+            return new BboxResult(new int[]{0, 0, 0, 0}, false);
         }
     }
 
     /**
-     * 从 TextPosition 列表计算边界框并转换为图像坐标系
+     * 从 TextPosition 列表计算边界框并转换为图像坐标系（带溢出检测和裁剪）
      *
      * @param positions  文本位置列表
+     * @param pageWidth  页面宽度
      * @param pageHeight 页面高度
-     * @return 图像坐标系的 bbox [x0, y0, x1, y1]
+     * @return BboxResult 包含图像坐标系的 bbox 和溢出标志
      */
-    private static int[] computeBoundingBoxToImageCoords(List<TextPosition> positions, float pageHeight) {
+    private static BboxResult computeBoundingBoxToImageCoords(List<TextPosition> positions, float pageWidth, float pageHeight) {
         if (positions == null || positions.isEmpty()) {
-            return new int[]{0, 0, 0, 0};
+            return new BboxResult(new int[]{0, 0, 0, 0}, false);
         }
 
         float minX = Float.MAX_VALUE;
@@ -533,21 +606,33 @@ public class LineLevelArtifactGenerator {
             float h = tp.getHeight();
 
             minX = Math.min(minX, x);
-            minY = Math.min(minY, y);           // 底部
+            minY = Math.min(minY, y);
             maxX = Math.max(maxX, x + w);
-            maxY = Math.max(maxY, y + h);       // 顶部
+            maxY = Math.max(maxY, y + h);
         }
 
         // Y 坐标翻转：PDF 坐标系 -> 图像坐标系
         float imageY0 = pageHeight - maxY;  // PDF 顶部 -> 图像顶部
         float imageY1 = pageHeight - minY;  // PDF 底部 -> 图像底部
 
-        return new int[]{
-            Math.round(minX),
-            Math.round(imageY0),
-            Math.round(maxX),
-            Math.round(imageY1)
-        };
+        int x0 = (int) Math.round(minX);
+        int y0 = (int) Math.round(imageY0);
+        int x1 = (int) Math.round(maxX);
+        int y1 = (int) Math.round(imageY1);
+
+        // 检测溢出并裁剪
+        int pageW = Math.round(pageWidth);
+        int pageH = Math.round(pageHeight);
+        boolean overflow = x0 < 0 || y0 < 0 || x1 > pageW || y1 > pageH;
+
+        if (overflow) {
+            x0 = Math.max(0, Math.min(x0, pageW));
+            y0 = Math.max(0, Math.min(y0, pageH));
+            x1 = Math.max(0, Math.min(x1, pageW));
+            y1 = Math.max(0, Math.min(y1, pageH));
+        }
+
+        return new BboxResult(new int[]{x0, y0, x1, y1}, overflow);
     }
 
     /**
@@ -569,6 +654,132 @@ public class LineLevelArtifactGenerator {
                type.equals("LBODY") ||
                type.equals("CAPTION") ||
                type.equals("BLOCKQUOTE");
+    }
+
+    /**
+     * 设置 parent_id 和 relation
+     *
+     * 规则：
+     * - fstline:
+     *     - section 后第一个 fstline: parent_id = section, relation = "contain"
+     *     - 后续 fstline: parent_id = 前一个 fstline, relation = "equality"
+     * - para: parent_id = 前一个元素（fstline 或 para）的 id，relation = "connect"
+     * - section: parent_id = 前一个 section 的 id，relation = "contain"（如果有层级差异）或 "equality"
+     * - table: 单页表格或跨页表格第一页 parent_id = 最近的 section，relation = "contain"
+     *          跨页表格后续页 parent_id = 前一个 table，relation = "connect"
+     * - list_item: 保持空字符串
+     *
+     * @param elements 元素列表
+     */
+    private static void setParentIdAndRelation(List<Map<String, Object>> elements) {
+        int lastFstlineId = -1;
+        int lastElementId = -1;  // 前一个 fstline 或 para
+        int lastSectionId = -1;
+        int lastSectionLevel = 0;   // H1=1, H2=2, ...
+        int lastTableId = -1;       // 前一个 table
+        int lastAnyElementId = -1;  // 前一个任意元素
+        boolean needAttachToSection = false;  // 下一个 fstline 是否需要挂载到 section
+
+        for (Map<String, Object> elem : elements) {
+            String classType = (String) elem.get("class");
+            int currentId = (Integer) elem.get("id");
+
+            if (CLASS_FSTLINE.equals(classType)) {
+                // fstline:
+                // - section 后第一个 fstline: parent_id = section, relation = "contain"
+                // - 后续 fstline: parent_id = 前一个 fstline, relation = "equality"
+                if (needAttachToSection && lastSectionId >= 0) {
+                    elem.put("parent_id", lastSectionId);
+                    elem.put("relation", "contain");
+                    needAttachToSection = false;
+                } else if (lastFstlineId >= 0) {
+                    elem.put("parent_id", lastFstlineId);
+                    elem.put("relation", "equality");
+                }
+                lastFstlineId = currentId;
+                lastElementId = currentId;
+                lastAnyElementId = currentId;
+
+            } else if (CLASS_PARA.equals(classType)) {
+                // para: parent_id = 前一个元素（fstline 或 para）, relation = "connect"
+                if (lastElementId >= 0) {
+                    elem.put("parent_id", lastElementId);
+                    elem.put("relation", "connect");
+                }
+                lastElementId = currentId;
+                lastAnyElementId = currentId;
+
+            } else if (CLASS_TITLE.equals(classType)) {
+                // section: parent_id = 前一个 section
+                // relation = "contain"（如果当前级别更深）或 "equality"
+                String structType = (String) elem.get("_struct_type");
+                int currentLevel = getSectionLevel(structType);
+
+                if (lastSectionId >= 0) {
+                    elem.put("parent_id", lastSectionId);
+                    // 如果当前层级 > 上一个层级（如 H2 在 H1 下面），relation = "contain"
+                    if (currentLevel > lastSectionLevel) {
+                        elem.put("relation", "contain");
+                    } else {
+                        elem.put("relation", "equality");
+                    }
+                }
+
+                lastSectionId = currentId;
+                lastSectionLevel = currentLevel;
+                lastAnyElementId = currentId;
+                needAttachToSection = true;  // 下一个 fstline 需要挂载到这个 section
+
+                // 移除临时字段
+                elem.remove("_struct_type");
+
+            } else if (CLASS_TABLE.equals(classType)) {
+                // table: 根据是否为跨页表格的后续页决定 parent_id
+                Integer tablePageIndex = (Integer) elem.get("_table_page_index");
+
+                if (tablePageIndex != null && tablePageIndex > 0) {
+                    // 跨页表格的后续页：parent_id = 前一个 table，relation = "connect"
+                    if (lastTableId >= 0) {
+                        elem.put("parent_id", lastTableId);
+                        elem.put("relation", "connect");
+                    }
+                } else {
+                    // 单页表格或跨页表格的第一页：parent_id = 最近的 section，relation = "contain"
+                    if (lastSectionId >= 0) {
+                        elem.put("parent_id", lastSectionId);
+                        elem.put("relation", "contain");
+                    }
+                }
+
+                lastTableId = currentId;
+                lastAnyElementId = currentId;
+
+                // 移除临时字段
+                elem.remove("_table_page_index");
+            }
+            // list_item 保持空字符串，不处理
+        }
+    }
+
+    /**
+     * 获取标题层级
+     *
+     * @param structType 结构类型（H, H1, H2, ...）
+     * @return 层级数字（H/H1=1, H2=2, ...）
+     */
+    private static int getSectionLevel(String structType) {
+        if (structType == null) return 1;
+        String type = structType.toUpperCase();
+
+        if (type.equals("H1")) return 1;
+        if (type.equals("H2")) return 2;
+        if (type.equals("H3")) return 3;
+        if (type.equals("H4")) return 4;
+        if (type.equals("H5")) return 5;
+        if (type.equals("H6")) return 6;
+        if (type.equals("H")) return 1;  // 默认当作 H1
+
+        return 1;
     }
 
     /**

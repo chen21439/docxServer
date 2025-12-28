@@ -5,6 +5,7 @@ import org.apache.pdfbox.contentstream.operator.Operator;
 import org.apache.pdfbox.cos.COSBase;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.text.TextPosition;
 import org.apache.pdfbox.util.Matrix;
@@ -173,10 +174,23 @@ public class MCIDTextExtractor extends PDFStreamEngine {
                 float width = displacement.getX() * fontSize * horizontalScaling;
                 float height = fontSize;
 
+                // 获取页面的实际参数（修复 bbox 计算异常问题）
+                int rotation = 0;
+                float pageWidth = 0;
+                float pageHeight = 0;
+                if (currentPage != null) {
+                    rotation = currentPage.getRotation();
+                    PDRectangle mediaBox = currentPage.getMediaBox();
+                    if (mediaBox != null) {
+                        pageWidth = mediaBox.getWidth();
+                        pageHeight = mediaBox.getHeight();
+                    }
+                }
+
                 TextPosition textPosition = new TextPosition(
-                    0, // rotation - 简化处理
-                    0, // page width
-                    0, // page height
+                    rotation,
+                    pageWidth,
+                    pageHeight,
                     matrix,
                     x,
                     y,

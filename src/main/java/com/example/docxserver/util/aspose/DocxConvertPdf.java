@@ -1,8 +1,10 @@
 package com.example.docxserver.util.aspose;
 
 import com.aspose.words.Document;
+import com.aspose.words.NodeType;
 import com.aspose.words.PdfCompliance;
 import com.aspose.words.PdfSaveOptions;
+import com.aspose.words.Section;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -35,6 +37,7 @@ public class DocxConvertPdf {
 
     /**
      * 将 docx 文件转换为 pdf
+     * 转换前会自动移除页眉、页脚和批注
      *
      * @param docxPath docx 文件路径
      * @param pdfPath  输出的 pdf 文件路径
@@ -42,6 +45,16 @@ public class DocxConvertPdf {
      */
     public static void convert(String docxPath, String pdfPath) throws Exception {
         Document doc = new Document(docxPath);
+
+        // 移除批注
+        doc.getChildNodes(NodeType.COMMENT, true).clear();
+        log.info("已移除批注");
+
+        // 移除页眉页脚
+        for (Section section : doc.getSections()) {
+            section.clearHeadersFooters();
+        }
+        log.info("已移除页眉页脚");
 
         // 配置 PDF 保存选项，生成 PDF/UA-2 Tagged PDF
         PdfSaveOptions saveOptions = new PdfSaveOptions();
@@ -86,8 +99,9 @@ public class DocxConvertPdf {
         }
         ObjectNode conversions = (ObjectNode) root.get("conversions");
 
-        // 扫描 docx 目录
-        File[] files = docxDir.listFiles((dir, name) -> name.toLowerCase().endsWith(".docx"));
+        // 扫描 docx 目录（只选择文件，排除文件夹）
+        File[] files = docxDir.listFiles(file ->
+                file.isFile() && file.getName().toLowerCase().endsWith(".docx"));
 
         if (files == null || files.length == 0) {
             System.out.println("没有找到 .docx 文件");
@@ -316,7 +330,7 @@ public class DocxConvertPdf {
     }
 
     public static void main(String[] args) {
-        String workDir = "E:/models/data";
+        String workDir = "E:/models/data/Section/tender_document";
 
         // 批量转换模式（转换所有未转换的文件）
         batchConvert(workDir);
@@ -349,8 +363,9 @@ public class DocxConvertPdf {
         ObjectNode root = loadOrCreateJson(jsonFile);
         ObjectNode conversions = (ObjectNode) root.get("conversions");
 
-        // 扫描 docx 目录，找出第一个需要转换的文件
-        File[] files = docxDir.listFiles((dir, name) -> name.toLowerCase().endsWith(".docx"));
+        // 扫描 docx 目录，找出第一个需要转换的文件（只选择文件，排除文件夹）
+        File[] files = docxDir.listFiles(file ->
+                file.isFile() && file.getName().toLowerCase().endsWith(".docx"));
 
         if (files == null || files.length == 0) {
             System.out.println("没有找到 .docx 文件");

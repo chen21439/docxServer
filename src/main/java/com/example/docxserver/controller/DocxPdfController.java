@@ -77,7 +77,7 @@ public class DocxPdfController {
     }
 
     /**
-     * 完整处理流程：上传DOCX -> 远程转换PDF -> 解析PDF得到TXT（异步处理）
+     * 完整处理流程：上传DOCX -> 本机转换PDF -> 解析PDF得到TXT（异步处理）
      *
      * 接收DOCX文件后立即返回taskId，后台异步执行转换和解析。
      * 使用 /status/{taskId} 轮询处理状态。
