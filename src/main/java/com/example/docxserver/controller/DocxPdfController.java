@@ -162,6 +162,7 @@ public class DocxPdfController {
             File pdfFile = null;
             File tableTxtFile = null;      // {taskId}_pdf_*.txt（不含paragraph）
             File paragraphTxtFile = null;  // {taskId}_pdf_paragraph_*.txt
+            File aiJsonFile = null;        // {taskId}.json（AI训练用）
 
             File[] files = taskDirFile.listFiles();
             if (files != null) {
@@ -169,6 +170,9 @@ public class DocxPdfController {
                     String name = f.getName();
                     if (name.endsWith(".pdf")) {
                         pdfFile = f;
+                    } else if (name.equals(taskId + ".json")) {
+                        // AI训练用JSON
+                        aiJsonFile = f;
                     } else if (name.startsWith(taskId + "_pdf_paragraph_") && name.endsWith(".txt")) {
                         // 段落文件：取最新的
                         if (paragraphTxtFile == null || name.compareTo(paragraphTxtFile.getName()) > 0) {
@@ -183,17 +187,36 @@ public class DocxPdfController {
                 }
             }
 
-            // 打包成ZIP（包含PDF和两个独立的TXT文件）
+            // 查找图片目录
+            File imagesDir = new File(taskDirFile, "images");
+
+            // 打包成ZIP
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             try (ZipOutputStream zos = new ZipOutputStream(baos)) {
+                // PDF文件
                 if (pdfFile != null) {
                     addFileToZip(zos, pdfFile, taskId + ".pdf");
                 }
+                // 表格TXT
                 if (tableTxtFile != null) {
                     addFileToZip(zos, tableTxtFile, taskId + "_table.txt");
                 }
+                // 段落TXT
                 if (paragraphTxtFile != null) {
                     addFileToZip(zos, paragraphTxtFile, taskId + "_paragraph.txt");
+                }
+                // AI训练用JSON
+                if (aiJsonFile != null) {
+                    addFileToZip(zos, aiJsonFile, taskId + ".json");
+                }
+                // 图片目录
+                if (imagesDir.exists() && imagesDir.isDirectory()) {
+                    File[] imageFiles = imagesDir.listFiles((dir, name) -> name.endsWith(".png"));
+                    if (imageFiles != null) {
+                        for (File img : imageFiles) {
+                            addFileToZip(zos, img, "images/" + img.getName());
+                        }
+                    }
                 }
             }
 
@@ -203,10 +226,12 @@ public class DocxPdfController {
             String zipFileName = taskId + ".zip";
             headers.setContentDispositionFormData("attachment", URLEncoder.encode(zipFileName, "UTF-8"));
 
-            log.info("下载artifact: taskId={}, 表格文件={}, 段落文件={}",
+            log.info("下载artifact: taskId={}, 表格={}, 段落={}, AI JSON={}, 图片目录={}",
                     taskId,
                     tableTxtFile != null ? tableTxtFile.getName() : "无",
-                    paragraphTxtFile != null ? paragraphTxtFile.getName() : "无");
+                    paragraphTxtFile != null ? paragraphTxtFile.getName() : "无",
+                    aiJsonFile != null ? "有" : "无",
+                    imagesDir.exists() ? "有" : "无");
             return new ResponseEntity<>(baos.toByteArray(), headers, HttpStatus.OK);
 
         } catch (Exception e) {
