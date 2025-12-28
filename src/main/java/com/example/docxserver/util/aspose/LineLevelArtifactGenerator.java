@@ -550,18 +550,16 @@ public class LineLevelArtifactGenerator {
 
         try {
             float minX = Float.parseFloat(parts[0]);
-            float minY = Float.parseFloat(parts[1]);  // PDF 底部
+            float minY = Float.parseFloat(parts[1]);
             float maxX = Float.parseFloat(parts[2]);
-            float maxY = Float.parseFloat(parts[3]);  // PDF 顶部
+            float maxY = Float.parseFloat(parts[3]);
 
-            // Y 坐标翻转
-            float imageY0 = pageHeight - maxY;  // PDF 顶部 -> 图像顶部
-            float imageY1 = pageHeight - minY;  // PDF 底部 -> 图像底部
-
+            // 注意：PDFBox 的 getYDirAdj() 已经返回了图像坐标系（Y 从顶部开始增加）
+            // 所以这里不需要翻转 Y 坐标，直接使用原始值
             int x0 = Math.round(minX);
-            int y0 = Math.round(imageY0);
+            int y0 = Math.round(minY);
             int x1 = Math.round(maxX);
-            int y1 = Math.round(imageY1);
+            int y1 = Math.round(maxY);
 
             // 检测溢出并裁剪
             int pageW = Math.round(pageWidth);
@@ -595,13 +593,14 @@ public class LineLevelArtifactGenerator {
         }
 
         float minX = Float.MAX_VALUE;
-        float minY = Float.MAX_VALUE;  // PDF 底部（较小的 Y）
+        float minY = Float.MAX_VALUE;
         float maxX = Float.MIN_VALUE;
-        float maxY = Float.MIN_VALUE;  // PDF 顶部（较大的 Y）
+        float maxY = Float.MIN_VALUE;
 
         for (TextPosition tp : positions) {
             float x = tp.getXDirAdj();
-            float y = Math.abs(tp.getYDirAdj());  // 基线位置
+            // getYDirAdj() 已经返回图像坐标系（Y 从顶部开始增加）
+            float y = Math.abs(tp.getYDirAdj());
             float w = tp.getWidth();
             float h = tp.getHeight();
 
@@ -611,14 +610,11 @@ public class LineLevelArtifactGenerator {
             maxY = Math.max(maxY, y + h);
         }
 
-        // Y 坐标翻转：PDF 坐标系 -> 图像坐标系
-        float imageY0 = pageHeight - maxY;  // PDF 顶部 -> 图像顶部
-        float imageY1 = pageHeight - minY;  // PDF 底部 -> 图像底部
-
+        // 直接使用原始坐标，不需要翻转（getYDirAdj 已经是图像坐标系）
         int x0 = (int) Math.round(minX);
-        int y0 = (int) Math.round(imageY0);
+        int y0 = (int) Math.round(minY);
         int x1 = (int) Math.round(maxX);
-        int y1 = (int) Math.round(imageY1);
+        int y1 = (int) Math.round(maxY);
 
         // 检测溢出并裁剪
         int pageW = Math.round(pageWidth);
