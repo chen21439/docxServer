@@ -599,15 +599,18 @@ public class LineLevelArtifactGenerator {
 
         for (TextPosition tp : positions) {
             float x = tp.getXDirAdj();
-            // getYDirAdj() 已经返回图像坐标系（Y 从顶部开始增加）
-            float y = Math.abs(tp.getYDirAdj());
+            // getYDirAdj() 返回基线位置（图像坐标系，Y 从顶部开始增加）
+            float baseline = Math.abs(tp.getYDirAdj());
             float w = tp.getWidth();
             float h = tp.getHeight();
 
+            float textTop = baseline - h;  // 文字顶部（基线上方）
+            float textBottom = baseline;   // 文字底部（基线位置）
+
             minX = Math.min(minX, x);
-            minY = Math.min(minY, y);
+            minY = Math.min(minY, textTop);
             maxX = Math.max(maxX, x + w);
-            maxY = Math.max(maxY, y + h);
+            maxY = Math.max(maxY, textBottom);
         }
 
         // 直接使用原始坐标，不需要翻转（getYDirAdj 已经是图像坐标系）

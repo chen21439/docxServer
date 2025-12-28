@@ -92,19 +92,24 @@ public class LineLevelExtractor {
         }
 
         // 计算 bbox
+        // 注意：getYDirAdj() 返回的是文字基线位置，不是顶部
+        // 文字顶部 = 基线 - 高度，文字底部 = 基线
         float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
         float maxX = Float.MIN_VALUE, maxY = Float.MIN_VALUE;
 
         for (TextPosition tp : linePositions) {
             float x = tp.getXDirAdj();
-            float y = Math.abs(tp.getYDirAdj());
+            float baseline = Math.abs(tp.getYDirAdj());  // 基线位置
             float w = tp.getWidth();
             float h = tp.getHeight();
 
+            float textTop = baseline - h;  // 文字顶部（基线上方）
+            float textBottom = baseline;   // 文字底部（基线位置）
+
             minX = Math.min(minX, x);
-            minY = Math.min(minY, y);
+            minY = Math.min(minY, textTop);
             maxX = Math.max(maxX, x + w);
-            maxY = Math.max(maxY, y + h);
+            maxY = Math.max(maxY, textBottom);
         }
 
         String bbox = String.format("%.2f,%.2f,%.2f,%.2f", minX, minY, maxX, maxY);
