@@ -9,9 +9,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.example.docxserver.util.taggedPDF.PdfTableExtractor;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.rendering.ImageType;
+import org.apache.pdfbox.rendering.PDFRenderer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.time.LocalDateTime;
@@ -172,6 +178,9 @@ public class DocxConvertPdf {
                 // 提取行级别文本
                 extractLineLevel(pdfFile);
 
+                // 渲染 PDF 页面为图片
+                renderPdfToImages(pdfFile);
+
             } catch (Exception e) {
                 fileNode.put("status", "failed");
                 fileNode.putNull("pdfPath");
@@ -266,6 +275,9 @@ public class DocxConvertPdf {
     /** JSON 输出目录 */
     private static final String JSON_OUTPUT_DIR = "E:/models/data/Section/tender_document/test";
 
+    /** 图片输出目录 */
+    private static final String IMAGE_OUTPUT_DIR = "E:/models/data/Section/tender_document/test/image";
+
     /**
      * 提取 PDF 的行级别文本
      *
@@ -297,6 +309,56 @@ public class DocxConvertPdf {
     }
 
     /**
+     * 将 PDF 页面渲染为图片（使用默认输出目录）
+     *
+     * @param pdfFile PDF 文件
+     */
+    private static void renderPdfToImages(File pdfFile) {
+        String pdfName = pdfFile.getName();
+        String taskId = pdfName.substring(0, pdfName.lastIndexOf('.'));
+
+        // 创建图片输出目录：image/{taskId}/
+        File imageDir = new File(IMAGE_OUTPUT_DIR, taskId);
+        renderPdfToImages(pdfFile, imageDir);
+    }
+
+    /**
+     * 将 PDF 页面渲染为图片（指定输出目录）
+     *
+     * @param pdfFile  PDF 文件
+     * @param imageDir 图片输出目录
+     */
+    public static void renderPdfToImages(File pdfFile, File imageDir) {
+        if (!imageDir.exists()) {
+            imageDir.mkdirs();
+        }
+
+        System.out.println("  -> 渲染 PDF 页面为图片...");
+        long startTime = System.currentTimeMillis();
+
+        try (PDDocument document = Loader.loadPDF(pdfFile)) {
+            PDFRenderer renderer = new PDFRenderer(document);
+            int pageCount = document.getNumberOfPages();
+
+            for (int page = 0; page < pageCount; page++) {
+                // 72 DPI，RGB 模式，与 PDF 坐标 1:1 对应
+                BufferedImage image = renderer.renderImageWithDPI(page, 72, ImageType.RGB);
+
+                // 保存为 PNG：0.png, 1.png, ...
+                File outputFile = new File(imageDir, page + ".png");
+                ImageIO.write(image, "PNG", outputFile);
+            }
+
+            long elapsed = System.currentTimeMillis() - startTime;
+            System.out.println("  -> 图片渲染完成: " + pageCount + " 页 (" + elapsed + " ms)");
+
+        } catch (IOException e) {
+            log.error("PDF 渲染图片失败: {}", e.getMessage(), e);
+            System.err.println("  -> 图片渲染失败: " + e.getMessage());
+        }
+    }
+
+    /**
      * 单文件转换（调试用）
      *
      * @param docxPath docx 文件路径
@@ -322,6 +384,9 @@ public class DocxConvertPdf {
 
             // 提取行级别文本
             extractLineLevel(pdfFile);
+
+            // 渲染 PDF 页面为图片
+            renderPdfToImages(pdfFile);
 
         } catch (Exception e) {
             System.err.println("  -> 转换失败: " + e.getMessage());
@@ -418,6 +483,9 @@ public class DocxConvertPdf {
 
             // 提取行级别文本
             extractLineLevel(pdfFile);
+
+            // 渲染 PDF 页面为图片
+            renderPdfToImages(pdfFile);
 
         } catch (Exception e) {
             fileNode.put("status", "failed");
