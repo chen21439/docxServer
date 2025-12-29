@@ -209,12 +209,17 @@ public class DocxPdfController {
                 if (aiJsonFile != null) {
                     addFileToZip(zos, aiJsonFile, taskId + ".json");
                 }
-                // 图片目录
+                // 图片目录（结构：images/{filename}/0.png, 1.png, ...）
                 if (imagesDir.exists() && imagesDir.isDirectory()) {
-                    File[] imageFiles = imagesDir.listFiles((dir, name) -> name.endsWith(".png"));
-                    if (imageFiles != null) {
-                        for (File img : imageFiles) {
-                            addFileToZip(zos, img, "images/" + img.getName());
+                    File[] subDirs = imagesDir.listFiles(File::isDirectory);
+                    if (subDirs != null) {
+                        for (File subDir : subDirs) {
+                            File[] imageFiles = subDir.listFiles((dir, name) -> name.endsWith(".png"));
+                            if (imageFiles != null) {
+                                for (File img : imageFiles) {
+                                    addFileToZip(zos, img, "images/" + subDir.getName() + "/" + img.getName());
+                                }
+                            }
                         }
                     }
                 }

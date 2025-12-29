@@ -216,7 +216,7 @@ public class PdfTableExtractor {
         Files.write(Paths.get(mergedOutputPath), mergedContent.getBytes(StandardCharsets.UTF_8));
         log.info("PDF聚合结构已写入到: {}", mergedOutputPath);
 
-        // 生成行级别 artifact（独立文件，不影响现有逻辑）
+        // 生成行级别 artifact（AI训练用JSON）
         try {
             log.info("开始生成行级别 artifact...");
             LineLevelArtifactGenerator.generate(taskId, pdfPath, outputDir);

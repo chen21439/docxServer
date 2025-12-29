@@ -1,7 +1,6 @@
 package com.example.docxserver.service;
 
 import com.example.docxserver.util.aspose.DocxConvertPdf;
-import com.example.docxserver.util.aspose.LineLevelArtifactGenerator;
 import com.example.docxserver.util.docx.DocxHeaderFooterRemover;
 import com.example.docxserver.util.taggedPDF.PdfTableExtractor;
 import com.example.docxserver.util.tagged.PdfTextMatcher;
@@ -206,21 +205,16 @@ public class DocxPdfService {
 
             extractPdfToXml(taskId, pdfPath, taskDir, includeMcid);
 
-            // Step 4: 生成AI训练用JSON（行级别文本+bbox）
-            log.info("[taskId: {}] Step 4: 生成AI训练用JSON...", taskId);
+            // Step 4: 渲染PDF页面为图片
+            log.info("[taskId: {}] Step 4: 渲染PDF页面为图片...", taskId);
             try {
-                LineLevelArtifactGenerator.generate(taskId, pdfPath, taskDir);
-                log.info("[taskId: {}] AI训练JSON生成完成", taskId);
-            } catch (Exception e) {
-                log.warn("[taskId: {}] AI训练JSON生成失败（非致命）: {}", taskId, e.getMessage());
-            }
-
-            // Step 5: 渲染PDF页面为图片
-            log.info("[taskId: {}] Step 5: 渲染PDF页面为图片...", taskId);
-            try {
-                File imageDir = new File(taskDir, "images");
+                // 从docxPath提取文件名（不含扩展名）
+                File docxFile = new File(docxPath);
+                String docxName = docxFile.getName();
+                String filename = docxName.substring(0, docxName.lastIndexOf('.'));
+                File imageDir = new File(taskDir, "images" + File.separator + filename);
                 DocxConvertPdf.renderPdfToImages(pdfFile, imageDir);
-                log.info("[taskId: {}] 图片渲染完成", taskId);
+                log.info("[taskId: {}] 图片渲染完成, 目录: {}", taskId, imageDir.getAbsolutePath());
             } catch (Exception e) {
                 log.warn("[taskId: {}] 图片渲染失败（非致命）: {}", taskId, e.getMessage());
             }
@@ -295,21 +289,16 @@ public class DocxPdfService {
 
             extractPdfToXml(taskId, pdfPath, taskDir, includeMcid);
 
-            // Step 4: 生成AI训练用JSON（行级别文本+bbox）
-            log.info("[taskId: {}] Step 4: 生成AI训练用JSON...", taskId);
+            // Step 4: 渲染PDF页面为图片
+            log.info("[taskId: {}] Step 4: 渲染PDF页面为图片...", taskId);
             try {
-                LineLevelArtifactGenerator.generate(taskId, pdfPath, taskDir);
-                log.info("[taskId: {}] AI训练JSON生成完成", taskId);
-            } catch (Exception e) {
-                log.warn("[taskId: {}] AI训练JSON生成失败（非致命）: {}", taskId, e.getMessage());
-            }
-
-            // Step 5: 渲染PDF页面为图片
-            log.info("[taskId: {}] Step 5: 渲染PDF页面为图片...", taskId);
-            try {
-                File imageDir = new File(taskDir, "images");
+                // 从docxPath提取文件名（不含扩展名）
+                File docxFile = new File(docxPath);
+                String docxName = docxFile.getName();
+                String filename = docxName.substring(0, docxName.lastIndexOf('.'));
+                File imageDir = new File(taskDir, "images" + File.separator + filename);
                 DocxConvertPdf.renderPdfToImages(pdfFile, imageDir);
-                log.info("[taskId: {}] 图片渲染完成", taskId);
+                log.info("[taskId: {}] 图片渲染完成, 目录: {}", taskId, imageDir.getAbsolutePath());
             } catch (Exception e) {
                 log.warn("[taskId: {}] 图片渲染失败（非致命）: {}", taskId, e.getMessage());
             }
