@@ -8,16 +8,10 @@ import com.aspose.words.Section;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.example.docxserver.util.docx.DocxHeaderFooterRemover;
 import com.example.docxserver.util.taggedPDF.PdfTableExtractor;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.rendering.ImageType;
-import org.apache.pdfbox.rendering.PDFRenderer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.time.LocalDateTime;
@@ -25,6 +19,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Docx 转 PDF 工具类 (基于 Aspose.Words)
@@ -163,6 +158,15 @@ public class DocxConvertPdf {
             long startTime = System.currentTimeMillis();
 
             try {
+                // 获取原始文件名（不含扩展名）
+                String originalName = fileName.substring(0, fileName.lastIndexOf('.'));
+
+                // Step 1: 移除页眉页脚
+                System.out.println("  [1/4] 移除页眉页脚...");
+                DocxHeaderFooterRemover.removeHeaderFooter(docxFile.getAbsolutePath());
+
+                // Step 2: DOCX 转 PDF
+                System.out.println("  [2/4] 转换 PDF...");
                 convert(docxFile.getAbsolutePath(), pdfFile.getAbsolutePath());
                 long elapsed = System.currentTimeMillis() - startTime;
 
@@ -172,14 +176,34 @@ public class DocxConvertPdf {
                 fileNode.put("elapsedMs", elapsed);
                 fileNode.putNull("error");
 
-                System.out.println("  -> 成功 (" + elapsed + " ms)");
+                System.out.println("  -> PDF 转换成功 (" + elapsed + " ms)");
                 successCount++;
 
-                // 提取行级别文本
-                extractLineLevel(pdfFile);
+                // Step 3 & 4: 并行执行 - 提取TXT/JSON 和 渲染图片
+                System.out.println("  [3&4] 并行: TXT/JSON提取 + 图片渲染...");
+                long parallelStartTime = System.currentTimeMillis();
+                final String taskId = originalName;
+                final File finalPdfFile = pdfFile;
+                final File finalPdfDir = pdfDir;
+                final String finalOriginalName = originalName;
 
-                // 渲染 PDF 页面为图片
-                renderPdfToImages(pdfFile);
+                CompletableFuture<Void> extractFuture = CompletableFuture.runAsync(() -> {
+                    try {
+                        PdfTableExtractor.extractToXml(taskId, finalPdfFile.getAbsolutePath(), finalPdfDir.getAbsolutePath(), false, finalOriginalName);
+                    } catch (IOException e) {
+                        throw new RuntimeException("TXT/JSON提取失败: " + e.getMessage(), e);
+                    }
+                });
+
+                CompletableFuture<Void> renderFuture = CompletableFuture.runAsync(() -> {
+                    File imageDir = new File(finalPdfDir.getParentFile(), "test/image/" + finalOriginalName);
+                    renderPdfToImages(finalPdfFile, imageDir);
+                });
+
+                CompletableFuture.allOf(extractFuture, renderFuture).join();
+                long parallelElapsed = System.currentTimeMillis() - parallelStartTime;
+                long totalElapsed = System.currentTimeMillis() - startTime;
+                System.out.println("  -> 并行任务完成 (" + parallelElapsed + " ms), 总耗时: " + totalElapsed + " ms");
 
             } catch (Exception e) {
                 fileNode.put("status", "failed");
@@ -324,34 +348,15 @@ public class DocxConvertPdf {
 
     /**
      * 将 PDF 页面渲染为图片（指定输出目录）
+     * 使用 PdfImageRenderer 进行多线程并行渲染
      *
      * @param pdfFile  PDF 文件
      * @param imageDir 图片输出目录
      */
     public static void renderPdfToImages(File pdfFile, File imageDir) {
-        if (!imageDir.exists()) {
-            imageDir.mkdirs();
-        }
-
-        System.out.println("  -> 渲染 PDF 页面为图片...");
-        long startTime = System.currentTimeMillis();
-
-        try (PDDocument document = Loader.loadPDF(pdfFile)) {
-            PDFRenderer renderer = new PDFRenderer(document);
-            int pageCount = document.getNumberOfPages();
-
-            for (int page = 0; page < pageCount; page++) {
-                // 72 DPI，RGB 模式，与 PDF 坐标 1:1 对应
-                BufferedImage image = renderer.renderImageWithDPI(page, 72, ImageType.RGB);
-
-                // 保存为 PNG：0.png, 1.png, ...
-                File outputFile = new File(imageDir, page + ".png");
-                ImageIO.write(image, "PNG", outputFile);
-            }
-
-            long elapsed = System.currentTimeMillis() - startTime;
-            System.out.println("  -> 图片渲染完成: " + pageCount + " 页 (" + elapsed + " ms)");
-
+        try {
+            // 使用 PdfImageRenderer（默认5线程，72 DPI）
+            PdfImageRenderer.render(pdfFile, imageDir);
         } catch (IOException e) {
             log.error("PDF 渲染图片失败: {}", e.getMessage(), e);
             System.err.println("  -> 图片渲染失败: " + e.getMessage());
@@ -470,6 +475,15 @@ public class DocxConvertPdf {
         long startTime = System.currentTimeMillis();
 
         try {
+            // 获取原始文件名（不含扩展名）
+            String originalName = fileName.substring(0, fileName.lastIndexOf('.'));
+
+            // Step 1: 移除页眉页脚
+            System.out.println("  [1/4] 移除页眉页脚...");
+            DocxHeaderFooterRemover.removeHeaderFooter(pendingFile.getAbsolutePath());
+
+            // Step 2: DOCX 转 PDF
+            System.out.println("  [2/4] 转换 PDF...");
             convert(pendingFile.getAbsolutePath(), pdfFile.getAbsolutePath());
             long elapsed = System.currentTimeMillis() - startTime;
 
@@ -479,13 +493,33 @@ public class DocxConvertPdf {
             fileNode.put("elapsedMs", elapsed);
             fileNode.putNull("error");
 
-            System.out.println("  -> 转换成功 (" + elapsed + " ms)");
+            System.out.println("  -> PDF 转换成功 (" + elapsed + " ms)");
 
-            // 提取行级别文本
-            extractLineLevel(pdfFile);
+            // Step 3 & 4: 并行执行 - 提取TXT/JSON 和 渲染图片
+            System.out.println("  [3&4] 并行: TXT/JSON提取 + 图片渲染...");
+            long parallelStartTime = System.currentTimeMillis();
+            final String taskId = originalName;
+            final File finalPdfFile = pdfFile;
+            final File finalPdfDir = pdfDir;
+            final String finalOriginalName = originalName;
 
-            // 渲染 PDF 页面为图片
-            renderPdfToImages(pdfFile);
+            CompletableFuture<Void> extractFuture = CompletableFuture.runAsync(() -> {
+                try {
+                    PdfTableExtractor.extractToXml(taskId, finalPdfFile.getAbsolutePath(), finalPdfDir.getAbsolutePath(), false, finalOriginalName);
+                } catch (IOException e) {
+                    throw new RuntimeException("TXT/JSON提取失败: " + e.getMessage(), e);
+                }
+            });
+
+            CompletableFuture<Void> renderFuture = CompletableFuture.runAsync(() -> {
+                File imageDir = new File(finalPdfDir.getParentFile(), "test/image/" + finalOriginalName);
+                renderPdfToImages(finalPdfFile, imageDir);
+            });
+
+            CompletableFuture.allOf(extractFuture, renderFuture).join();
+            long parallelElapsed = System.currentTimeMillis() - parallelStartTime;
+            long totalElapsed = System.currentTimeMillis() - startTime;
+            System.out.println("  -> 并行任务完成 (" + parallelElapsed + " ms), 总耗时: " + totalElapsed + " ms");
 
         } catch (Exception e) {
             fileNode.put("status", "failed");

@@ -86,10 +86,17 @@ public class DocxPdfService {
 
         log.info("文件保存成功: {}", savedFile.getAbsolutePath());
 
+        // 获取原始文件名（不含扩展名）
+        String originalFilename = file.getOriginalFilename();
+        String originalName = originalFilename != null && originalFilename.contains(".")
+                ? originalFilename.substring(0, originalFilename.lastIndexOf('.'))
+                : taskId;
+
         // 返回结果
         result.put("taskId", taskId);
         result.put("filePath", savedFile.getAbsolutePath());
         result.put("taskDir", taskDir.getAbsolutePath());
+        result.put("originalName", originalName);
 
         return result;
     }
@@ -124,6 +131,20 @@ public class DocxPdfService {
      * @throws IOException 文件读写异常
      */
     public void extractPdfToXml(String taskId, String pdfPath, String outputDir, boolean includeMcid) throws IOException {
+        extractPdfToXml(taskId, pdfPath, outputDir, includeMcid, taskId);
+    }
+
+    /**
+     * 从PDF提取表格和段落结构到XML格式（可控制MCID输出，支持原始文件名）
+     *
+     * @param taskId 任务ID
+     * @param pdfPath PDF文件路径
+     * @param outputDir 输出目录
+     * @param includeMcid 是否在输出中包含MCID和page属性
+     * @param originalName 原始文件名（不含扩展名），用于AI训练JSON文件名
+     * @throws IOException 文件读写异常
+     */
+    public void extractPdfToXml(String taskId, String pdfPath, String outputDir, boolean includeMcid, String originalName) throws IOException {
         // 验证PDF文件存在
         File pdfFile = new File(pdfPath);
         if (!pdfFile.exists()) {
@@ -137,7 +158,7 @@ public class DocxPdfService {
         }
 
         // 调用PdfTableExtractor提取结构
-        PdfTableExtractor.extractToXml(taskId, pdfPath, outputDir, includeMcid);
+        PdfTableExtractor.extractToXml(taskId, pdfPath, outputDir, includeMcid, originalName);
     }
 
     /**
@@ -171,6 +192,7 @@ public class DocxPdfService {
             taskId = (String) uploadResult.get("taskId");
             String docxPath = (String) uploadResult.get("filePath");
             taskDir = (String) uploadResult.get("taskDir");
+            String originalName = (String) uploadResult.get("originalName");
 
             result.put("taskId", taskId);
             result.put("docxPath", docxPath);
@@ -199,25 +221,41 @@ public class DocxPdfService {
             result.put("pdfPath", pdfPath);
             log.info("[taskId: {}] PDF文件生成成功: {}", taskId, pdfPath);
 
-            // Step 3: 解析PDF生成TXT（根据参数决定是否包含MCID）
-            log.info("[taskId: {}] Step 3: 解析PDF生成TXT... (includeMcid={})", taskId, includeMcid);
-            updateTaskStatus(taskId, STATUS_EXTRACTING, "正在解析PDF", null);
+            // Step 3 & 4: 并行执行 - 提取TXT/JSON 和 渲染图片
+            log.info("[taskId: {}] Step 3&4: 并行执行 TXT/JSON提取 和 图片渲染...", taskId);
+            updateTaskStatus(taskId, STATUS_EXTRACTING, "正在解析PDF和渲染图片", null);
 
-            extractPdfToXml(taskId, pdfPath, taskDir, includeMcid);
+            final String finalTaskId = taskId;
+            final String finalPdfPath = pdfPath;
+            final String finalTaskDir = taskDir;
+            final String finalOriginalName = originalName;
+            final File finalPdfFile = pdfFile;
 
-            // Step 4: 渲染PDF页面为图片
-            log.info("[taskId: {}] Step 4: 渲染PDF页面为图片...", taskId);
-            try {
-                // 从docxPath提取文件名（不含扩展名）
-                File docxFile = new File(docxPath);
-                String docxName = docxFile.getName();
-                String filename = docxName.substring(0, docxName.lastIndexOf('.'));
-                File imageDir = new File(taskDir, "images" + File.separator + filename);
-                DocxConvertPdf.renderPdfToImages(pdfFile, imageDir);
-                log.info("[taskId: {}] 图片渲染完成, 目录: {}", taskId, imageDir.getAbsolutePath());
-            } catch (Exception e) {
-                log.warn("[taskId: {}] 图片渲染失败（非致命）: {}", taskId, e.getMessage());
-            }
+            // 并行任务1: 提取TXT + AI JSON
+            CompletableFuture<Void> extractFuture = CompletableFuture.runAsync(() -> {
+                try {
+                    log.info("[taskId: {}] [并行] 开始提取TXT/JSON...", finalTaskId);
+                    extractPdfToXml(finalTaskId, finalPdfPath, finalTaskDir, includeMcid, finalOriginalName);
+                    log.info("[taskId: {}] [并行] TXT/JSON提取完成", finalTaskId);
+                } catch (IOException e) {
+                    throw new RuntimeException("TXT/JSON提取失败: " + e.getMessage(), e);
+                }
+            });
+
+            // 并行任务2: 渲染图片
+            CompletableFuture<Void> renderFuture = CompletableFuture.runAsync(() -> {
+                try {
+                    log.info("[taskId: {}] [并行] 开始渲染图片...", finalTaskId);
+                    File imageDir = new File(finalTaskDir, "images" + File.separator + finalOriginalName);
+                    DocxConvertPdf.renderPdfToImages(finalPdfFile, imageDir);
+                    log.info("[taskId: {}] [并行] 图片渲染完成, 目录: {}", finalTaskId, imageDir.getAbsolutePath());
+                } catch (Exception e) {
+                    log.warn("[taskId: {}] [并行] 图片渲染失败（非致命）: {}", finalTaskId, e.getMessage());
+                }
+            });
+
+            // 等待两个任务都完成
+            CompletableFuture.allOf(extractFuture, renderFuture).join();
 
             // 查找生成的TXT文件
             File taskDirFile = new File(taskDir);
@@ -258,9 +296,10 @@ public class DocxPdfService {
      * @param docxPath DOCX文件路径
      * @param taskDir 任务目录
      * @param includeMcid 是否包含MCID
+     * @param originalName 原始文件名（不含扩展名）
      */
     @Async
-    public void processDocxToPdfTxtAsync(String taskId, String docxPath, String taskDir, boolean includeMcid) {
+    public void processDocxToPdfTxtAsync(String taskId, String docxPath, String taskDir, boolean includeMcid, String originalName) {
         log.info("[taskId: {}] 开始异步处理...", taskId);
 
         try {
@@ -283,25 +322,41 @@ public class DocxPdfService {
             }
             log.info("[taskId: {}] PDF文件生成成功: {}", taskId, pdfPath);
 
-            // Step 3: 解析PDF生成TXT
-            log.info("[taskId: {}] Step 3: 解析PDF生成TXT... (includeMcid={})", taskId, includeMcid);
-            updateTaskStatus(taskId, STATUS_EXTRACTING, "正在解析PDF", null);
+            // Step 3 & 4: 并行执行 - 提取TXT/JSON 和 渲染图片
+            log.info("[taskId: {}] Step 3&4: 并行执行 TXT/JSON提取 和 图片渲染...", taskId);
+            updateTaskStatus(taskId, STATUS_EXTRACTING, "正在解析PDF和渲染图片", null);
 
-            extractPdfToXml(taskId, pdfPath, taskDir, includeMcid);
+            final String finalTaskId = taskId;
+            final String finalPdfPath = pdfPath;
+            final String finalTaskDir = taskDir;
+            final String finalOriginalName = originalName;
+            final File finalPdfFile = pdfFile;
 
-            // Step 4: 渲染PDF页面为图片
-            log.info("[taskId: {}] Step 4: 渲染PDF页面为图片...", taskId);
-            try {
-                // 从docxPath提取文件名（不含扩展名）
-                File docxFile = new File(docxPath);
-                String docxName = docxFile.getName();
-                String filename = docxName.substring(0, docxName.lastIndexOf('.'));
-                File imageDir = new File(taskDir, "images" + File.separator + filename);
-                DocxConvertPdf.renderPdfToImages(pdfFile, imageDir);
-                log.info("[taskId: {}] 图片渲染完成, 目录: {}", taskId, imageDir.getAbsolutePath());
-            } catch (Exception e) {
-                log.warn("[taskId: {}] 图片渲染失败（非致命）: {}", taskId, e.getMessage());
-            }
+            // 并行任务1: 提取TXT + AI JSON
+            CompletableFuture<Void> extractFuture = CompletableFuture.runAsync(() -> {
+                try {
+                    log.info("[taskId: {}] [并行] 开始提取TXT/JSON...", finalTaskId);
+                    extractPdfToXml(finalTaskId, finalPdfPath, finalTaskDir, includeMcid, finalOriginalName);
+                    log.info("[taskId: {}] [并行] TXT/JSON提取完成", finalTaskId);
+                } catch (IOException e) {
+                    throw new RuntimeException("TXT/JSON提取失败: " + e.getMessage(), e);
+                }
+            });
+
+            // 并行任务2: 渲染图片
+            CompletableFuture<Void> renderFuture = CompletableFuture.runAsync(() -> {
+                try {
+                    log.info("[taskId: {}] [并行] 开始渲染图片...", finalTaskId);
+                    File imageDir = new File(finalTaskDir, "images" + File.separator + finalOriginalName);
+                    DocxConvertPdf.renderPdfToImages(finalPdfFile, imageDir);
+                    log.info("[taskId: {}] [并行] 图片渲染完成, 目录: {}", finalTaskId, imageDir.getAbsolutePath());
+                } catch (Exception e) {
+                    log.warn("[taskId: {}] [并行] 图片渲染失败（非致命）: {}", finalTaskId, e.getMessage());
+                }
+            });
+
+            // 等待两个任务都完成
+            CompletableFuture.allOf(extractFuture, renderFuture).join();
 
             // 构建结果信息
             Map<String, Object> resultInfo = new HashMap<>();

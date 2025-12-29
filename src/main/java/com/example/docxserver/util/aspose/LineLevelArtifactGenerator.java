@@ -65,6 +65,7 @@ public class LineLevelArtifactGenerator {
 
     /**
      * 生成行级别 artifact 文件（JSON 格式）
+     * 使用 taskId 作为默认输出文件名
      *
      * @param taskId    任务 ID
      * @param pdfPath   PDF 文件路径
@@ -72,16 +73,27 @@ public class LineLevelArtifactGenerator {
      * @throws IOException IO 异常
      */
     public static void generate(String taskId, String pdfPath, String outputDir) throws IOException {
+        generate(taskId, pdfPath, outputDir, taskId);
+    }
+
+    /**
+     * 生成行级别 artifact 文件（JSON 格式）
+     *
+     * @param taskId       任务 ID
+     * @param pdfPath      PDF 文件路径
+     * @param outputDir    输出目录
+     * @param originalName 原始文件名（不含扩展名），用于输出文件名
+     * @throws IOException IO 异常
+     */
+    public static void generate(String taskId, String pdfPath, String outputDir, String originalName) throws IOException {
         File pdfFile = new File(pdfPath);
         if (!pdfFile.exists()) {
             log.error("PDF 文件不存在: {}", pdfPath);
             return;
         }
 
-        // 使用 PDF 文件名作为输出文件名
-        String pdfName = pdfFile.getName();
-        String baseName = pdfName.substring(0, pdfName.lastIndexOf('.'));
-        String outputPath = outputDir + File.separator + baseName + ".json";
+        // 使用原始文件名作为输出文件名
+        String outputPath = outputDir + File.separator + originalName + ".json";
 
         // 收集所有元素
         List<Map<String, Object>> elements = new ArrayList<>();
@@ -137,6 +149,65 @@ public class LineLevelArtifactGenerator {
         // 写入 JSON 文件
         mapper.writeValue(new File(outputPath), elements);
         log.info("行级别 artifact 已写入: {}", outputPath);
+    }
+
+    /**
+     * 使用共享 Context 生成行级别 artifact 文件
+     * 避免重复打开 PDF 和预热缓存
+     *
+     * @param ctx          共享上下文
+     * @param taskId       任务 ID
+     * @param outputDir    输出目录
+     * @param originalName 原始文件名（不含扩展名），用于输出文件名
+     * @throws IOException IO 异常
+     */
+    public static void generateWithContext(PdfExtractionContext ctx, String taskId, String outputDir, String originalName) throws IOException {
+        log.info("开始生成行级别 artifact（使用共享 Context）...");
+        long startTime = System.currentTimeMillis();
+
+        // 使用原始文件名作为输出文件名
+        String outputPath = outputDir + File.separator + originalName + ".json";
+
+        // 从上下文获取共享资源
+        PDDocument doc = ctx.getDoc();
+        PDStructureTreeRoot structTreeRoot = ctx.getStructTreeRoot();
+        PageMcidCache mcidCache = ctx.getMcidCache();
+        Map<PDPage, Set<Integer>> tableMCIDsByPage = ctx.getTableMCIDsByPage();
+
+        // 收集所有元素
+        List<Map<String, Object>> elements = new ArrayList<>();
+        int[] lineIdCounter = {0};
+
+        // 提取表格和段落（第一遍收集 MCID 已在 Context 初始化时完成）
+        for (Object kid : structTreeRoot.getKids()) {
+            if (kid instanceof PDStructureElement) {
+                extractElements(
+                        (PDStructureElement) kid,
+                        elements,
+                        lineIdCounter,
+                        doc,
+                        tableMCIDsByPage,
+                        mcidCache
+                );
+            }
+        }
+
+        log.info("共提取 {} 个元素", elements.size());
+
+        // 添加数组索引 id 和 line_id
+        for (int i = 0; i < elements.size(); i++) {
+            elements.get(i).put("id", i);
+            elements.get(i).put("line_id", i);
+        }
+
+        // 设置 parent_id 和 relation
+        setParentIdAndRelation(elements);
+
+        // 写入 JSON 文件
+        mapper.writeValue(new File(outputPath), elements);
+
+        long elapsed = System.currentTimeMillis() - startTime;
+        log.info("行级别 artifact 已写入: {}，耗时: {} ms", outputPath, elapsed);
     }
 
     /**

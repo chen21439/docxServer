@@ -116,14 +116,15 @@ public class DocxPdfController {
             String taskId = (String) uploadResult.get("taskId");
             String docxPath = (String) uploadResult.get("filePath");
             String taskDir = (String) uploadResult.get("taskDir");
+            String originalName = (String) uploadResult.get("originalName");
 
             // 更新状态为已上传
             docxPdfService.updateTaskStatus(taskId, DocxPdfService.STATUS_UPLOADED, "文件已上传，开始处理", null);
 
-            log.info("文件已保存: taskId={}, 开始异步处理", taskId);
+            log.info("文件已保存: taskId={}, originalName={}, 开始异步处理", taskId, originalName);
 
             // Step 2: 异步执行后续处理（移除页眉页脚、转换PDF、解析TXT）
-            docxPdfService.processDocxToPdfTxtAsync(taskId, docxPath, taskDir, includeMcid);
+            docxPdfService.processDocxToPdfTxtAsync(taskId, docxPath, taskDir, includeMcid, originalName);
 
             // 立即返回taskId
             result.put("success", true);
@@ -162,7 +163,7 @@ public class DocxPdfController {
             File pdfFile = null;
             File tableTxtFile = null;      // {taskId}_pdf_*.txt（不含paragraph）
             File paragraphTxtFile = null;  // {taskId}_pdf_paragraph_*.txt
-            File aiJsonFile = null;        // {taskId}.json（AI训练用）
+            File aiJsonFile = null;        // {originalName}.json（AI训练用）
 
             File[] files = taskDirFile.listFiles();
             if (files != null) {
@@ -170,8 +171,8 @@ public class DocxPdfController {
                     String name = f.getName();
                     if (name.endsWith(".pdf")) {
                         pdfFile = f;
-                    } else if (name.equals(taskId + ".json")) {
-                        // AI训练用JSON
+                    } else if (name.endsWith(".json") && !name.equals("status.json")) {
+                        // AI训练用JSON（排除status.json）
                         aiJsonFile = f;
                     } else if (name.startsWith(taskId + "_pdf_paragraph_") && name.endsWith(".txt")) {
                         // 段落文件：取最新的
@@ -205,11 +206,12 @@ public class DocxPdfController {
                 if (paragraphTxtFile != null) {
                     addFileToZip(zos, paragraphTxtFile, taskId + "_paragraph.txt");
                 }
-                // AI训练用JSON
+                // AI训练用JSON（使用原始文件名）
                 if (aiJsonFile != null) {
-                    addFileToZip(zos, aiJsonFile, taskId + ".json");
+                    addFileToZip(zos, aiJsonFile, aiJsonFile.getName());
                 }
                 // 图片目录（结构：images/{filename}/0.png, 1.png, ...）
+                // ZIP中使用原始文件名作为目录名
                 if (imagesDir.exists() && imagesDir.isDirectory()) {
                     File[] subDirs = imagesDir.listFiles(File::isDirectory);
                     if (subDirs != null) {
@@ -276,7 +278,6 @@ public class DocxPdfController {
             }
         }
         zos.closeEntry();
-        log.info("已添加到ZIP: {} -> {}", file.getName(), entryName);
     }
 
     /**

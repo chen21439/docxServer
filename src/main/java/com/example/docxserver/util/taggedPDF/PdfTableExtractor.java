@@ -24,6 +24,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * PDF表格提取器
@@ -45,6 +46,119 @@ public class PdfTableExtractor {
      */
     private static final ThreadLocal<PdfTocParser> sharedTocParser = new ThreadLocal<>();
 
+    // ==================== 新统一入口（使用共享Context） ====================
+
+    /**
+     * 统一的 PDF 提取入口（使用共享 Context，避免重复打开文件和预热缓存）
+     *
+     * @param taskId      任务ID
+     * @param pdfPath     PDF文件路径
+     * @param outputDir   输出目录
+     * @param outputTypes 输出类型数组，支持 "txt"（表格/段落TXT）和 "infer"（AI训练JSON）
+     * @param includeMcid 是否在TXT输出中包含MCID属性
+     * @param originalName 原始文件名（不含扩展名），用于AI训练JSON文件名
+     * @throws IOException 文件读写异常
+     */
+    public static void extract(String taskId, String pdfPath, String outputDir,
+                               String[] outputTypes, boolean includeMcid, String originalName) throws IOException {
+        // 解析输出类型
+        Set<String> types = Arrays.stream(outputTypes)
+                .map(String::toLowerCase)
+                .collect(Collectors.toSet());
+
+        boolean needTxt = types.contains("txt");
+        boolean needInfer = types.contains("infer");
+
+        if (!needTxt && !needInfer) {
+            log.warn("未指定有效的输出类型，跳过提取");
+            return;
+        }
+
+        log.info("开始 PDF 提取: outputTypes={}, includeMcid={}", Arrays.toString(outputTypes), includeMcid);
+
+        // 使用共享 Context，避免重复打开文件和预热缓存
+        try (PdfExtractionContext ctx = new PdfExtractionContext(pdfPath)) {
+            // 根据输出类型串行执行（共享同一个 PDDocument，避免并发问题）
+            if (needTxt) {
+                extractTxtWithContext(ctx, taskId, outputDir, includeMcid);
+            }
+
+            if (needInfer) {
+                LineLevelArtifactGenerator.generateWithContext(ctx, taskId, outputDir, originalName);
+            }
+
+            log.info("PDF 提取完成: {}", ctx.getCacheStats());
+        } finally {
+            // 清理共享的 Parser
+            sharedListParser.remove();
+            sharedTocParser.remove();
+        }
+    }
+
+    /**
+     * 使用共享 Context 提取 TXT（表格结构 + 段落结构 + 聚合文件）
+     *
+     * @param ctx         共享上下文
+     * @param taskId      任务ID
+     * @param outputDir   输出目录
+     * @param includeMcid 是否包含MCID属性
+     * @throws IOException 文件读写异常
+     */
+    public static void extractTxtWithContext(PdfExtractionContext ctx, String taskId, String outputDir, boolean includeMcid) throws IOException {
+        log.info("开始提取 TXT（使用共享 Context）...");
+        long startTime = System.currentTimeMillis();
+
+        // 生成带时间戳的输出文件名
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
+        String timestamp = sdf.format(new Date());
+        String tableOutputPath = outputDir + File.separator + taskId + "_pdf_" + timestamp + ".txt";
+        String paragraphOutputPath = outputDir + File.separator + taskId + "_pdf_paragraph_" + timestamp + ".txt";
+        String mergedOutputPath = outputDir + File.separator + taskId + "_merged_" + timestamp + ".txt";
+
+        StringBuilder tableOutput = new StringBuilder();
+        StringBuilder paragraphOutput = new StringBuilder();
+
+        PDDocument doc = ctx.getDoc();
+        PDStructureTreeRoot structTreeRoot = ctx.getStructTreeRoot();
+        PageMcidCache mcidCache = ctx.getMcidCache();
+        Map<PDPage, Set<Integer>> tableMCIDsByPage = ctx.getTableMCIDsByPage();
+
+        // 第二遍遍历：提取所有表格和段落
+        log.info("提取表格和段落...");
+        long pass2Start = System.currentTimeMillis();
+        Counter tableCounter = new Counter();
+
+        for (Object kid : structTreeRoot.getKids()) {
+            if (kid instanceof PDStructureElement) {
+                PDStructureElement element = (PDStructureElement) kid;
+                extractTablesFromElement(element, tableOutput, paragraphOutput, tableCounter, doc,
+                        tableMCIDsByPage, null, structTreeRoot, includeMcid, mcidCache);
+            }
+        }
+
+        long pass2End = System.currentTimeMillis();
+        log.info("共提取 {} 个表格, {} 个段落，耗时: {} ms",
+                tableCounter.tableIndex, tableCounter.paragraphIndex, (pass2End - pass2Start));
+
+        // 写入表格文件
+        Files.write(Paths.get(tableOutputPath), tableOutput.toString().getBytes(StandardCharsets.UTF_8));
+        log.info("PDF表格结构已写入到: {}", tableOutputPath);
+
+        // 写入段落文件
+        Files.write(Paths.get(paragraphOutputPath), paragraphOutput.toString().getBytes(StandardCharsets.UTF_8));
+        log.info("PDF段落结构已写入到: {}", paragraphOutputPath);
+
+        // 生成聚合文件
+        String mergedContent = generateMergedContent(tableOutput.toString(), paragraphOutput.toString());
+        Files.write(Paths.get(mergedOutputPath), mergedContent.getBytes(StandardCharsets.UTF_8));
+        log.info("PDF聚合结构已写入到: {}", mergedOutputPath);
+
+        long elapsed = System.currentTimeMillis() - startTime;
+        log.info("TXT 提取完成，总耗时: {} ms", elapsed);
+    }
+
+    // ==================== 旧方法（向后兼容） ====================
+
     /**
      * 从PDF提取表格和段落结构到XML格式
      *
@@ -54,7 +168,7 @@ public class PdfTableExtractor {
      * @throws IOException 文件读写异常
      */
     public static void extractToXml(String taskId, String pdfPath, String outputDir) throws IOException {
-        extractToXml(taskId, pdfPath, outputDir, -1, true);
+        extractToXml(taskId, pdfPath, outputDir, -1, true, taskId);
     }
 
     /**
@@ -67,7 +181,23 @@ public class PdfTableExtractor {
      * @throws IOException 文件读写异常
      */
     public static void extractToXml(String taskId, String pdfPath, String outputDir, boolean includeMcid) throws IOException {
-        extractToXml(taskId, pdfPath, outputDir, -1, includeMcid);
+        extractToXml(taskId, pdfPath, outputDir, -1, includeMcid, taskId);
+    }
+
+    /**
+     * 从PDF提取表格和段落结构到XML格式（可控制MCID输出，支持原始文件名）
+     * 使用新的统一入口，共享 Context 避免重复打开文件
+     *
+     * @param taskId 任务ID
+     * @param pdfPath PDF文件路径
+     * @param outputDir 输出目录
+     * @param includeMcid 是否在输出中包含MCID属性
+     * @param originalName 原始文件名（不含扩展名），用于AI训练JSON文件名
+     * @throws IOException 文件读写异常
+     */
+    public static void extractToXml(String taskId, String pdfPath, String outputDir, boolean includeMcid, String originalName) throws IOException {
+        // 使用新的统一入口，同时输出 TXT 和 INFER（与旧行为一致）
+        extract(taskId, pdfPath, outputDir, new String[]{"txt", "infer"}, includeMcid, originalName);
     }
 
     /**
@@ -80,7 +210,7 @@ public class PdfTableExtractor {
      * @throws IOException 文件读写异常
      */
     public static void extractToXml(String taskId, String pdfPath, String outputDir, int targetPageNum) throws IOException {
-        extractToXml(taskId, pdfPath, outputDir, targetPageNum, true);
+        extractToXml(taskId, pdfPath, outputDir, targetPageNum, true, taskId);
     }
 
     /**
@@ -91,9 +221,10 @@ public class PdfTableExtractor {
      * @param outputDir 输出目录
      * @param targetPageNum 目标页码（1-based，-1表示所有页面）
      * @param includeMcid 是否在输出中包含MCID和page属性
+     * @param originalName 原始文件名（不含扩展名），用于AI训练JSON文件名
      * @throws IOException 文件读写异常
      */
-    public static void extractToXml(String taskId, String pdfPath, String outputDir, int targetPageNum, boolean includeMcid) throws IOException {
+    public static void extractToXml(String taskId, String pdfPath, String outputDir, int targetPageNum, boolean includeMcid, String originalName) throws IOException {
         File pdfFile = new File(pdfPath);
 
         // 生成带时间戳的输出文件名
@@ -219,7 +350,7 @@ public class PdfTableExtractor {
         // 生成行级别 artifact（AI训练用JSON）
         try {
             log.info("开始生成行级别 artifact...");
-            LineLevelArtifactGenerator.generate(taskId, pdfPath, outputDir);
+            LineLevelArtifactGenerator.generate(taskId, pdfPath, outputDir, originalName);
             log.info("行级别 artifact 生成完成");
         } catch (Exception e) {
             log.error("生成行级别 artifact 失败: {}", e.getMessage(), e);
