@@ -24,16 +24,16 @@ import java.util.*;
  *
  * 独立的生成器，将 PDF 中的：
  * 1. 表格外段落按行切分
- * 2. 表格结构提取（每页取第一行文字，bbox 为完整表格）
+ * 2. 表格结构提取（完整 XML，跨页表格作为一个元素）
  *
- * 输出文件：_line_level.json
+ * 输出文件：{originalName}.json
  *
  * class 分类：
  * - fstline: 段落（P）的第一行
  * - para: 段落（P）的其他行
  * - section: 标题（H1-H6）
  * - list_item: 列表项（LI, LBody）
- * - table: 表格
+ * - table: 表格（text 为完整 XML，page/box 取第一页值）
  */
 public class LineLevelArtifactGenerator {
 
@@ -230,7 +230,7 @@ public class LineLevelArtifactGenerator {
 
         String structType = element.getStructureType();
 
-        // 处理表格元素
+        // 表格元素：提取完整 XML，作为一个元素（不再按页拆分）
         if ("Table".equalsIgnoreCase(structType)) {
             extractTable(element, elements, lineIdCounter, doc, mcidCache);
             return;
@@ -352,9 +352,11 @@ public class LineLevelArtifactGenerator {
 
     /**
      * 提取表格结构
-     * - 跨页表格拆分成多个元素，每页一个
-     * - bbox：该页表格的边界框
-     * - 文字：该页第一行
+     *
+     * - 跨页表格作为一个元素保存（不再按页拆分）
+     * - text：完整的表格 XML（<table><tr><td>...</table>）
+     * - page：第一页页码
+     * - box：第一页的 bbox
      */
     private static void extractTable(
             PDStructureElement tableElement,
@@ -363,24 +365,148 @@ public class LineLevelArtifactGenerator {
             PDDocument doc,
             PageMcidCache mcidCache) throws IOException {
 
-        // 按页收集所有 TextPosition
+        // 生成表格 ID（使用 lineIdCounter 作为表格计数）
+        int tableIndex = lineIdCounter[0]++;
+        String tableId = String.format("t%03d", tableIndex + 1);
+
+        // 按页收集所有 TextPosition（用于计算 bbox）
         Map<PDPage, List<TextPosition>> positionsByPage = new LinkedHashMap<>();
+        // 收集页码信息
+        Set<Integer> tablePages = new TreeSet<>();
 
-        // 递归收集表格内所有单元格的 TextPosition
-        collectTablePositions(tableElement, positionsByPage, doc, mcidCache);
+        // 构建表格 XML 内容
+        StringBuilder tableXml = new StringBuilder();
 
-        if (positionsByPage.isEmpty()) {
-            // 空表格，生成一个空元素
-            Map<String, Object> elem = new LinkedHashMap<>();
-            elem.put("class", CLASS_TABLE);
-            elem.put("page", "");
-            elem.put("box", new int[]{0, 0, 0, 0});
-            elem.put("text", "");
-            elem.put("is_meta", "");
-            elem.put("parent_id", "");
-            elem.put("relation", "");
-            elements.add(elem);
-            return;
+        // 提取表格内的行
+        int rowIndex = 0;
+        for (Object kid : tableElement.getKids()) {
+            if (kid instanceof PDStructureElement) {
+                PDStructureElement childElement = (PDStructureElement) kid;
+                String childType = childElement.getStructureType();
+
+                if ("TR".equalsIgnoreCase(childType)) {
+                    String rowId = tableId + "-r" + String.format("%03d", rowIndex + 1);
+                    tableXml.append("  <tr id=\"").append(rowId).append("\">\n");
+
+                    int colIndex = 0;
+                    for (Object cellKid : childElement.getKids()) {
+                        if (cellKid instanceof PDStructureElement) {
+                            PDStructureElement cellElement = (PDStructureElement) cellKid;
+                            String cellType = cellElement.getStructureType();
+
+                            if ("TD".equalsIgnoreCase(cellType) || "TH".equalsIgnoreCase(cellType)) {
+                                String cellId = rowId + "-c" + String.format("%03d", colIndex + 1) + "-p001";
+
+                                // 提取单元格文本
+                                TextWithPositions textWithPositions = PdfTextExtractor.extractTextWithPositions(cellElement, doc, mcidCache);
+                                String cellText = textWithPositions.getText();
+                                cellText = TextUtils.removeZeroWidthChars(cellText);
+
+                                // 收集位置信息（用于计算 bbox）
+                                Map<PDPage, List<TextPosition>> cellPositionsByPage = textWithPositions.getPositionsByPage();
+                                if (cellPositionsByPage != null) {
+                                    for (Map.Entry<PDPage, List<TextPosition>> entry : cellPositionsByPage.entrySet()) {
+                                        PDPage page = entry.getKey();
+                                        List<TextPosition> pagePositions = entry.getValue();
+                                        if (!positionsByPage.containsKey(page)) {
+                                            positionsByPage.put(page, new ArrayList<>());
+                                        }
+                                        positionsByPage.get(page).addAll(pagePositions);
+
+                                        // 收集页码
+                                        int pageNum = doc.getPages().indexOf(page) + 1;
+                                        if (pageNum > 0) {
+                                            tablePages.add(pageNum);
+                                        }
+                                    }
+                                }
+
+                                // 构建单元格 XML
+                                String tagName = cellType.toLowerCase();
+                                tableXml.append("    <").append(tagName).append(">");
+                                tableXml.append("<p id=\"").append(cellId).append("\">");
+                                tableXml.append(escapeXml(cellText));
+                                tableXml.append("</p>");
+                                tableXml.append("</").append(tagName).append(">\n");
+
+                                colIndex++;
+                            }
+                        }
+                    }
+
+                    tableXml.append("  </tr>\n");
+                    rowIndex++;
+                }
+            }
+        }
+
+        // 构建完整的表格 XML
+        StringBuilder fullXml = new StringBuilder();
+        fullXml.append("<table id=\"").append(tableId).append("\"");
+
+        // 添加 page 属性（用 | 分隔）
+        if (!tablePages.isEmpty()) {
+            StringBuilder pageStr = new StringBuilder();
+            for (Integer p : tablePages) {
+                if (pageStr.length() > 0) pageStr.append("|");
+                pageStr.append(p);
+            }
+            fullXml.append(" page=\"").append(pageStr).append("\"");
+        }
+
+        // 计算并添加 bbox 属性（用 | 分隔跨页）
+        String bboxStr = computeBboxByPage(positionsByPage, doc);
+        if (bboxStr != null) {
+            fullXml.append(" bbox=\"").append(bboxStr).append("\"");
+        }
+
+        fullXml.append(">\n");
+        fullXml.append(tableXml);
+        fullXml.append("</table>");
+
+        // 获取第一页信息（用于元素的 page 和 box 字段）
+        int firstPage = 0;
+        int[] firstBox = new int[]{0, 0, 0, 0};
+
+        if (!positionsByPage.isEmpty()) {
+            // 按页码排序，取第一页
+            List<Map.Entry<PDPage, List<TextPosition>>> sortedEntries = new ArrayList<>(positionsByPage.entrySet());
+            sortedEntries.sort((a, b) -> {
+                int pageA = doc.getPages().indexOf(a.getKey());
+                int pageB = doc.getPages().indexOf(b.getKey());
+                return Integer.compare(pageA, pageB);
+            });
+
+            PDPage firstPdPage = sortedEntries.get(0).getKey();
+            List<TextPosition> firstPagePositions = sortedEntries.get(0).getValue();
+            firstPage = doc.getPages().indexOf(firstPdPage);
+
+            // 计算第一页的 bbox
+            PDRectangle mediaBox = firstPdPage.getMediaBox();
+            BboxResult bboxResult = computeBoundingBoxToImageCoords(firstPagePositions, mediaBox.getWidth(), mediaBox.getHeight());
+            firstBox = bboxResult.box;
+        }
+
+        // 创建表格元素
+        Map<String, Object> elem = new LinkedHashMap<>();
+        elem.put("class", CLASS_TABLE);
+        elem.put("page", String.valueOf(firstPage));
+        elem.put("box", firstBox);
+        elem.put("text", fullXml.toString());
+        elem.put("is_meta", "");
+        elem.put("parent_id", "");
+        elem.put("relation", "");
+        elem.put("_table_page_index", 0);  // 完整表格，始终为 0
+
+        elements.add(elem);
+    }
+
+    /**
+     * 按页计算 bbox 字符串（用 | 分隔多页）
+     */
+    private static String computeBboxByPage(Map<PDPage, List<TextPosition>> positionsByPage, PDDocument doc) {
+        if (positionsByPage == null || positionsByPage.isEmpty()) {
+            return null;
         }
 
         // 按页码排序
@@ -391,43 +517,42 @@ public class LineLevelArtifactGenerator {
             return Integer.compare(pageA, pageB);
         });
 
-        // 每页生成一个元素
-        int tablePageIndex = 0;  // 用于标记跨页表格的页索引
+        StringBuilder result = new StringBuilder();
         for (Map.Entry<PDPage, List<TextPosition>> entry : sortedEntries) {
-            PDPage page = entry.getKey();
             List<TextPosition> positions = entry.getValue();
-            int pageNum = doc.getPages().indexOf(page);  // 从 0 开始编号
+            if (positions.isEmpty()) continue;
 
-            // 获取页面尺寸
-            PDRectangle mediaBox = page.getMediaBox();
-            float pageWidth = mediaBox.getWidth();
-            float pageHeight = mediaBox.getHeight();
-
-            // 第一行文字
-            String firstLine = extractFirstLine(positions);
-            firstLine = TextUtils.removeZeroWidthChars(firstLine);
-
-            // 计算 bbox（带溢出检测）
-            BboxResult bboxResult = computeBoundingBoxToImageCoords(positions, pageWidth, pageHeight);
-
-            Map<String, Object> elem = new LinkedHashMap<>();
-            elem.put("class", CLASS_TABLE);
-            elem.put("page", String.valueOf(pageNum));
-            elem.put("box", bboxResult.box);
-            elem.put("text", firstLine != null ? firstLine.trim() : "");
-            elem.put("is_meta", "");
-            elem.put("parent_id", "");
-            elem.put("relation", "");
-            // 标记跨页表格的页索引（0=第一页或单页，>0=后续页）
-            elem.put("_table_page_index", tablePageIndex);
-            // 只有溢出时才添加 overflow 字段
-            if (bboxResult.overflow) {
-                elem.put("overflow", true);
+            // 计算该页的 bbox
+            float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
+            float maxX = Float.MIN_VALUE, maxY = Float.MIN_VALUE;
+            for (TextPosition tp : positions) {
+                float x = tp.getXDirAdj();
+                float y = Math.abs(tp.getYDirAdj());
+                float w = tp.getWidth();
+                float h = tp.getHeight();
+                minX = Math.min(minX, x);
+                minY = Math.min(minY, y - h);
+                maxX = Math.max(maxX, x + w);
+                maxY = Math.max(maxY, y);
             }
 
-            elements.add(elem);
-            tablePageIndex++;
+            if (result.length() > 0) result.append("|");
+            result.append(String.format("%.2f,%.2f,%.2f,%.2f", minX, minY, maxX, maxY));
         }
+
+        return result.length() > 0 ? result.toString() : null;
+    }
+
+    /**
+     * 转义 XML 特殊字符
+     */
+    private static String escapeXml(String text) {
+        if (text == null) return "";
+        return text.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace("\"", "&quot;")
+                   .replace("'", "&apos;");
     }
 
     /**

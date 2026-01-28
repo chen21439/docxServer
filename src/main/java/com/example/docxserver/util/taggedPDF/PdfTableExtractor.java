@@ -144,6 +144,9 @@ public class PdfTableExtractor {
         Files.write(Paths.get(tableOutputPath), tableOutput.toString().getBytes(StandardCharsets.UTF_8));
         log.info("PDF表格结构已写入到: {}", tableOutputPath);
 
+        // 保存表格 TXT 路径到 Context（供 LineLevelArtifactGenerator 使用）
+        ctx.setTableTxtPath(tableOutputPath);
+
         // 写入段落文件
         Files.write(Paths.get(paragraphOutputPath), paragraphOutput.toString().getBytes(StandardCharsets.UTF_8));
         log.info("PDF段落结构已写入到: {}", paragraphOutputPath);

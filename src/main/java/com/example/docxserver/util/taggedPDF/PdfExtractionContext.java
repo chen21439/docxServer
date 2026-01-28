@@ -42,6 +42,12 @@ public class PdfExtractionContext implements Closeable {
     private final String pdfPath;
 
     /**
+     * 表格 TXT 文件路径（由 PdfTableExtractor 生成后设置）
+     * LineLevelArtifactGenerator 使用此路径读取表格 XML 内容
+     */
+    private String tableTxtPath;
+
+    /**
      * 创建 PDF 提取上下文
      *
      * 一次性完成：打开PDF、创建缓存、预热、收集表格MCID
@@ -126,5 +132,21 @@ public class PdfExtractionContext implements Closeable {
             doc.close();
             log.info("PDF 提取上下文已关闭");
         }
+    }
+
+    // ==================== 表格 TXT 文件路径 ====================
+
+    /**
+     * 设置表格 TXT 文件路径
+     */
+    public void setTableTxtPath(String tableTxtPath) {
+        this.tableTxtPath = tableTxtPath;
+    }
+
+    /**
+     * 获取表格 TXT 文件路径
+     */
+    public String getTableTxtPath() {
+        return tableTxtPath;
     }
 }
