@@ -390,7 +390,7 @@ public class LineLevelArtifactGenerator {
 
                 if ("TR".equalsIgnoreCase(childType)) {
                     String rowId = tableId + "-r" + String.format("%03d", rowIndex + 1);
-                    tableXml.append("<tr id=").append(rowId).append(">");
+                    tableXml.append("<tr id='").append(rowId).append("'>");
 
                     int colIndex = 0;
                     for (Object cellKid : childElement.getKids()) {
@@ -444,13 +444,13 @@ public class LineLevelArtifactGenerator {
                                 String tagName = cellType.toLowerCase();
                                 tableXml.append("<").append(tagName);
                                 if (colspan > 1) {
-                                    tableXml.append(" colspan=").append(colspan);
+                                    tableXml.append(" colspan='").append(colspan).append("'");
                                 }
                                 if (rowspan > 1) {
-                                    tableXml.append(" rowspan=").append(rowspan);
+                                    tableXml.append(" rowspan='").append(rowspan).append("'");
                                 }
                                 tableXml.append(">");
-                                tableXml.append("<p id=").append(cellId).append(">");
+                                tableXml.append("<p id='").append(cellId).append("'>");
                                 tableXml.append(escapeXml(cellText));
                                 tableXml.append("</p>");
                                 tableXml.append("</").append(tagName).append(">");
@@ -466,9 +466,9 @@ public class LineLevelArtifactGenerator {
             }
         }
 
-        // 构建完整的表格 XML（属性值不带引号，避免 JSON 转义）
+        // 构建完整的表格 XML（属性值用单引号，避免 JSON 转义）
         StringBuilder fullXml = new StringBuilder();
-        fullXml.append("<table id=").append(tableId);
+        fullXml.append("<table id='").append(tableId).append("'");
 
         // 添加 page 属性（用 | 分隔）
         if (!tablePages.isEmpty()) {
@@ -477,13 +477,13 @@ public class LineLevelArtifactGenerator {
                 if (pageStr.length() > 0) pageStr.append("|");
                 pageStr.append(p);
             }
-            fullXml.append(" page=").append(pageStr);
+            fullXml.append(" page='").append(pageStr).append("'");
         }
 
         // 计算并添加 bbox 属性（用 | 分隔跨页）
         String bboxStr = computeBboxByPage(positionsByPage, doc);
         if (bboxStr != null) {
-            fullXml.append(" bbox=").append(bboxStr);
+            fullXml.append(" bbox='").append(bboxStr).append("'");
         }
 
         fullXml.append(">");
