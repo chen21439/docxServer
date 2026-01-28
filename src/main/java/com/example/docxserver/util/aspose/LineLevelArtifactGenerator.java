@@ -386,7 +386,7 @@ public class LineLevelArtifactGenerator {
 
                 if ("TR".equalsIgnoreCase(childType)) {
                     String rowId = tableId + "-r" + String.format("%03d", rowIndex + 1);
-                    tableXml.append("  <tr id=").append(rowId).append(">\n");
+                    tableXml.append("<tr id=").append(rowId).append(">");
 
                     int colIndex = 0;
                     for (Object cellKid : childElement.getKids()) {
@@ -423,18 +423,18 @@ public class LineLevelArtifactGenerator {
 
                                 // 构建单元格 XML
                                 String tagName = cellType.toLowerCase();
-                                tableXml.append("    <").append(tagName).append(">");
+                                tableXml.append("<").append(tagName).append(">");
                                 tableXml.append("<p id=").append(cellId).append(">");
                                 tableXml.append(escapeXml(cellText));
                                 tableXml.append("</p>");
-                                tableXml.append("</").append(tagName).append(">\n");
+                                tableXml.append("</").append(tagName).append(">");
 
                                 colIndex++;
                             }
                         }
                     }
 
-                    tableXml.append("  </tr>\n");
+                    tableXml.append("</tr>");
                     rowIndex++;
                 }
             }
@@ -460,7 +460,7 @@ public class LineLevelArtifactGenerator {
             fullXml.append(" bbox=").append(bboxStr);
         }
 
-        fullXml.append(">\n");
+        fullXml.append(">");
         fullXml.append(tableXml);
         fullXml.append("</table>");
 
