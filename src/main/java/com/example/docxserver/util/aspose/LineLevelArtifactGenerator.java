@@ -8,8 +8,12 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDAttributeObject;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureElement;
 import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.PDStructureTreeRoot;
+import org.apache.pdfbox.pdmodel.documentinterchange.logicalstructure.Revisions;
 import org.apache.pdfbox.text.TextPosition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -421,9 +425,31 @@ public class LineLevelArtifactGenerator {
                                     }
                                 }
 
+                                // 获取合并单元格属性（ColSpan/RowSpan）
+                                int colspan = 1;
+                                int rowspan = 1;
+                                Revisions<?> attrs = cellElement.getAttributes();
+                                if (attrs != null) {
+                                    for (int i = 0; i < attrs.size(); i++) {
+                                        Object attr = attrs.getObject(i);
+                                        if (attr instanceof PDAttributeObject) {
+                                            COSDictionary attrDict = ((PDAttributeObject) attr).getCOSObject();
+                                            colspan = attrDict.getInt(COSName.getPDFName("ColSpan"), colspan);
+                                            rowspan = attrDict.getInt(COSName.getPDFName("RowSpan"), rowspan);
+                                        }
+                                    }
+                                }
+
                                 // 构建单元格 XML
                                 String tagName = cellType.toLowerCase();
-                                tableXml.append("<").append(tagName).append(">");
+                                tableXml.append("<").append(tagName);
+                                if (colspan > 1) {
+                                    tableXml.append(" colspan=").append(colspan);
+                                }
+                                if (rowspan > 1) {
+                                    tableXml.append(" rowspan=").append(rowspan);
+                                }
+                                tableXml.append(">");
                                 tableXml.append("<p id=").append(cellId).append(">");
                                 tableXml.append(escapeXml(cellText));
                                 tableXml.append("</p>");
