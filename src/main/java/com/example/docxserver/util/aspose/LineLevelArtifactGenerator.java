@@ -440,6 +440,27 @@ public class LineLevelArtifactGenerator {
                                     }
                                 }
 
+                                // 计算单元格的 page 和 bbox
+                                String cellPageStr = "";
+                                String cellBboxStr = "";
+                                if (cellPositionsByPage != null && !cellPositionsByPage.isEmpty()) {
+                                    // 收集单元格涉及的页码
+                                    Set<Integer> cellPages = new TreeSet<>();
+                                    for (PDPage p : cellPositionsByPage.keySet()) {
+                                        int pNum = doc.getPages().indexOf(p) + 1;
+                                        if (pNum > 0) cellPages.add(pNum);
+                                    }
+                                    StringBuilder cpStr = new StringBuilder();
+                                    for (Integer cp : cellPages) {
+                                        if (cpStr.length() > 0) cpStr.append("|");
+                                        cpStr.append(cp);
+                                    }
+                                    cellPageStr = cpStr.toString();
+
+                                    // 计算单元格 bbox
+                                    cellBboxStr = computeBboxByPage(cellPositionsByPage, doc);
+                                }
+
                                 // 构建单元格 XML
                                 String tagName = cellType.toLowerCase();
                                 tableXml.append("<").append(tagName);
@@ -448,6 +469,12 @@ public class LineLevelArtifactGenerator {
                                 }
                                 if (rowspan > 1) {
                                     tableXml.append(" rowspan='").append(rowspan).append("'");
+                                }
+                                if (!cellPageStr.isEmpty()) {
+                                    tableXml.append(" page='").append(cellPageStr).append("'");
+                                }
+                                if (cellBboxStr != null && !cellBboxStr.isEmpty()) {
+                                    tableXml.append(" bbox='").append(cellBboxStr).append("'");
                                 }
                                 tableXml.append(">");
                                 tableXml.append("<p id='").append(cellId).append("'>");
